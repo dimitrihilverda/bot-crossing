@@ -552,8 +552,13 @@ export class Colony {
 
   _syncBuilding(thread, plot, index) {
     let entry = this.buildings.get(thread.id)
-    // Whole, always. A building that has finished rising is a building you can see all of.
-    const target = 1
+    // Furniture count tracks transcript size, on the same log scale as the thread card's bar.
+    // This is not the sink the comment above `transcriptProgress` warns off: that objection is
+    // about a closed solid cut off by a flat plane, which reads as a rendering fault. A house
+    // with some of its furniture missing reads as a house still being moved into — which is
+    // the truth, not a glitch — so mapping progress here does not reintroduce the bug upstream
+    // removed.
+    const target = transcriptProgress(thread)
 
     if (!entry) {
       const mesh = createHouse({ seed: hashString(thread.id), accent: plot.accent })
