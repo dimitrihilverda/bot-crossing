@@ -2,13 +2,13 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "bot-crossing",
+      "name": "bot-crossing-moving-in",
       "runtimeExecutable": "npm",
       "runtimeArgs": [
         "run",
         "dev"
       ],
-      "port": 5274,
+      "port": 5280,
       "autoPort": true
     }
   ]
