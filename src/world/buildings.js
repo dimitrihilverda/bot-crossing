@@ -60,11 +60,10 @@ export class Composer {
   /**
    * @param {string} name  a node name from the kit
    * @param {object} [o]   `x`/`y`/`z` offset, `ry` yaw, `s` uniform scale, `emissive` 0..1,
-   *                       `reveal` the progress this part waits for, `kit` to override this
-   *                       Composer's kit for one part
+   *                       `reveal` the progress this part waits for
    */
   add(name, o = {}) {
-    const geo = part(name, o.kit ?? this.kit, { solo: o.solo })
+    const geo = part(name, this.kit, { solo: o.solo })
     const s = o.s ?? 1
     if (s !== 1) geo.scale(s, s, s)
     if (o.ry) geo.rotateY(o.ry)
