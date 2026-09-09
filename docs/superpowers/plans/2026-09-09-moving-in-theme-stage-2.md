@@ -298,14 +298,14 @@ export function pointAt(points, distance) {
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `node --test test/drive-path.test.mjs`
-Expected: PASS — 10 tests.
+Expected: PASS — 11 tests.
 
 If the "every step is adjacent" test fails, the nudge is the thing to look at, not the rounding: that test exists precisely to catch a line that passes through a corner.
 
 - [ ] **Step 5: Run the whole suite**
 
 Run: `npm test`
-Expected: PASS — 77 tests (67 baseline + 10 new).
+Expected: PASS — 78 tests (67 baseline + 11 new).
 
 - [ ] **Step 6: Commit**
 
@@ -502,7 +502,7 @@ Material: `atlasTexture('city')` with `cellMask([CELL_CITY.ACCENT])`, wrapped in
 - [ ] **Step 7: Run the suite**
 
 Run: `npm test`
-Expected: PASS — 82 tests (77 + 5 new).
+Expected: PASS — 83 tests (78 + 5 new).
 
 - [ ] **Step 8: Commit**
 
@@ -602,7 +602,7 @@ npm test
 PORT=5280 npm run dev
 ```
 
-Expected: 84 tests passing, 0 failing. On screen: no timber poles anywhere; a car parked at each house whose thread is running; and when a thread appears, a car leaving the depot and driving to it. Watch one full arrival and confirm the car follows the hex surface rather than cutting across a gap or sinking through a deck.
+Expected: 85 tests passing, 0 failing. On screen: no timber poles anywhere; a car parked at each house whose thread is running; and when a thread appears, a car leaving the depot and driving to it. Watch one full arrival and confirm the car follows the hex surface rather than cutting across a gap or sinking through a deck.
 
 **Stop the dev server when done** and verify with `netstat -ano | grep 5280` that nothing is listening.
 
