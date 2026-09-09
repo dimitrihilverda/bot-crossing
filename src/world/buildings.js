@@ -90,16 +90,23 @@ const ACCENT_MASK = cellMask([CELL.TRIM])
  * each carrying a per-vertex emissive flag, so the whole lot merges into one buffer.
  */
 class Composer {
-  constructor() {
+  /**
+   * @param {object} [o]
+   * @param {string} [o.kit]  which registry parts resolve against. A merged geometry can
+   *   only carry one material, so one Composer means one kit.
+   */
+  constructor({ kit = 'base' } = {}) {
     this.parts = []
+    this.kit = kit
   }
 
   /**
    * @param {string} name  a node name from the kit
-   * @param {object} [o]   `x`/`y`/`z` offset, `ry` yaw, `s` uniform scale, `emissive` 0..1
+   * @param {object} [o]   `x`/`y`/`z` offset, `ry` yaw, `s` uniform scale, `emissive` 0..1,
+   *                       `kit` to override this Composer's kit for one part
    */
   add(name, o = {}) {
-    const geo = part(name, 'base', { solo: o.solo })
+    const geo = part(name, o.kit ?? this.kit, { solo: o.solo })
     const s = o.s ?? 1
     if (s !== 1) geo.scale(s, s, s)
     if (o.ry) geo.rotateY(o.ry)
