@@ -176,7 +176,7 @@ function carMaterial(geo, accent) {
  * slot's colour comes from which mesh it sits in, not from a per-instance buffer that might
  * not get rewritten.
  *
- * Follows `Scaffolds` in `buildings.js` for each pair: geometry built once (and shared
+ * Each pair follows the colony's usual instancing shape: geometry built once (and shared
  * across every pair — only the material differs), `DynamicDrawUsage`, `count` and
  * `instanceMatrix.needsUpdate` written per frame.
  *
@@ -335,8 +335,8 @@ export class Deliveries {
     pair.wheels.instanceMatrix.needsUpdate = true
   }
 
-  /** Frees every accent's mesh pair — iterated generically, mirroring `Scaffolds.dispose()`,
-   *  so a pair added later (a new accent showing up) cannot leak. */
+  /** Frees every accent's mesh pair — iterated generically rather than by name, so a pair
+   *  added later (a new accent showing up) cannot leak. */
   dispose() {
     this._disposed = true // in case the kit resolves after this call
     for (const pair of this._pairs.values()) {

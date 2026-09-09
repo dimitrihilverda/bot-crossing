@@ -3,9 +3,13 @@ import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 import { ATLAS, part } from './kit.js'
 
 /**
- * Shared building machinery — the reveal/construction shader (`decorate`, `depthMaterial`),
- * the part-placement helper (`Composer`) and the scaffolding overlay (`Scaffolds`) that
- * `src/world/houses.js` builds every house out of.
+ * Shared building machinery — the reveal/construction shader (`decorate`, `depthMaterial`)
+ * and the part-placement helper (`Composer`) that `src/world/houses.js` builds every house
+ * out of.
+ *
+ * The timber scaffolding overlay that used to live here is gone. Saying "a thread is running
+ * here" is now the job of a delivery car parked at the house — see `src/world/deliveries.js`
+ * and `colony._updateDeliveries` — so there is nothing left to prop up.
  *
  * This file used to also assemble the colony's structures directly, out of KayKit's *Space
  * Base Bits* (CC0) — ten seeded recipes (habitat, solar array, relay mast, and so on) dispatched
@@ -316,49 +320,4 @@ export function depthMaterial(uniforms) {
       )
   }
   return mat
-}
-
-/** Scaffolding around anything still going up. One instanced mesh for the whole colony. */
-export class Scaffolds {
-  constructor(scene, capacity = 256) {
-    const geo = new THREE.CylinderGeometry(0.045, 0.045, 1, 5)
-    geo.translate(0, 0.5, 0) // pivot at the foot, so scaling grows it upward
-    this.mesh = new THREE.InstancedMesh(
-      geo,
-      new THREE.MeshStandardMaterial({ color: 0xb08d52, roughness: 0.85, flatShading: true }),
-      capacity
-    )
-    this.mesh.castShadow = true
-    this.mesh.count = 0
-    this.mesh.frustumCulled = false
-    this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
-    scene.add(this.mesh)
-    this.scene = scene
-    this.capacity = capacity
-    this._dummy = new THREE.Object3D()
-  }
-
-  /** `sites` are `{ x, y, z, radius, height }` for every building not yet finished. */
-  update(sites) {
-    const d = this._dummy
-    let n = 0
-    for (const site of sites) {
-      for (let i = 0; i < 4 && n < this.capacity; i++) {
-        const a = (i / 4) * Math.PI * 2 + 0.78
-        d.position.set(site.x + Math.cos(a) * site.radius, site.y, site.z + Math.sin(a) * site.radius)
-        d.rotation.set(0, a, 0)
-        d.scale.set(1, Math.max(0.4, site.height), 1)
-        d.updateMatrix()
-        this.mesh.setMatrixAt(n++, d.matrix)
-      }
-    }
-    this.mesh.count = n
-    this.mesh.instanceMatrix.needsUpdate = true
-  }
-
-  dispose() {
-    this.mesh.geometry.dispose()
-    this.mesh.material.dispose()
-    this.scene.remove(this.mesh)
-  }
 }

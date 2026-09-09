@@ -1242,6 +1242,12 @@ export class Astronauts {
       // agent than there are slots, which is exactly when the colony would empty.
       if (i >= this.capacity) break
       if (agent.state === 'gone') continue
+      // Riding in its delivery car on the way out to its plot — the colony sets this flag
+      // per frame. Skipping the slot is the only way to hide one crew member: everything
+      // here is packed into the first `n` instances, and an unused slot left in the middle
+      // still draws. This is a draw-time skip and nothing more — the agent keeps its state,
+      // its status and its place in the roster while it rides.
+      if (agent.riding) continue
       const s = agent.scale
       if (s <= 0.001) continue
 
@@ -1360,7 +1366,10 @@ export class Astronauts {
     const lifted = this._pickLifted
 
     for (const agent of this.agents) {
-      if (agent.scale < 0.3 || agent.state === 'gone') continue
+      // A crew member riding in its car is not drawn, so it must not be clickable either —
+      // picking is in screen space and would happily hand back an astronaut that is not
+      // there, at the spot on the plot it is walking to.
+      if (agent.scale < 0.3 || agent.state === 'gone' || agent.riding) continue
       v.set(agent.pos.x, agent.pos.y + (this.headHeight || 0.75), agent.pos.z).project(camera)
       if (v.z > 1) continue // behind the camera
       agent.screen.copy(v)

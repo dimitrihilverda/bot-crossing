@@ -15,8 +15,10 @@ import {
   PLOT_PALETTE,
   PLOT_CELL,
 } from '../world/plots.js'
-import { buildingUniforms, Scaffolds } from '../world/buildings.js'
+import { buildingUniforms } from '../world/buildings.js'
 import { createHouse } from '../world/houses.js'
+import { hexLine, pathLength, pointAt } from '../world/drive-path.js'
+import { Deliveries, CAR_SPEED } from '../world/deliveries.js'
 import { Ship } from '../world/ship.js'
 import { Astronauts } from '../agents/astronauts.js'
 import { Indicators, BADGE } from '../agents/indicators.js'
@@ -155,7 +157,10 @@ export class Colony {
     // missing. A badge is a single quad; the spare instances cost almost nothing.
     this.indicators = new Indicators(scene, settings, MAX_AGENT_CAP)
     this.particles = new Particles(scene, settings)
-    this.scaffolds = new Scaffolds(scene, 320)
+    // One car per thread at most, so the same ceiling the badges get. The cap is per accent
+    // rather than per colony — `Deliveries` keeps a mesh pair per plot colour — so this is a
+    // generous bound either way, and an unused instance slot costs nothing until it is written.
+    this.deliveries = new Deliveries(scene, MAX_AGENT_CAP)
     this.nav = new Navigation()
     this.astronauts.setNavigation(this.nav)
 
@@ -262,6 +267,7 @@ export class Colony {
     this.sky.onSettingsChanged(changed)
     this.astronauts.onSettingsChanged(changed)
     this.particles.onSettingsChanged(changed)
+    this.deliveries.onSettingsChanged(changed)
     if (changed.has('showLabels')) this._syncLabels()
     if (changed.has('timeOfDay')) this.sky.setTime(this.settings.get('timeOfDay'))
   }
@@ -572,7 +578,10 @@ export class Colony {
       // New buildings rise from nothing rather than appearing whole.
       mesh.userData.setProgress(0)
       this.worldGroup.add(mesh)
-      entry = { mesh, plot: plot.id, slot: index, progress: 0, target, retiring: false }
+      // `driven` is how far along its route this thread's delivery car has got — 0 being
+      // sitting at the depot. It belongs next to `progress` for the same reason: it is the
+      // one number the car's whole arrival is made of. See `_updateDeliveries`.
+      entry = { mesh, plot: plot.id, slot: index, progress: 0, target, retiring: false, driven: 0 }
       this.buildings.set(thread.id, entry)
     } else {
       // Where this building belongs *now*. Comparing the world position rather than the
@@ -817,6 +826,10 @@ export class Colony {
     this.ship.update(dt, elapsed, night)
 
     this._growBuildings(dt)
+    // Ahead of the crew and the badges on purpose. This is what decides who is riding in a
+    // car this frame, and both of those pack their instances from that flag — run it after
+    // them and every crew member would be drawn one frame behind its own car.
+    this._updateDeliveries(dt)
     this.astronauts.update(dt, elapsed)
     this.astronauts.updateRings(elapsed)
     this.indicators.update(this.astronauts.agents, elapsed, (a) => this._badgeFor(a))
@@ -824,7 +837,6 @@ export class Colony {
     this.particles.ambient(dt, this.camera, this.planet)
     this.particles.update(dt)
     this._updatePlots(night, elapsed)
-    this._updateScaffolds()
     this._updateLabels(dt)
   }
 
@@ -858,6 +870,10 @@ export class Colony {
   }
 
   _badgeFor(agent) {
+    // Riding in its delivery car, so there is no head for a badge to sit over. Left where
+    // the other state gates are rather than in the status mapping: what a thread wants has
+    // not changed, only whether anyone is on screen to ask.
+    if (agent.riding) return BADGE.none
     if (agent.state === 'spawning') return BADGE.spawning
     if (agent.state === 'leaving') return BADGE.leaving
     // Badges only appear once an astronaut has actually reached its post — a stream of
@@ -929,24 +945,138 @@ export class Colony {
     for (const plot of this.plotOrder) plot.setNight(night, urgent?.has(plot.id) ?? false, elapsed)
   }
 
-  _updateScaffolds() {
-    const sites = []
+  /**
+   * Drive one delivery car per working thread, from the depot out to its house.
+   *
+   * This is what replaced the timber. The predicate is the one the scaffolding used —
+   * `_isActive`, "somebody is standing at this site right now" — so the promise the README
+   * makes is unchanged; only the thing that keeps it moved from poles going up around a
+   * house to a car pulling up outside it.
+   *
+   * There is deliberately no "parked" flag and no seventh agent state. A thread that is
+   * neither arriving nor leaving has simply run out of road: `driven` sits at the end of its
+   * route, `pointAt` clamps there, and the car stands at the kerb for as long as the thread
+   * keeps working. Arriving and leaving are the same one number moving in opposite directions.
+   */
+  _updateDeliveries(dt) {
+    // Cleared for everyone first, the way the badges are: a crew member whose entry stops
+    // being visited this frame has to get its feet back, or a house that dips under the
+    // ground-broken threshold mid-drive leaves an astronaut invisible — and unclickable —
+    // for good.
+    for (const agent of this.astronauts.agents) agent.riding = false
+
+    const vehicles = []
     for (const [id, entry] of this.buildings) {
-      // Scaffolding says a thread is running here — the README's own promise. It used to be
-      // gated on the building being unfinished as well, which was fine while "unfinished"
-      // was most of them and useless the moment buildings stopped standing in a hole.
+      // Nothing to deliver to an address that has not broken ground yet.
       if (entry.progress <= 0.03) continue
-      if (!this._isActive(id)) continue
-      const p = entry.mesh.position
-      sites.push({
-        x: p.x,
-        z: p.z,
-        y: p.y,
-        radius: (entry.mesh.userData.footprint || 1.4) + 0.35,
-        height: Math.max(0.6, entry.mesh.userData.height * entry.progress + 0.5),
+
+      const route = this._routeFor(entry)
+      const wants = this._isActive(id)
+      const target = wants ? route.length : 0
+
+      // One number, driven up on the way out and back down on the way home, never past
+      // either end of the route.
+      const step = CAR_SPEED * dt
+      if (entry.driven < target) entry.driven = Math.min(target, entry.driven + step)
+      else if (entry.driven > target) entry.driven = Math.max(target, entry.driven - step)
+
+      // Home again with nowhere to be: no car on the road at all, rather than a heap of
+      // them idling on the depot pad for every thread the colony has ever seen.
+      if (entry.driven <= 0 && !wants) continue
+
+      const at = pointAt(route.points, entry.driven)
+      vehicles.push({
+        x: at.x,
+        // The route is drawn cell to cell, but the ground under it is not flat: plots sit on
+        // raised decks and the terrain rolls between them. Sampling the same height the crew
+        // walks on is what keeps a car on the surface instead of through a deck.
+        y: this.groundAt(at.x, at.z),
+        z: at.z,
+        heading: at.heading,
+        distance: entry.driven,
+        accent: entry.accent,
       })
+
+      // Whoever the car is carrying is inside it, so it is not also standing on the plot.
+      // Only on the way out: the return leg runs empty. The crew got out at the house and is
+      // waiting or asleep on it, and hiding it for the length of the drive home would take a
+      // badge off screen that somebody is waiting behind.
+      if (wants && entry.driven > 0 && entry.driven < route.length) this._markRiding(id)
     }
-    this.scaffolds.update(sites)
+    this.deliveries.update(vehicles)
+  }
+
+  /**
+   * The route from the depot to one house, built once and kept on the building entry.
+   *
+   * A hex line is cheap but not free, and redrawing one every frame for every thread in a
+   * full colony is pure waste — a route only changes when the house it ends at does. Keyed
+   * on the plot and slot, plus the house's own position: a zone rebuilt underneath a building
+   * keeps its id and its slot but moves the ground, and a route cached on the ids alone would
+   * go on driving to where the house used to be.
+   */
+  _routeFor(entry) {
+    const p = entry.mesh.position
+    const cached = entry.route
+    if (
+      cached &&
+      cached.plot === entry.plot &&
+      cached.slot === entry.slot &&
+      cached.x === p.x &&
+      cached.z === p.z
+    ) {
+      return cached
+    }
+
+    const depot = shipPosition()
+    const start = worldToHex(depot.x, depot.z)
+    const end = worldToHex(p.x, p.z)
+    const points = hexLine(start.q, start.r, end.q, end.r).map((c) => cellWorld(c.q, c.r))
+
+    // The last cell centre is not the address: parking on it leaves the car a half-cell short
+    // of the house it was sent to, or sitting in a neighbour's garden. The house's own centre
+    // is not the address either — a house has a footprint of nearly two units and a car
+    // driven to the middle of it parks *inside* the building, where it cannot be seen at all.
+    //
+    // So the route ends at the kerb: the house position, pulled back along the last leg by
+    // the building's own radius and a little clearance. That is where a delivery would
+    // actually stop, and it is the same radius the scaffolding used to stand its poles on.
+    const kerb = { x: p.x, z: p.z }
+    const approach = points[points.length - 2]
+    if (approach) {
+      const dx = kerb.x - approach.x
+      const dz = kerb.z - approach.z
+      const d = Math.hypot(dx, dz)
+      if (d > 1e-6) {
+        // Never back past the cell it is coming from, however short that last leg is.
+        const back = Math.min(d * 0.9, (entry.mesh.userData.footprint || 1.4) + 0.5)
+        kerb.x -= (dx / d) * back
+        kerb.z -= (dz / d) * back
+      }
+    }
+    points[points.length - 1] = kerb
+
+    const route = { plot: entry.plot, slot: entry.slot, x: p.x, z: p.z, points, length: pathLength(points) }
+    entry.route = route
+    return route
+  }
+
+  /**
+   * Mark a thread's crew member as riding in its car.
+   *
+   * Not a status and not a behaviour. `STATUS_ORDER` is a strict precedence and a seventh
+   * state would compete with the six for the badge — a riding crew member is not doing a new
+   * thing, it is just not drawn. The agent keeps its slot in the roster, keeps walking and
+   * keeps its status; the packing loop in `astronauts.js` steps over it, and `_badgeFor`
+   * hands back nothing, which is right for a thread that has only just appeared and wants
+   * nothing yet.
+   *
+   * Only ever sets the flag. Clearing it is `_updateDeliveries`'s opening sweep, so an entry
+   * that stops being visited cannot leave a crew member stranded off screen.
+   */
+  _markRiding(id) {
+    const agent = this.astronauts.byId.get(id)
+    if (agent) agent.riding = true
   }
 
   // ── interaction ─────────────────────────────────────────────────────────────────────
@@ -975,7 +1105,7 @@ export class Colony {
     this.astronauts.dispose()
     this.indicators.dispose()
     this.particles.dispose()
-    this.scaffolds.dispose()
+    this.deliveries.dispose()
     disposeTree(this.worldGroup)
     disposeTree(this.plotGroup)
     disposeTree(this.labelGroup)

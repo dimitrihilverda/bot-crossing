@@ -138,3 +138,19 @@ test('dispose frees every accent pair, not just a couple of named ones', () => {
   assert.equal(d._pairs.size, 0)
   assert.equal(removed.length, 6, '3 accents * (bodies + wheels)')
 })
+
+test('the colony drives deliveries and no longer builds scaffolding', () => {
+  const colony = readFileSync('src/game/colony.js', 'utf8')
+  assert.match(colony, /Deliveries/, 'colony.js does not use Deliveries')
+  assert.doesNotMatch(colony, /Scaffolds|scaffolds/, 'colony.js still references Scaffolds')
+
+  const buildings = readFileSync('src/world/buildings.js', 'utf8')
+  assert.doesNotMatch(buildings, /class Scaffolds/, 'Scaffolds was not removed')
+})
+
+test('a car drives at the height of the ground under it', () => {
+  // groundAt is the decked-cell-then-terrain lookup; a delivery that ignored it would
+  // drive through a plot's deck rather than up onto it.
+  const colony = readFileSync('src/game/colony.js', 'utf8')
+  assert.match(colony, /groundAt\(/, 'the delivery does not consult groundAt')
+})
