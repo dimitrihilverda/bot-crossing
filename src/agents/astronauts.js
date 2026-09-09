@@ -28,16 +28,35 @@ import { attachMatrixAt, decorateSkinned, frameFor } from './crew.js'
 
 const SUIT_TONES = [0xf3f1ec, 0xe8e4dc, 0xf7f4ee, 0xdfe4e8, 0xf1e9df]
 
-/** Trim + eye colour per behaviour. Eyes are pushed past 1.0 so the bloom pass catches them. */
+/**
+ * Trim + eye colour per behaviour. Eyes are pushed past 1.0 so the bloom pass catches them.
+ *
+ * The keys are the six statuses of `STATUS_ORDER` plus the two states an agent passes
+ * through on its way in and out — that list is the behaviour precedence and is not this
+ * table's business. Only the colours are: they read as a removal crew's work clothing now,
+ * hi-vis and denim and canvas, rather than as suit trim on a moon base.
+ *
+ * Two of them are load-bearing rather than decorative and stay where they are. `blocked` is
+ * red and `waiting` is blue because those are the states the `!` and `?` badges point at,
+ * and the badge and the figure under it have to agree at a glance.
+ */
 const AGENT_LOOK = {
-  working: { trim: 0x4f9a63, eye: [0.35, 2.5, 1.15] },
-  waiting: { trim: 0x4f7ec9, eye: [0.45, 1.5, 3.0] },
-  blocked: { trim: 0xc94f4f, eye: [3.0, 0.5, 0.45] },
-  celebrating: { trim: 0xc9a24f, eye: [2.9, 2.1, 0.6] },
-  idle: { trim: 0x8b8b85, eye: [1.1, 1.5, 1.7] },
-  sleeping: { trim: 0x5a5a70, eye: [0.7, 0.8, 1.4] },
-  spawning: { trim: 0xc96442, eye: [2.4, 1.4, 0.7] },
-  leaving: { trim: 0x6f7f75, eye: [1.0, 1.0, 1.1] },
+  // Hi-vis vest, which is what somebody actually working on a lot is wearing.
+  working: { trim: 0x74b03c, eye: [0.5, 2.5, 0.9] },
+  // Denim, keeping the blue the `?` badge points at.
+  waiting: { trim: 0x46689e, eye: [0.45, 1.5, 3.0] },
+  // Safety red, keeping the red the `!` badge points at.
+  blocked: { trim: 0xc4483c, eye: [3.0, 0.5, 0.45] },
+  // Hi-vis tape amber — the warm end of the same workwear palette.
+  celebrating: { trim: 0xd9a13c, eye: [2.9, 2.1, 0.6] },
+  // Canvas overalls, still the quietest thing on the lot.
+  idle: { trim: 0xa2937a, eye: [1.1, 1.4, 1.5] },
+  // Navy work jacket, done for the day.
+  sleeping: { trim: 0x4c5468, eye: [0.7, 0.8, 1.4] },
+  // Removal-van livery orange, for the crew member climbing out of one.
+  spawning: { trim: 0xd2703f, eye: [2.4, 1.4, 0.7] },
+  // Oiled leather, on its way back to the depot.
+  leaving: { trim: 0x7a6a58, eye: [1.0, 1.0, 1.05] },
 }
 
 const WALK_SPEED = 2.1
@@ -118,7 +137,37 @@ const P = {
   gripZ: 0.02,
   gripRx: 0,
   gripRz: Math.PI,
+  /**
+   * The two props, in the *character's own* frame rather than a bone's — they stand on the
+   * lot, so they hang off the root transform and inherit only its position, facing and scale.
+   *
+   * The moving box is placed against the seated pose rather than by eye. KayKit's
+   * `Sit_Chair_Idle` perches the rig with its backside at y 0.42 and the soles of its feet at
+   * about y 0.39, its hips at z -0.40 and its toes at z 0.04 — one flat surface at 0.41,
+   * seven tenths deep, holds all of it, with the toes just over the front edge.
+   */
+  boxW: 0.56,
+  boxH: 0.41,
+  boxD: 0.68,
+  boxZ: -0.2,
+  /**
+   * The toppled cabinet, off the crew member's right shoulder and turned a little out of
+   * true so it does not read as furniture that was placed there. `cabRx` lays it on its back
+   * — the doors end up facing the sky, which is what a cabinet that has gone over looks like,
+   * and it is also why the piece that holds it off the ground is its *depth* rather than its
+   * height, hence `cabD / 2` below.
+   */
+  cabW: 0.56,
+  cabH: 0.78,
+  cabD: 0.34,
+  cabX: 0.62,
+  cabZ: 0.24,
+  cabYaw: 0.34,
+  cabRx: -Math.PI / 2,
 }
+
+/** How long a crew member holds a piece before setting to work on it, in seconds. */
+const CARRY_HOLD = 2
 
 export class Astronauts {
   constructor(scene, settings) {
@@ -196,6 +245,14 @@ export class Astronauts {
     // The hammer, held in the right hand while a thread is running. Wood and steel rather
     // than suit white, so it reads as a tool at the distance the colony is watched from.
     parts.hammer = this._mesh(hammerGeometry(R), suit(0.62, { vertexColors: true }), capacity, true)
+
+    // The two props the behaviour table asks for: a cabinet on its back beside a crew member
+    // whose thread has errored, and a moving box for one that has dozed off. Both follow the
+    // hammer rather than the helmet — they exist only for the state that calls for them, so
+    // each gets its own instanced mesh and its own count, and neither is welded into the crew
+    // geometry where every crew member would be dragging one about.
+    parts.cabinet = this._mesh(cabinetGeometry(), suit(0.72, { vertexColors: true }), capacity, true)
+    parts.box = this._mesh(movingBoxGeometry(), suit(0.85, { vertexColors: true }), capacity, true)
 
     // Face: the features only, drawn straight onto the visor beneath. Built as a sphere cap
     // a hair larger than the visor, so it lies exactly on the curved surface instead of
@@ -1093,8 +1150,13 @@ export class Astronauts {
     else if (speed > 0.12) key = speed > WALK_SPEED * 1.25 ? 'run' : 'walk'
     else {
       switch (agent.status) {
+        // A removals job is three beats, not one: stoop for the piece, hold it while you look
+        // at where it goes, then set to work on it. `lift` and `carry` hand over below, so
+        // this only has to choose `lift` on the frame the crew member stops walking — every
+        // frame after that it is already in the beat it handed over to. `_workRound` moves it
+        // to a new spot on the ring every few seconds, which is what starts the beat again.
         case 'working':
-          key = 'work'
+          key = agent.clipKey === 'carry' || agent.clipKey === 'work' ? agent.clipKey : 'lift'
           break
         case 'waiting':
           key = 'wave'
@@ -1127,10 +1189,17 @@ export class Astronauts {
     const rate = key === 'walk' || key === 'run' ? THREE.MathUtils.clamp(speed / WALK_SPEED, 0.4, 2.1) : 1
     agent.clipTime += dt * anim * rate
 
-    if (key === 'sitDown' && agent.clipTime >= clip.duration) {
-      agent.clipKey = 'sit'
+    // One-shots that hand over to the pose they end in, so nothing snaps: sitting down hands
+    // to sitting, the pick-up hands to the carry, and the carry gives way to the work loop
+    // after a couple of beats of standing there holding the thing.
+    const handOver =
+      (key === 'sitDown' && agent.clipTime >= clip.duration && 'sit') ||
+      (key === 'lift' && agent.clipTime >= clip.duration && 'carry') ||
+      (key === 'carry' && agent.clipTime >= CARRY_HOLD && 'work')
+    if (handOver) {
+      agent.clipKey = handOver
       agent.clipTime = 0
-      agent.frame = frameFor(rig.clips.sit, 0)
+      agent.frame = frameFor(rig.clips[handOver], 0)
       return
     }
     agent.frame = frameFor(clip, agent.clipTime)
@@ -1139,7 +1208,7 @@ export class Astronauts {
   // ── writing the instance buffers ────────────────────────────────────────────────────
 
   _writeMatrices(elapsed, anim) {
-    const { helmet, visor, pack, antenna, tip, lamp, face, hammer } = this.parts
+    const { helmet, visor, pack, antenna, tip, lamp, face, hammer, cabinet, box } = this.parts
     const rig = this.rig
     const crew = this.crew
     const root = this._m
@@ -1154,7 +1223,12 @@ export class Astronauts {
     const crewFrames = this.crewFrameAttr?.array
 
     let i = 0
+    // One counter per prop, for the same reason the hammer has one: an unused slot in the
+    // middle of an instanced mesh still draws, so a prop that only some states own cannot
+    // share the crew's own index.
     let hands = 0
+    let cabinets = 0
+    let boxes = 0
     let staticDirty = false
     for (const agent of this.agents) {
       // Never write past the end of the instance buffers. Going over is not a rendering
@@ -1209,6 +1283,18 @@ export class Astronauts {
         }
       }
 
+      // The props stand on the ground next to the crew member, so they hang off `root` and
+      // not off a bone — a cabinet that followed the chest around would swing when its owner
+      // flinched. They are keyed off the clip rather than the status for the same reason the
+      // hammer is: a blocked crew member still walking to its plot has not fallen over
+      // anything yet, and a prop is only right once the pose that needs it is playing.
+      if (agent.clipKey === 'hit') {
+        setPart(child, root, cabinet, cabinets++, P.cabX, P.cabD / 2, P.cabZ, P.cabRx, P.cabYaw, 0)
+      }
+      if (agent.clipKey === 'sit' || agent.clipKey === 'sitDown') {
+        setPart(child, root, box, boxes++, 0, 0, P.boxZ, 0, 0, 0)
+      }
+
       // Suit and trim only change when the status does, or when an agent leaving the roster
       // shuffles everyone's slot along — so they are written on those frames, not all of them.
       const c = this._color
@@ -1241,8 +1327,11 @@ export class Astronauts {
     const n = i
     // The glowing parts pulse every frame; the rest only re-upload when something moved slot.
     const animated = new Set(['tip', 'lamp'])
+    // Everything worn is drawn once per crew member; the tool and the props only as often as
+    // the state that owns them came up this frame.
+    const props = { hammer: hands, cabinet: cabinets, box: boxes }
     for (const [name, mesh] of Object.entries(this.parts)) {
-      mesh.count = name === 'hammer' ? hands : n
+      mesh.count = props[name] ?? n
       mesh.instanceMatrix.needsUpdate = true
       if (mesh.instanceColor && (staticDirty || animated.has(name))) mesh.instanceColor.needsUpdate = true
     }
@@ -1419,6 +1508,66 @@ function hammerGeometry(R) {
   const merged = BufferGeometryUtils.mergeGeometries([shaft, head], false)
   shaft.dispose()
   head.dispose()
+  return merged
+}
+
+/**
+ * A cabinet, authored standing up in the rig's own units — whoever draws it lays it on its
+ * back. A body, two doors sitting a hair proud of it, and a handle on each.
+ *
+ * Vertex-coloured for the same reason the hammer is: the instance colour is spoken for by
+ * the crew's own palette, and a prop that took its colour from the crew member beside it
+ * would be a cabinet in a hi-vis vest.
+ */
+function cabinetGeometry() {
+  const { cabW: w, cabH: h, cabD: d } = P
+
+  const body = roundedBox(w, h, d, 0.035)
+  paint(body, 0x8a6a4a)
+
+  const parts = [body]
+  for (const side of [-1, 1]) {
+    const door = roundedBox(w * 0.44, h * 0.86, d * 0.1, 0.02)
+    door.translate(side * w * 0.24, 0, d * 0.52)
+    paint(door, 0xa9855e)
+    parts.push(door)
+
+    // The handles are what say "cabinet" rather than "crate" once it is on its side.
+    const handle = new THREE.CylinderGeometry(0.018, 0.018, h * 0.2, 5)
+    handle.translate(side * w * 0.06, 0, d * 0.58)
+    paint(handle, 0x4a4a4e)
+    parts.push(handle)
+  }
+
+  const merged = BufferGeometryUtils.mergeGeometries(parts, false)
+  parts.forEach((g) => g.dispose())
+  return merged
+}
+
+/**
+ * A moving box, sized to the seated pose in `P` and sitting on the ground with its top at
+ * `P.boxH`. Cardboard, with a strip of tape down the middle of the lid and a darker seam
+ * round the join, because a plain brown cube at this size reads as a rock.
+ */
+function movingBoxGeometry() {
+  const { boxW: w, boxH: h, boxD: d } = P
+
+  const body = roundedBox(w, h, d, 0.03)
+  body.translate(0, h / 2, 0)
+  paint(body, 0xb08558)
+
+  // The lid, a shade lighter and a hair proud, so the box has a top rather than a face.
+  const lid = roundedBox(w * 0.98, h * 0.1, d * 0.98, 0.02)
+  lid.translate(0, h * 0.97, 0)
+  paint(lid, 0xc09668)
+
+  const tape = new THREE.BoxGeometry(w * 0.16, h * 0.02, d * 1.005)
+  tape.translate(0, h * 1.02, 0)
+  paint(tape, 0xd8c6a4)
+
+  const parts = [body, lid, tape]
+  const merged = BufferGeometryUtils.mergeGeometries(parts, false)
+  parts.forEach((g) => g.dispose())
   return merged
 }
 

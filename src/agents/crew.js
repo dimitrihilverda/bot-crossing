@@ -55,12 +55,19 @@ const CLIP = {
   cheer: { name: 'Cheering', loop: true },
   jump: { name: 'Jump_Full_Short', loop: false },
   wave: { name: 'Waving', loop: true },
-  sitDown: { name: 'Sit_Floor_Down', loop: false },
-  sit: { name: 'Sit_Floor_Idle', loop: true },
-  standUp: { name: 'Sit_Floor_StandUp', loop: false },
+  // The sit is the chair sit, not the floor sit: a crew member that has heard nothing for
+  // three days dozes off sitting on a moving box, and the floor sit has no room for one.
+  sitDown: { name: 'Sit_Chair_Down', loop: false },
+  sit: { name: 'Sit_Chair_Idle', loop: true },
+  standUp: { name: 'Sit_Chair_StandUp', loop: false },
   hit: { name: 'Hit_A', loop: true },
   spawn: { name: 'Spawn_Ground', loop: false },
   interact: { name: 'Interact', loop: true },
+  // The removals beat: stoop for a piece, hold it while you look at where it goes, then set
+  // to work on it. `lift` is a one-shot that hands over to `carry`, the same way `sitDown`
+  // hands over to `sit`.
+  lift: { name: 'PickUp', loop: false },
+  carry: { name: 'Holding_A', loop: true },
 }
 
 const CREW_URL = `${import.meta.env.BASE_URL}assets/crew.glb`
