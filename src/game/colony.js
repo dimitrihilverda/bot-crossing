@@ -24,6 +24,7 @@ import { MAX_AGENT_CAP } from '../core/settings.js'
 import { Particles } from '../agents/particles.js'
 import { Navigation } from '../agents/navigation.js'
 import { liveThreadsForColony } from './hidden-projects.js'
+import { stepProgress } from './growth.js'
 
 /**
  * The colony: everything that turns a list of agent threads into a place.
@@ -828,8 +829,13 @@ export class Colony {
     for (const [id, entry] of this.buildings) {
       // A running thread's site creeps upward while you watch it.
       if (!entry.retiring && this._isLive(id)) entry.target = Math.min(1, entry.target + LIVE_GROWTH * dt)
-      const next = THREE.MathUtils.damp(entry.progress, entry.target, 1.8, dt)
-      if (Math.abs(next - entry.progress) > 0.0005) {
+      // `stepProgress` damps toward the target and lands on it, rather than freezing the
+      // last 1.7% short the way a bare damp-plus-epsilon-gate does. See src/game/growth.js:
+      // the furniture reveal reads progress against thresholds at exactly 0.05 and exactly 1,
+      // so arriving has to mean arriving. It returns the value unchanged when there is
+      // nothing to do, which is what keeps a settled building from writing its uniform.
+      const next = stepProgress(entry.progress, entry.target, dt)
+      if (next !== entry.progress) {
         entry.progress = next
         entry.mesh.userData.setProgress(next)
       }
