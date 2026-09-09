@@ -15,9 +15,10 @@
 - Node >= 22.13. UI language stays **English** so upstream merges stay clean.
 - The 33 existing tests in `test/` must stay green after every task. They cover harness scanning and state merging and are the safety net proving the re-theme did not change how threads are read.
 - Runs on **port 5280** via `PORT`. 5274 is the shared install's owner UI, and 5275 / 5276 are Dimitri's guest API and UDP discovery — so the theme has to stay clear of all three.
-- `upstream` remote points at `Station-Sciences/bot-crossing`; work happens on branch `moving-in-theme`.
+- This is a **git worktree** of `C:\PhpstormProjects\bot-crossing`, on branch `moving-in-theme` based on `origin/shared-colonies`. `origin` is `dimitrihilverda/bot-crossing` (shared with Dimitri); `upstream` is `Station-Sciences/bot-crossing`. The branch deliberately has **no tracking branch** — a bare `git push` must fail rather than push the theme into the shared `shared-colonies` branch. Push with `git push -u origin moving-in-theme` when you mean to.
+- **Never switch branches in `C:\PhpstormProjects\bot-crossing`.** That checkout is a live installation whose logon autostart serves its `dist/`; the whole point of this worktree is that it stays on `shared-colonies`.
 - Art is CC0 by Kay Lousberg. Raw packs are **never** committed — only the built `.glb`. `public/assets/CREDITS.md` must list every pack used.
-- One thread is only ever doing one thing: `STATUS_ORDER` in `src/game/colony.js:51` stays the single strict precedence. Do not add parallel status flags.
+- One thread is only ever doing one thing: `STATUS_ORDER` in `src/game/colony.js:53` stays the single strict precedence. Do not add parallel status flags.
 - Only states that want something from the user get a badge. Do not give `idle` or `sleeping` a badge.
 
 ---
@@ -28,7 +29,7 @@ This task is **not** code. Nothing after it can run without it.
 
 **`assets-src/` does not exist on a fresh clone** — it is git-ignored and the repo ships only the built `.glb` files. So all three packs below have to be downloaded, including the Character Animations one: the checked-in `crew.glb` holds only the 14 clips the original colony plays, and Task 7 needs clips that are not in it.
 
-Extract each archive into `C:\PhpstormProjects\moving-in-crossing\assets-src\`, keeping whatever folder name the archive itself uses. All three are name-your-own-price with a free tier — enter 0. Take the archive that contains a `gltf/` directory.
+Extract each archive into `C:\PhpstormProjects\bot-crossing-moving-in\assets-src\`, keeping whatever folder name the archive itself uses. All three are name-your-own-price with a free tier — enter 0. Take the archive that contains a `gltf/` directory.
 
 | Pack | URL | Needed by |
 | --- | --- | --- |
@@ -357,10 +358,10 @@ git commit -m "feat: register the city and furniture kits, and find their accent
 
 ### Task 3: Let a recipe name its kit
 
-`Composer.add` at `src/world/buildings.js:105` hardcodes `part(name, 'base', ...)`, so every recipe draws from the Space Base kit and nothing else. This is a prerequisite for Task 4, and it gets its own commit because it changes a shared helper without changing any behaviour — which makes it the one task a reviewer can check by seeing that nothing happened.
+`Composer.add` at `src/world/buildings.js:102` hardcodes `part(name, 'base', ...)`, so every recipe draws from the Space Base kit and nothing else. This is a prerequisite for Task 4, and it gets its own commit because it changes a shared helper without changing any behaviour — which makes it the one task a reviewer can check by seeing that nothing happened.
 
 **Files:**
-- Modify: `src/world/buildings.js:88-148` (the `Composer` class)
+- Modify: `src/world/buildings.js:92-147` (the `Composer` class)
 - Test: `test/composer.test.mjs`
 
 **Interfaces:**
@@ -451,7 +452,7 @@ Progress therefore stops sinking anything into the ground. `uProgress` keeps its
 **Files:**
 - Create: `src/world/houses.js`
 - Modify: `src/world/buildings.js` (export `decorate` and `depthMaterial` for reuse)
-- Modify: `src/game/colony.js:477` and its imports
+- Modify: `src/game/colony.js:547` and its imports
 - Test: `test/houses.test.mjs`
 
 **Interfaces:**
@@ -460,7 +461,7 @@ Progress therefore stops sinking anything into the ground. `uProgress` keeps its
   - `revealThresholds(count)` → `Float32Array` of length `count`, ascending, every value in `(0, 1]`.
   - `createHouse({ seed, accent })` → `THREE.Group` carrying `userData.setProgress(p)`, `userData.progress`, `userData.height`, `userData.footprint`, `userData.label` and **`userData.dispose()`**.
 
-**A Group is not a Mesh, and `colony.js` currently assumes a Mesh.** At `src/game/colony.js:512-514` a retired thread is cleaned up with:
+**A Group is not a Mesh, and `colony.js` currently assumes a Mesh.** At `src/game/colony.js:582-584` a retired thread is cleaned up with:
 
 ```javascript
 entry.mesh.geometry.dispose()
@@ -679,22 +680,22 @@ Reuse `decorate()` and `depthMaterial()` from `buildings.js` by exporting them r
 
 - [ ] **Step 8: Switch the colony over**
 
-In `src/game/colony.js`, change the import and line 477:
+In `src/game/colony.js`, change the import and line 547:
 
 ```javascript
 const mesh = createHouse({ seed: hashString(thread.id), accent: plot.accent })
 ```
 
-Then replace the three dispose lines at 512-514 with the one the Group publishes:
+Then replace the three dispose lines at 582-584 with the one the Group publishes:
 
 ```javascript
       this.worldGroup.remove(entry.mesh)
       entry.mesh.userData.dispose()
 ```
 
-Leave the rest of `colony.js` alone. The progress damping at line 735 and the retire check at line 510 both work off `userData.progress`, which is unchanged.
+Leave the rest of `colony.js` alone. The progress damping at line 805 and the retire check at line 580 both work off `userData.progress`, which is unchanged.
 
-One known cosmetic consequence, not worth fixing here: line 841 computes `entry.mesh.userData.height * entry.progress`, which assumed a building that rises out of the ground. A house is full height from the start, so this volume is understated for a low-progress thread. It feeds a soft occlusion volume rather than anything clickable, so the effect is a slightly small halo on a nearly-empty house. Note it and move on; if it reads badly on screen, `Math.max(0.6, height)` is the fix.
+One known cosmetic consequence, not worth fixing here: line 911 computes `entry.mesh.userData.height * entry.progress`, which assumed a building that rises out of the ground. A house is full height from the start, so this volume is understated for a low-progress thread. It feeds a soft occlusion volume rather than anything clickable, so the effect is a slightly small halo on a nearly-empty house. Note it and move on; if it reads badly on screen, `Math.max(0.6, height)` is the fix.
 
 - [ ] **Step 9: Run the suite and look at it**
 
@@ -942,7 +943,7 @@ Two deliberate exceptions: **`repos` stays `repos`** — the sidebar lists real 
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "moving-in-crossing",
+      "name": "bot-crossing-moving-in",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "port": 5280,
