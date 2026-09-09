@@ -89,7 +89,7 @@ const ACCENT_MASK = cellMask([CELL.TRIM])
  * A tiny placement helper. Parts are baked to the building's own frame as they are added,
  * each carrying a per-vertex emissive flag, so the whole lot merges into one buffer.
  */
-class Composer {
+export class Composer {
   /**
    * @param {object} [o]
    * @param {string} [o.kit]  which registry parts resolve against. A merged geometry can
@@ -103,7 +103,8 @@ class Composer {
   /**
    * @param {string} name  a node name from the kit
    * @param {object} [o]   `x`/`y`/`z` offset, `ry` yaw, `s` uniform scale, `emissive` 0..1,
-   *                       `kit` to override this Composer's kit for one part
+   *                       `reveal` the progress this part waits for, `kit` to override this
+   *                       Composer's kit for one part
    */
   add(name, o = {}) {
     const geo = part(name, o.kit ?? this.kit, { solo: o.solo })
@@ -114,6 +115,12 @@ class Composer {
 
     const count = geo.attributes.position.count
     geo.setAttribute('aEmissive', new THREE.BufferAttribute(new Float32Array(count).fill(o.emissive || 0), 1))
+
+    // The progress at which this part starts being drawn at all. Written here, per part,
+    // because `finish()` merges everything into one buffer with no seams left to address —
+    // the same reason `aEmissive` is written here. Zero, the default, means "always drawn",
+    // which is every structure in the space base kit.
+    geo.setAttribute('aReveal', new THREE.BufferAttribute(new Float32Array(count).fill(o.reveal || 0), 1))
 
     // Rotors turn in the vertex shader rather than as child meshes, so a turbine is still
     // one merged geometry and one draw call. Each spinning vertex carries the hub it turns
@@ -267,8 +274,14 @@ const KIND_IDS = Object.keys(KINDS)
  * above that line painted in the accent — the "under construction" glow.
  * The accent also replaces the gold trim swatch outright, and per-cell roughness and
  * metalness turn one flat texture into a surface with metal, paint and glass in it.
+ *
+ * Progress has a second reading, which is what `src/world/houses.js` uses: a vertex tagged
+ * with an `aReveal` above the current progress is not drawn at all. The two are independent,
+ * and `uSink` picks which one a mesh gets — 1 for a structure that rises out of the ground,
+ * 0 for one that is whole from the first frame and reveals its parts one at a time instead.
+ * One shader rather than two because a patch this long, copied, drifts.
  */
-function decorate(material, uniforms) {
+export function decorate(material, uniforms) {
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms)
 
@@ -279,12 +292,15 @@ function decorate(material, uniforms) {
          attribute float aEmissive;
          attribute float aSpin;
          attribute vec3 aPivot;
+         attribute float aReveal;
          varying float vEmissive;
          varying vec2 vAtlasUv;
          varying float vLocalY;
+         varying float vReveal;
          uniform float uProgress;
          uniform float uMaxY;
          uniform float uMinY;
+         uniform float uSink;
          uniform float uTime;
 
          // Turn a point about the Z axis through a hub. The pack's rotors are modelled as
@@ -305,6 +321,7 @@ function decorate(material, uniforms) {
         '#include <begin_vertex>',
         `#include <begin_vertex>
          vEmissive = aEmissive;
+         vReveal = aReveal;
          // Our own copy of the UV: three renames its map varying between versions, and the
          // cell lookup below has to survive that.
          vAtlasUv = uv;
@@ -315,7 +332,7 @@ function decorate(material, uniforms) {
          // The whole structure is lowered into the ground, and the fragment stage throws
          // away whatever ends up below the deck. What is on screen is therefore always a
          // *complete* building, part of it buried — never a sliced one.
-         transformed.y -= ( 1.0 - uProgress ) * ( uMaxY - uMinY );`
+         transformed.y -= uSink * ( 1.0 - uProgress ) * ( uMaxY - uMinY );`
       )
 
     shader.fragmentShader = shader.fragmentShader
@@ -325,9 +342,11 @@ function decorate(material, uniforms) {
          varying float vEmissive;
          varying vec2 vAtlasUv;
          varying float vLocalY;
+         varying float vReveal;
          uniform float uProgress;
          uniform float uMaxY;
          uniform float uMinY;
+         uniform float uSink;
          uniform vec3 uAccent;
          uniform float uNight;
          uniform float uCellAccent[ ${CELL_COUNT} ];
@@ -344,11 +363,14 @@ function decorate(material, uniforms) {
       .replace(
         '#include <clipping_planes_fragment>',
         `#include <clipping_planes_fragment>
+         // A piece the progress has not reached yet is simply not there. Zero, which is
+         // what every space base part carries, is always reached.
+         if ( vReveal > uProgress ) discard;
          // Ground level, in the building's own frame, as it sinks. Measured from the
          // geometry's real floor rather than from zero: a few parts of the kit — a rover's
          // wheels, a crate's skids — sit a little proud of it, and testing against zero
          // would cut them off a building that is otherwise finished.
-         float ground = uMinY + ( 1.0 - uProgress ) * ( uMaxY - uMinY );
+         float ground = uMinY + uSink * ( 1.0 - uProgress ) * ( uMaxY - uMinY );
          if ( vLocalY < ground - 0.001 ) discard;
          int cell = atlasCell();`
       )
@@ -374,8 +396,10 @@ function decorate(material, uniforms) {
          // Window strips and trim come on after dark, in the repo's own colour.
          totalEmissiveRadiance += uAccent * uCellAccent[ cell ] * uNight * 1.15;
          // The construction line: a bright band riding just above the ground it rises from.
+         // Only for something that is actually rising — a house is whole from the first
+         // frame, and a glowing stripe along its floor is not a construction line.
          float band = 1.0 - smoothstep( 0.0, 0.22, vLocalY - ground );
-         totalEmissiveRadiance += uAccent * band * ( 1.0 - step( 0.999, uProgress ) ) * 1.5;`
+         totalEmissiveRadiance += uAccent * band * uSink * ( 1.0 - step( 0.999, uProgress ) ) * 1.5;`
       )
   }
   return material
@@ -384,10 +408,11 @@ function decorate(material, uniforms) {
 /**
  * Shadows are rendered with three's own depth material, which knows nothing about the
  * sink — so without this a building at ten percent still casts its finished silhouette from
- * its finished position. The depth pass gets the same offset and the same discard, reading
- * the very same uniform objects.
+ * its finished position. The depth pass gets the same offset and the same discards, reading
+ * the very same uniform objects — including the per-piece reveal, without which a house's
+ * unarrived furniture still throws a shadow on the lawn.
  */
-function depthMaterial(uniforms) {
+export function depthMaterial(uniforms) {
   const mat = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking })
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms)
@@ -397,10 +422,13 @@ function depthMaterial(uniforms) {
         `#include <common>
          attribute float aSpin;
          attribute vec3 aPivot;
+         attribute float aReveal;
          varying float vLocalY;
+         varying float vReveal;
          uniform float uProgress;
          uniform float uMaxY;
          uniform float uMinY;
+         uniform float uSink;
          uniform float uTime;
 
          vec3 botSpin( vec3 p, vec3 hub, float angle ) {
@@ -415,21 +443,25 @@ function depthMaterial(uniforms) {
         `#include <begin_vertex>
          if ( aSpin > 0.0 ) transformed = botSpin( transformed, aPivot, uTime * aSpin );
          vLocalY = transformed.y;
-         transformed.y -= ( 1.0 - uProgress ) * ( uMaxY - uMinY );`
+         vReveal = aReveal;
+         transformed.y -= uSink * ( 1.0 - uProgress ) * ( uMaxY - uMinY );`
       )
     shader.fragmentShader = shader.fragmentShader
       .replace(
         '#include <common>',
         `#include <common>
          varying float vLocalY;
+         varying float vReveal;
          uniform float uProgress;
          uniform float uMaxY;
-         uniform float uMinY;`
+         uniform float uMinY;
+         uniform float uSink;`
       )
       .replace(
         '#include <clipping_planes_fragment>',
         `#include <clipping_planes_fragment>
-         if ( vLocalY < uMinY + ( 1.0 - uProgress ) * ( uMaxY - uMinY ) - 0.001 ) discard;`
+         if ( vReveal > uProgress ) discard;
+         if ( vLocalY < uMinY + uSink * ( 1.0 - uProgress ) * ( uMaxY - uMinY ) - 0.001 ) discard;`
       )
   }
   return mat
@@ -473,6 +505,10 @@ export function createBuilding({ seed = 1, accent = 0xc96442, kind = null } = {}
     uProgress: { value: 1 },
     uMaxY: { value: height },
     uMinY: { value: geo.boundingBox.min.y },
+    // A space base module rises out of the ground, which is what progress means here.
+    // Must be set explicitly: a uniform the shader declares and the block omits arrives as
+    // zero, and the whole sink would quietly stop working.
+    uSink: { value: 1 },
     uAccent: { value: new THREE.Color(accent) },
     uNight: buildingUniforms.uNight,
     uTime: buildingUniforms.uTime,

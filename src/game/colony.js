@@ -15,7 +15,8 @@ import {
   PLOT_PALETTE,
   PLOT_CELL,
 } from '../world/plots.js'
-import { createBuilding, buildingUniforms, Scaffolds } from '../world/buildings.js'
+import { buildingUniforms, Scaffolds } from '../world/buildings.js'
+import { createHouse } from '../world/houses.js'
 import { Ship } from '../world/ship.js'
 import { Astronauts } from '../agents/astronauts.js'
 import { Indicators, BADGE } from '../agents/indicators.js'
@@ -555,7 +556,7 @@ export class Colony {
     const target = 1
 
     if (!entry) {
-      const mesh = createBuilding({ seed: hashString(thread.id), accent: plot.accent })
+      const mesh = createHouse({ seed: hashString(thread.id), accent: plot.accent })
       const pos = plot.worldSlot(index)
       mesh.position.copy(pos)
       mesh.rotation.y = ((hashString(thread.id) >>> 8) % 360) * (Math.PI / 180)
@@ -584,15 +585,15 @@ export class Colony {
   }
 
   _removeBuilding(id, entry) {
-    // Wind the reveal back down, then take it out — a building that vanishes mid-frame
-    // reads as a glitch, one that sinks reads as being packed up.
+    // Wind the reveal back down, then take it out — a house that vanishes mid-frame reads
+    // as a glitch, one that empties out reads as being packed up.
     entry.retiring = true
     entry.target = 0
     if (entry.progress <= 0.02) {
       this.worldGroup.remove(entry.mesh)
-      entry.mesh.geometry.dispose()
-      entry.mesh.material.dispose()
-      entry.mesh.customDepthMaterial?.dispose()
+      // A house is a Group of meshes, and only it knows how many. Reaching in for a Mesh's
+      // geometry and material — which is what this used to do — throws on a Group.
+      entry.mesh.userData.dispose()
       this.buildings.delete(id)
     }
   }
