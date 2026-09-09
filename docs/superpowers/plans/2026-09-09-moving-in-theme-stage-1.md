@@ -31,13 +31,13 @@ This task is **not** code. Nothing after it can run without it.
 
 Extract each archive into `C:\PhpstormProjects\bot-crossing-moving-in\assets-src\`, keeping whatever folder name the archive itself uses. All three are name-your-own-price with a free tier — enter 0. Take the archive that contains a `gltf/` directory.
 
-| Pack | URL | Needed by |
+| Pack | URL | On disk at |
 | --- | --- | --- |
-| KayKit Furniture Bits | https://kaylousberg.itch.io/furniture-bits | Task 1, 4, 7 |
-| KayKit City Builder Bits | https://kaylousberg.itch.io/city-builder-bits | Task 1, 4, 6 |
-| KayKit Character Animations | https://kaylousberg.itch.io/kaykit-character-animations | Task 7 |
+| KayKit Furniture Bits | https://kaylousberg.itch.io/furniture-bits | `assets-src/KayKit_Furniture_Bits_1.0_FREE/Assets/gltf` (53 models) |
+| KayKit City Builder Bits | https://kaylousberg.itch.io/city-builder-bits | `assets-src/KayKit_City_Builder_Bits_1.0_FREE/Assets/gltf` (41 models) |
+| KayKit Character Animations | https://kaylousberg.itch.io/kaykit-character-animations | `assets-src/KayKit_Character_Animations_1.1/Animations/gltf/Rig_Medium` (8 files) |
 
-- [ ] **Step 1: Confirm all three packs are present and contain gltf**
+- [x] **Step 1: Confirm all three packs are present and contain gltf**
 
 ```bash
 ls assets-src/
@@ -46,7 +46,7 @@ find assets-src -name '*.gltf' | sed 's|/[^/]*$||' | sort -u
 
 Expected: three directories, and one `gltf` directory listed per pack. Note the **exact** path to each — Kay's archives vary in how deeply they nest it (the two already wired up sit at `<pack>/Assets/gltf`, the animations at `<pack>/Animations/gltf/Rig_Medium`), and Tasks 1 and 7 need the real ones.
 
-- [ ] **Step 2: Record the paths**
+- [x] **Step 2: Record the paths**
 
 Replace the `Extract to` column above with the real gltf directory paths on disk, so the next task reads truth rather than a guess.
 
@@ -145,8 +145,8 @@ In `tools/build-assets.mjs`, add two entries to `STEPS`, using the **real paths 
 const STEPS = [
   ['tools/build-kit.mjs', 'assets-src/KayKit_Space_Base_Bits_1.0_FREE/Assets/gltf', 'public/assets/spacebase.glb'],
   ['tools/build-kit.mjs', 'assets-src/KayKit_Forest_Nature_Pack_1.0_FREE/Assets/gltf', 'public/assets/forest.glb', FOREST.join(',')],
-  ['tools/build-kit.mjs', 'assets-src/KayKit_City_Builder_Bits/Assets/gltf', 'public/assets/city.glb'],
-  ['tools/build-kit.mjs', 'assets-src/KayKit_Furniture_Bits/Assets/gltf', 'public/assets/furniture.glb'],
+  ['tools/build-kit.mjs', 'assets-src/KayKit_City_Builder_Bits_1.0_FREE/Assets/gltf', 'public/assets/city.glb'],
+  ['tools/build-kit.mjs', 'assets-src/KayKit_Furniture_Bits_1.0_FREE/Assets/gltf', 'public/assets/furniture.glb'],
   ['tools/build-crew.mjs'],
 ]
 ```
