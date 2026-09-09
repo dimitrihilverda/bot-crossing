@@ -95,15 +95,18 @@ const BADGE_FOR = {
 /** Transcript size → how finished the building looks. Log scale: threads grow fast early. */
 /**
  * How far along a thread is, on a log scale over its transcript size. This drives the bar
- * on the thread card — it no longer drives how much of the building you can see.
+ * on the thread card, and it drives how much furniture has arrived in the house — it no
+ * longer drives the sink.
  *
- * It used to. The shader draws construction by sinking the structure into the ground and
- * discarding what falls below the deck, and mapping transcript size onto that meant most
- * buildings stood permanently waist-deep in their own plot. Read as a picture of a colony
- * rather than as a chart, that is not "this thread is young", it is "this building is
- * broken" — a dome cut off by a flat plane looks like a rendering fault, and it is the
- * first thing the eye goes to. So the sink is now only what it is good at: the few seconds
- * of a new building rising out of the ground.
+ * The sink is the old mechanism: the shader draws construction by sinking the structure
+ * into the ground and discarding what falls below the deck, and this value used to be
+ * mapped onto that too, which meant most buildings stood permanently waist-deep in their
+ * own plot. Read as a picture of a colony rather than as a chart, that is not "this thread
+ * is young", it is "this building is broken" — a dome cut off by a flat plane looks like a
+ * rendering fault, and it is the first thing the eye goes to. So the sink is now only what
+ * it is good at: the few seconds of a new building rising out of the ground. Driving the
+ * furniture reveal from this same value does not bring that bug back — an empty room reads
+ * as "not moved in yet", not as broken geometry, so there is no flat plane to look wrong.
  */
 export function transcriptProgress(thread) {
   const size = Math.max(1, thread.sizeBytes || 0)
