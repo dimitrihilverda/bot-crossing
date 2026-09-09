@@ -26,23 +26,24 @@
 
 This task is **not** code. Nothing after it can run without it.
 
-Download the free tier of both packs and extract them into `assets-src/` (which is git-ignored):
+**`assets-src/` does not exist on a fresh clone** — it is git-ignored and the repo ships only the built `.glb` files. So all three packs below have to be downloaded, including the Character Animations one: the checked-in `crew.glb` holds only the 14 clips the original colony plays, and Task 7 needs clips that are not in it.
 
-| Pack | URL | Extract to |
+Extract each archive into `C:\PhpstormProjects\moving-in-crossing\assets-src\`, keeping whatever folder name the archive itself uses. All three are name-your-own-price with a free tier — enter 0. Take the archive that contains a `gltf/` directory.
+
+| Pack | URL | Needed by |
 | --- | --- | --- |
-| KayKit Furniture Bits | https://kaylousberg.itch.io/furniture-bits | `assets-src/KayKit_Furniture_Bits/` |
-| KayKit City Builder Bits | https://kaylousberg.itch.io/city-builder-bits | `assets-src/KayKit_City_Builder_Bits/` |
+| KayKit Furniture Bits | https://kaylousberg.itch.io/furniture-bits | Task 1, 4, 7 |
+| KayKit City Builder Bits | https://kaylousberg.itch.io/city-builder-bits | Task 1, 4, 6 |
+| KayKit Character Animations | https://kaylousberg.itch.io/kaykit-character-animations | Task 7 |
 
-Both are name-your-own-price with a free tier — enter 0 and download. Take the archive that contains a `gltf/` directory.
-
-- [ ] **Step 1: Confirm both packs are present and contain gltf**
+- [ ] **Step 1: Confirm all three packs are present and contain gltf**
 
 ```bash
-find assets-src/KayKit_Furniture_Bits -name '*.gltf' | head
-find assets-src/KayKit_City_Builder_Bits -name '*.gltf' | head
+ls assets-src/
+find assets-src -name '*.gltf' | sed 's|/[^/]*$||' | sort -u
 ```
 
-Expected: a list of `.gltf` files in each. Note the **exact** path to each `gltf` directory — Kay's archives vary in how deeply they nest it, and Task 1 needs the real paths.
+Expected: three directories, and one `gltf` directory listed per pack. Note the **exact** path to each — Kay's archives vary in how deeply they nest it (the two already wired up sit at `<pack>/Assets/gltf`, the animations at `<pack>/Animations/gltf/Rig_Medium`), and Tasks 1 and 7 need the real ones.
 
 - [ ] **Step 2: Record the paths**
 
@@ -809,7 +810,7 @@ git commit -m "feat: the ship becomes the depot"
 - Test: `test/crew-clips.test.mjs`
 
 **Interfaces:**
-- Consumes: the Character Animations pack, already in `assets-src/`.
+- Consumes: the Character Animations pack, downloaded in Task 0. Note that `public/assets/crew.glb` as checked in holds only the 14 clips the original colony plays — the new ones cannot be extracted from it, they have to come from the pack.
 - Produces: `CLIP` gains a carry and a lift entry. `AGENT_LOOK`'s **keys are unchanged** — the six statuses of `STATUS_ORDER` plus `spawning` and `leaving`; only their colours move.
 
 - [ ] **Step 1: Find out which clips the pack actually has**
