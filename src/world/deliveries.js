@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { ATLAS, CELL_CITY, atlasTexture, cellMask, loadKit, part } from './kit.js'
+import { ATLAS, CELL_CITY, CELL_FURNITURE, atlasTexture, cellMask, loadKit, part } from './kit.js'
 import { Composer, buildingUniforms, decorate } from './buildings.js'
 
 /**
@@ -11,6 +11,10 @@ import { Composer, buildingUniforms, decorate } from './buildings.js'
  * more than a closer-shaped model from elsewhere: it shares the houses' atlas, so it merges
  * and takes the repo's accent from the same repainted cell, and its wheels are separate
  * nodes, which is what `kit.js`'s `solo` mode exists for.
+ *
+ * The load itself cannot come from the city kit — there is no crate in it — so it comes from
+ * the furniture kit, which means its own mesh: a merged geometry carries one material, and a
+ * material carries one atlas. That is the same reason a house is a shell plus contents.
  */
 
 /** The kit nodes a car is assembled from. Verified against city.glb by the test. */
@@ -24,6 +28,37 @@ export const CAR_PARTS = Object.freeze({
 
 /** Authored on the city pack's grid and scaled once, the way HOUSE_SCALE does in houses.js. */
 export const CAR_SCALE = 1.45
+
+/**
+ * What the car carries on its roof. A node name from the *furniture* kit, verified against
+ * furniture.glb by the test — `part()` throws on a name that is not there.
+ *
+ * An armchair rather than a crate because the furniture kit ships no crate (the whole listing
+ * is beds, seating, cabinets, rugs and lamps), and because an armchair strapped to a roof is
+ * the one silhouette that reads as a house move from any distance. It is also the piece a
+ * house's own lot gets — the load on the roof is literally the delivery.
+ */
+export const LOAD_PART = 'armchair'
+
+/**
+ * How wide the load is, as a fraction of the car body's own width.
+ *
+ * A fraction rather than a scale factor, because the two packs are authored roughly six times
+ * apart (see `FURNITURE_SCALE` in houses.js: a furniture-kit room is about 1.5 units to the
+ * metre, a city-kit street about a quarter of one). An armchair dropped on at its own scale
+ * is three times longer than the car. So the scale is *derived* at build time from the car's
+ * measured width, which means it stays right if `CAR_SCALE` ever moves.
+ *
+ * Six tenths, not nine: the body's widest point is its wheel arches, and the roof between
+ * them is narrower than that. At the shipping `CAR_SCALE` this comes out at a load 0.36 wide
+ * and 0.28 tall on a car 0.61 wide and 0.49 tall — about four fifths of the size the same
+ * armchair appears at inside a house, which is the independent check that it is in the right
+ * ballpark rather than a number chosen to look nice.
+ */
+const LOAD_WIDTH = 0.6
+
+/** How far the load is bedded into the roof, so a strapped-down load never floats above it. */
+const LOAD_SEAT = 0.02
 
 /**
  * Wheel radius in world units: half `car_stationwagon_wheel_front_left`'s own bounding-box
@@ -59,6 +94,11 @@ const CELL_COUNT = ATLAS.cols * ATLAS.rows
 const CAR_ROUGHNESS = new Float32Array(CELL_COUNT).fill(0.6)
 const NO_METAL = new Float32Array(CELL_COUNT).fill(0)
 const ACCENT_MASK = cellMask([CELL_CITY.ACCENT])
+
+/** The furniture atlas is a second atlas, so the load needs its own surface response and its
+ *  own accent cell — the same pair of values `houses.js` gives its contents mesh. */
+const LOAD_ROUGHNESS = new Float32Array(CELL_COUNT).fill(0.82)
+const LOAD_ACCENT_MASK = cellMask([CELL_FURNITURE.ACCENT])
 
 /**
  * Fallback brand colour for a vehicle with no accent of its own — the same default
@@ -121,7 +161,7 @@ function readWheelOffsets() {
  * material — and therefore which `InstancedMesh` — a car is drawn with, not from a value
  * written here per instance.
  */
-function carUniforms(geo, accent) {
+function vehicleUniforms(geo, accent, { accentMask, roughness }) {
   return {
     uProgress: { value: 1 },
     uMaxY: { value: geo.boundingBox.max.y },
@@ -130,8 +170,8 @@ function carUniforms(geo, accent) {
     uAccent: { value: new THREE.Color(accent) },
     uNight: buildingUniforms.uNight,
     uTime: buildingUniforms.uTime,
-    uCellAccent: { value: ACCENT_MASK },
-    uCellRoughness: { value: CAR_ROUGHNESS },
+    uCellAccent: { value: accentMask },
+    uCellRoughness: { value: roughness },
     uCellMetalness: { value: NO_METAL },
   }
 }
@@ -146,11 +186,29 @@ function carMaterial(geo, accent) {
       // A closed solid, like every shell in the pack — nothing to see through.
       side: THREE.FrontSide,
     }),
-    carUniforms(geo, accent)
+    vehicleUniforms(geo, accent, { accentMask: ACCENT_MASK, roughness: CAR_ROUGHNESS })
   )
   // No custom depth material: with uSink 0 and uProgress pinned at 1, three's own depth pass
   // already puts every vertex exactly where this material does — the same reasoning
   // houses.js gives for its own shell.
+}
+
+/**
+ * The load's material: the other atlas, and one `uAccent` for the whole fleet.
+ *
+ * The fixed accent is the grouping decision, not an oversight — see `Deliveries`' class doc.
+ */
+function loadMaterial(geo) {
+  return decorate(
+    new THREE.MeshStandardMaterial({
+      map: atlasTexture('furniture'),
+      roughness: 0.82,
+      metalness: 0,
+      emissive: 0x000000,
+      side: THREE.FrontSide,
+    }),
+    vehicleUniforms(geo, DEFAULT_ACCENT, { accentMask: LOAD_ACCENT_MASK, roughness: LOAD_ROUGHNESS })
+  )
 }
 
 /**
@@ -180,6 +238,23 @@ function carMaterial(geo, accent) {
  * across every pair — only the material differs), `DynamicDrawUsage`, `count` and
  * `instanceMatrix.needsUpdate` written per frame.
  *
+ * **The roof load is one mesh for the whole fleet, deliberately not one per accent.** It has
+ * to be a mesh of its own — it comes from the furniture atlas, and one material samples one
+ * atlas — but it does not have to be grouped, for two reasons that point the same way.
+ *
+ * The reason on the screen: the accent is the *repo's* colour, and it belongs to the things
+ * that stand for a repo — its houses, its plot, its crew. A chair on a roof is cargo. Painting
+ * it per repo would say the load is part of the repo's identity, when what it actually says is
+ * "this thread is being delivered to", which every car already says by driving.
+ *
+ * The reason in the data, which settles it: `LOAD_PART`'s vertices UV entirely into one
+ * structural swatch and never touch `CELL_FURNITURE.ACCENT` at all (the test pins this). So
+ * `uAccent` has nothing to repaint on this geometry — twelve grouped meshes would render
+ * pixel for pixel identically to one, and cost eleven extra draw calls plus eleven extra
+ * materials to do it. The one mesh therefore takes `DEFAULT_ACCENT` and the value is never
+ * read; picking a different part later is the thing that would make this decision worth
+ * revisiting, which is exactly what that test is there to catch.
+ *
  * A car never carries the crew's own status marker — see the Stage 2 spec's rule on that —
  * so nothing here reaches toward that system at all.
  */
@@ -189,6 +264,8 @@ export class Deliveries {
     this.capacity = capacity
     // Lazily created, one entry per distinct accent value: accent -> { bodies, wheels }.
     this._pairs = new Map()
+    // The roof load: one mesh for every car in the colony, whatever its accent.
+    this._load = null
     this._wheelOffsets = []
     this._disposed = false
     this._built = false
@@ -230,7 +307,68 @@ export class Deliveries {
     // Measured once, in the kit's own units, then brought into the same scaled frame the
     // rendered geometry is drawn at.
     this._wheelOffsets = readWheelOffsets().map((v) => v.multiplyScalar(CAR_SCALE))
+
+    // The load reads the body's box, so it has to come after it. One mesh, built eagerly
+    // rather than lazily: unlike an accent, there is only ever the one.
+    this._loadGeo = this._buildLoadGeo()
+    this._load = this._makeLoadMesh()
+    this.scene.add(this._load)
+
     this._built = true
+  }
+
+  /**
+   * The load, scaled and placed against the car it rides on rather than against typed-in
+   * numbers — the same discipline `readWheelOffsets` and `WHEEL_RADIUS` follow.
+   *
+   * A quarter turn first: the part is wider than it is deep, and the roof is the other way
+   * round, so turning it puts its long axis along the car. That is why it is the part's own
+   * *depth* that gets fitted to the car's width.
+   */
+  _buildLoadGeo() {
+    const raw = part(LOAD_PART, 'furniture', { solo: true })
+    raw.computeBoundingBox()
+    const acrossCar = raw.boundingBox.max.z - raw.boundingBox.min.z
+    raw.dispose()
+
+    const carBox = this._bodyGeo.boundingBox
+    const s = ((carBox.max.x - carBox.min.x) * LOAD_WIDTH) / acrossCar
+    const geo = new Composer({ kit: 'furniture' })
+      .add(LOAD_PART, { solo: true, s, ry: Math.PI / 2 })
+      .finish()
+
+    // Centred across the roof and standing on it, with both offsets taken from the two
+    // bounding boxes. Baking the offset into the geometry rather than adding it per frame is
+    // what lets a load share the body's instance matrix exactly: no second height to keep in
+    // step, and no chance of a load drifting off a roof it is supposed to be strapped to.
+    const box = geo.boundingBox
+    geo.translate(
+      -(box.min.x + box.max.x) / 2,
+      carBox.max.y - box.min.y - LOAD_SEAT,
+      -(box.min.z + box.max.z) / 2
+    )
+    geo.computeBoundingBox()
+    return geo
+  }
+
+  _makeLoadMesh() {
+    const mesh = new THREE.InstancedMesh(this._loadGeo, loadMaterial(this._loadGeo), this.capacity)
+    mesh.castShadow = true
+    mesh.receiveShadow = true
+    mesh.count = 0
+    mesh.frustumCulled = false
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+    return mesh
+  }
+
+  /** Every mesh the fleet owns, however it happens to be grouped. `dispose()` and the
+   *  settings sweep both walk this, so a mesh added later cannot be missed by either. */
+  *_meshes() {
+    for (const pair of this._pairs.values()) {
+      yield pair.bodies
+      yield pair.wheels
+    }
+    if (this._load) yield this._load
   }
 
   /**
@@ -291,6 +429,40 @@ export class Deliveries {
       pair.bodies.instanceMatrix.needsUpdate = true
       pair.wheels.instanceMatrix.needsUpdate = true
     }
+
+    this._writeLoads(vehicles)
+  }
+
+  /**
+   * One roof load per car, into the single shared mesh.
+   *
+   * Written from the whole frame's list rather than bucket by bucket, because this mesh is
+   * not grouped by accent. Its cap is `this.capacity` across the colony where each accent's
+   * bodies are capped at `this.capacity` each, so in a colony already past the agent cap the
+   * constructor was handed, the last few cars would run unloaded — which is the least of what
+   * is wrong at that point.
+   */
+  _writeLoads(vehicles) {
+    // Built in `_build()` alongside the geometry it measures itself against, so in the
+    // running app it is there whenever `_built` is true. It is missing only under a unit test
+    // that stands that geometry in by hand.
+    if (!this._load) return
+
+    const d = this._dummy
+    let n = 0
+    for (const v of vehicles) {
+      if (n >= this.capacity) break
+      // Exactly the body's transform. The roof offset is already in the geometry.
+      d.position.set(v.x, v.y, v.z)
+      d.quaternion.setFromAxisAngle(Y_AXIS, v.heading)
+      d.scale.set(1, 1, 1)
+      d.updateMatrix()
+      this._load.setMatrixAt(n, d.matrix)
+      n++
+    }
+
+    this._load.count = n
+    this._load.instanceMatrix.needsUpdate = true
   }
 
   /** Writes one accent's cars into its own mesh pair, capped at `this.capacity` bodies (and
@@ -335,30 +507,26 @@ export class Deliveries {
     pair.wheels.instanceMatrix.needsUpdate = true
   }
 
-  /** Frees every accent's mesh pair — iterated generically rather than by name, so a pair
-   *  added later (a new accent showing up) cannot leak. */
+  /** Frees every mesh the fleet owns — walked generically rather than by name, so neither a
+   *  pair added later (a new accent showing up) nor the load can leak. */
   dispose() {
     this._disposed = true // in case the kit resolves after this call
-    for (const pair of this._pairs.values()) {
-      for (const mesh of [pair.bodies, pair.wheels]) {
-        mesh.geometry.dispose()
-        mesh.material.dispose()
-        this.scene.remove(mesh)
-      }
+    for (const mesh of this._meshes()) {
+      mesh.geometry.dispose()
+      mesh.material.dispose()
+      this.scene.remove(mesh)
     }
     this._pairs.clear()
+    this._load = null
   }
 
-  /** Iterates every accent's mesh pair generically, the way the crew props do, so a pair
-   *  added later is covered here for free instead of leaking because someone forgot to list
-   *  it by name. */
+  /** Walks every mesh generically, the way the crew props do, so one added later is covered
+   *  here for free instead of going unshadowed because someone forgot to list it by name. */
   onSettingsChanged(changed) {
     if (!changed.has('shadows')) return
-    for (const pair of this._pairs.values()) {
-      for (const mesh of [pair.bodies, pair.wheels]) {
-        mesh.castShadow = true
-        mesh.receiveShadow = true
-      }
+    for (const mesh of this._meshes()) {
+      mesh.castShadow = true
+      mesh.receiveShadow = true
     }
   }
 }

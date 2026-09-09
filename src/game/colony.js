@@ -55,6 +55,37 @@ const LIVE_GROWTH = 0.004
 /** How many zones' positions to remember, including repos with nothing running in them. */
 const LAYOUT_MEMORY = 80
 
+/**
+ * The reveal progress at which a house has already hidden itself.
+ *
+ * `setProgress` in houses.js switches the whole Group off below this, so this is the point
+ * where a retiring site has finished emptying out and there is nothing left on screen for
+ * `_removeBuilding` to take away.
+ */
+const RETIRED_PROGRESS = 0.02
+
+/**
+ * The reveal progress at which a site has broken ground and can take a delivery.
+ *
+ * Above `RETIRED_PROGRESS` on purpose: there has to be a house standing there for a van to
+ * be driving to it.
+ */
+const DELIVERY_PROGRESS = 0.03
+
+/**
+ * Where a retiring site's reveal is parked while its van is still on the road.
+ *
+ * Above both of the numbers above, and below the first furniture reveal threshold (0.05, see
+ * `revealThresholds` in houses.js): the house stands there stripped of its contents for
+ * exactly as long as the van takes to get home, and only then goes. That is the picture the
+ * spec asks for — the load leaves before the address does.
+ *
+ * Holding it above `DELIVERY_PROGRESS` is not cosmetic. `_updateDeliveries` skips a site that
+ * has not broken ground, and a skipped site is one whose `driven` stops being stepped — which
+ * is precisely how a retiring entry would come to sit on the colony's books forever.
+ */
+const RETIRE_HOLD = 0.04
+
 export const STATUS_ORDER = ['blocked', 'waiting', 'working', 'celebrating', 'idle', 'sleeping']
 
 export const STATUS_LABEL = {
@@ -602,18 +633,43 @@ export class Colony {
     return entry
   }
 
+  /**
+   * Wind a thread's site down, and take it off the books once nothing of it is left in the
+   * street.
+   *
+   * Called every frame while an entry is retiring rather than once when it starts: the hold
+   * below has to be re-decided as the van makes its way home, and the removal has to be
+   * re-tried on the frame it arrives.
+   *
+   * There are two ways a wait like this goes wrong, and both are guarded here.
+   *
+   *  - **The van vanishes mid-street.** Removing the entry disposes the house *and* the only
+   *    record of how far its van had got, so a van still on the road simply stops being drawn
+   *    from one frame to the next. Hence the wait for `driven` to be back at the depot.
+   *  - **The entry never leaves.** A wait is only safe if the thing waited on is certain to
+   *    arrive, and this is the one failure no test on screen would ever show: a leaked entry
+   *    is an invisible house that keeps its slot, its accent and its route forever. Three
+   *    things make arrival certain. `driveStep` lands `driven` exactly on its target rather
+   *    than approaching it (drive-path.js); `stepProgress` does the same for the reveal
+   *    (growth.js — that module exists because a damped value that only ever approached its
+   *    target cost every house its last piece of furniture); and `_updateDeliveries` forces a
+   *    retiring entry's target to 0, so the van cannot be sent back out by a thread that
+   *    still claims to be active.
+   */
   _removeBuilding(id, entry) {
-    // Wind the reveal back down, then take it out — a house that vanishes mid-frame reads
-    // as a glitch, one that empties out reads as being packed up.
     entry.retiring = true
-    entry.target = 0
-    if (entry.progress <= 0.02) {
-      this.worldGroup.remove(entry.mesh)
-      // A house is a Group of meshes, and only it knows how many. Reaching in for a Mesh's
-      // geometry and material — which is what this used to do — throws on a Group.
-      entry.mesh.userData.dispose()
-      this.buildings.delete(id)
-    }
+    // A house that vanishes mid-frame reads as a glitch; one that empties out reads as being
+    // packed up. So the reveal winds down — but only as far as `RETIRE_HOLD`, an emptied
+    // house still standing at its address, for as long as its van is out.
+    const home = entry.driven <= 0
+    entry.target = home ? 0 : RETIRE_HOLD
+    if (!home || entry.progress > RETIRED_PROGRESS) return
+
+    this.worldGroup.remove(entry.mesh)
+    // A house is a Group of meshes, and only it knows how many. Reaching in for a Mesh's
+    // geometry and material — which is what this used to do — throws on a Group.
+    entry.mesh.userData.dispose()
+    this.buildings.delete(id)
   }
 
   /**
@@ -854,7 +910,11 @@ export class Colony {
         entry.progress = next
         entry.mesh.userData.setProgress(next)
       }
-      if (entry.retiring && entry.progress <= 0.02) this._removeBuilding(id, entry)
+      // Every frame while retiring, not only once the house has emptied out: the wait for
+      // the van is decided inside `_removeBuilding`, and it has to be re-decided as the van
+      // moves. Gating this call on the progress threshold instead would deadlock — the hold
+      // keeps progress above that threshold for exactly as long as the van is out.
+      if (entry.retiring) this._removeBuilding(id, entry)
     }
   }
 
@@ -984,11 +1044,20 @@ export class Colony {
 
     const vehicles = []
     for (const [id, entry] of this.buildings) {
-      // Nothing to deliver to an address that has not broken ground yet.
-      if (entry.progress <= 0.03) continue
+      // Nothing to deliver to an address that has not broken ground yet — but a van that is
+      // already out gets stepped whatever its house is doing. Skipping it would freeze
+      // `driven` where it stands, and a `driven` that never reaches 0 is a retiring entry
+      // that never comes off the books (see `_removeBuilding`). A retiring house is held
+      // above this threshold for that very reason; this second test is the belt to that
+      // brace, and it also keeps a van on the road when a live house dips back under.
+      if (entry.progress <= DELIVERY_PROGRESS && entry.driven <= 0) continue
 
       const route = this._routeFor(entry)
-      const wants = this._isActive(id)
+      // A retiring site's van comes home whatever its thread still says. `_isActive` reads
+      // `this.threads`, which a building can outlive — a repo folded away as dormant keeps
+      // its threads in there — and a retiring entry whose van was still being sent *out*
+      // would be waiting on an arrival that never comes.
+      const wants = !entry.retiring && this._isActive(id)
       const target = wants ? route.length : 0
 
       // One number, driven up on the way out and back down on the way home, never past

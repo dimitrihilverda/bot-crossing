@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { NodeIO } from '@gltf-transform/core'
 import * as THREE from 'three'
-import { CAR_PARTS, WHEEL_RADIUS, Deliveries, wheelSpin } from '../src/world/deliveries.js'
+import { CAR_PARTS, LOAD_PART, WHEEL_RADIUS, Deliveries, wheelSpin } from '../src/world/deliveries.js'
 import {
   kerbBack,
   driveStep,
@@ -12,6 +12,8 @@ import {
   KERB_CLEARANCE,
   KERB_MIN_CLEARANCE,
 } from '../src/world/drive-path.js'
+import { stepProgress } from '../src/game/growth.js'
+import { ATLAS, CELL_FURNITURE } from '../src/world/kit.js'
 
 test('every car part the module names exists in the city kit', async () => {
   const doc = await new NodeIO().read('public/assets/city.glb')
@@ -25,6 +27,58 @@ test('every car part the module names exists in the city kit', async () => {
   for (const name of Object.values(CAR_PARTS)) {
     assert.ok(names.has(name), `city.glb has no node named "${name}"`)
   }
+})
+
+test('the roof load names a part the furniture kit actually has', async () => {
+  // `part()` throws on an unknown name, and it throws inside a `loadKit().then()` where
+  // nothing is watching — so the load would simply never appear, with no error on screen.
+  const doc = await new NodeIO().read('public/assets/furniture.glb')
+  const names = new Set(
+    doc
+      .getRoot()
+      .listNodes()
+      .map((n) => n.getName())
+      .filter(Boolean)
+  )
+  assert.ok(names.has(LOAD_PART), `furniture.glb has no node named "${LOAD_PART}"`)
+})
+
+test('the roof load carries no accent, which is why one shared mesh is enough', async () => {
+  // `Deliveries` gives the cars one mesh pair per accent because `uAccent` is a per-material
+  // uniform, but gives every car in the colony the *same* load mesh. Part of the case for
+  // that is this: the chosen part's vertices never land in the furniture atlas's accent
+  // swatch, so `uAccent` has nothing to repaint on it and twelve grouped meshes would render
+  // identically to one. Swap `LOAD_PART` for a part that does UV into cell
+  // `CELL_FURNITURE.ACCENT` — `armchair_pillows` and `rug_rectangle_A` both do, heavily — and
+  // that half of the argument is gone, so this test fails and the decision gets re-made.
+  //
+  // The cell index is computed the way the shader computes it (`atlasCell()` in
+  // buildings.js): the row comes from `floor(v * rows)`, with no flip.
+  const doc = await new NodeIO().read('public/assets/furniture.glb')
+  const node = doc
+    .getRoot()
+    .listNodes()
+    .find((n) => n.getName() === LOAD_PART)
+  assert.ok(node?.getMesh(), `no mesh on "${LOAD_PART}"`)
+
+  const cells = new Set()
+  for (const prim of node.getMesh().listPrimitives()) {
+    const uv = prim.getAttribute('TEXCOORD_0')
+    assert.ok(uv, `"${LOAD_PART}" has no UVs, so it cannot sample the atlas at all`)
+    for (let i = 0; i < uv.getCount(); i++) {
+      const [u, v] = uv.getElement(i, [])
+      const cx = Math.min(ATLAS.cols - 1, Math.max(0, Math.floor(u * ATLAS.cols)))
+      const cy = Math.min(ATLAS.rows - 1, Math.max(0, Math.floor(v * ATLAS.rows)))
+      cells.add(cy * ATLAS.cols + cx)
+    }
+  }
+
+  assert.ok(cells.size > 0, 'no atlas cells found')
+  assert.ok(
+    !cells.has(CELL_FURNITURE.ACCENT),
+    `"${LOAD_PART}" UVs into the accent cell ${CELL_FURNITURE.ACCENT} ` +
+      `(cells: ${[...cells].sort((a, b) => a - b).join(', ')}), so the load would need grouping`
+  )
 })
 
 test('the car names a body and exactly four wheels', () => {
@@ -133,6 +187,24 @@ test('a vehicle with no accent falls back to one shared default pair', () => {
   d.update([vehicle(null)])
   d.update([vehicle(undefined)])
   assert.equal(d._pairs.size, 1, 'both frames should reuse the same default-accent pair')
+})
+
+test('every car gets a load, and they all come out of the one mesh', () => {
+  const d = makeDeliveries()
+  const loadGeo = new THREE.BoxGeometry(0.4, 0.3, 0.4)
+  loadGeo.computeBoundingBox()
+  d._loadGeo = loadGeo
+  d._load = d._makeLoadMesh()
+
+  // Three different accents, so three separate body meshes — and still one load mesh with
+  // three instances in it.
+  d.update([vehicle(0xff0000, 0), vehicle(0x00ff00, 1), vehicle(0x0000ff, 2)])
+  assert.equal(d._pairs.size, 3)
+  assert.equal(d._load.count, 3, 'one load per car, all in the same mesh')
+
+  // And it empties with the fleet rather than leaving loads hovering over empty road.
+  d.update([])
+  assert.equal(d._load.count, 0)
 })
 
 test('dispose frees every accent pair, not just a couple of named ones', () => {
@@ -307,6 +379,107 @@ test('driven and the route agree: a full ramp ends the car at the kerb', () => {
   assert.ok(Math.abs(at.x - (12 - back)) < 1e-9, `parked at ${at.x}, kerb is at ${12 - back}`)
   // And it is outside the house standing at x = 12.
   assert.ok(12 - at.x > HOUSE_FOOTPRINT, 'the car parked inside the house')
+})
+
+// ── the return trip: the house waits for its van, and the entry always leaves ──────────────
+//
+// The retire path has two failure modes and they pull in opposite directions. Take the entry
+// out too early and its van vanishes mid-street, because the entry is the only record of how
+// far along its route the van had got. Wait for something that never arrives and the entry
+// leaks forever — an invisible house holding its slot, its accent and its route — and *that*
+// one is invisible on screen too, so it has to be argued rather than watched.
+//
+// colony.js cannot be imported outside a browser, so this is the same split the rest of this
+// file uses: the arithmetic is exercised for real, and the shape of the decision around it is
+// asserted against the source.
+
+test('both values a retiring entry waits on arrive exactly, from any starting point', () => {
+  // The wait is `driven <= 0 && progress <= RETIRED_PROGRESS`. `driveStep` and `stepProgress`
+  // are what have to deliver those, and both are built to land on their target rather than
+  // approach it — a bare damp plus an epsilon gate stalls a strictly positive distance short,
+  // which is the whole reason src/game/growth.js exists.
+  const RETIRE_HOLD = 0.04 // colony.js, checked by the source test below
+  const RETIRED_PROGRESS = 0.02
+  const dt = 1 / 60
+
+  for (const length of [0.5, 13.47, 90]) {
+    for (const from of [1, 0.6, RETIRE_HOLD]) {
+      let driven = length
+      let progress = from
+      let frames = 0
+      // The colony's own loop: the reveal is held at RETIRE_HOLD while the van is out, and
+      // released to 0 on the frame it gets home.
+      while (driven > 0 || progress > RETIRED_PROGRESS) {
+        progress = stepProgress(progress, driven > 0 ? RETIRE_HOLD : 0, dt)
+        driven = driveStep(driven, 0, 3.2 * dt)
+        assert.ok(driven >= 0, `driven reversed past the depot: ${driven}`)
+        assert.ok(++frames < 20000, `never released: driven ${driven}, progress ${progress}`)
+      }
+      assert.equal(driven, 0, 'the van has to land on the depot, not near it')
+      // Held above the release threshold for the whole drive, so the house is still standing
+      // at its address while the van is on the road.
+      assert.ok(RETIRE_HOLD > RETIRED_PROGRESS, 'the hold has to keep the house on screen')
+    }
+  }
+})
+
+test('the hold keeps a retiring site inside the range the delivery still visits', () => {
+  // The subtle half of the leak. `_updateDeliveries` skips a site that has not broken ground,
+  // and a skipped site is one whose `driven` stops being stepped — so a reveal wound all the
+  // way down before the van got home would strand it. The hold sits above the delivery
+  // threshold for exactly that reason, and below the first furniture reveal so the house
+  // stands there emptied.
+  const src = readFileSync('src/game/colony.js', 'utf8')
+  const value = (name) => {
+    const m = src.match(new RegExp(`^const ${name} = ([0-9.]+)$`, 'm'))
+    assert.ok(m, `${name} not found in colony.js`)
+    return Number(m[1])
+  }
+
+  const retired = value('RETIRED_PROGRESS')
+  const delivery = value('DELIVERY_PROGRESS')
+  const hold = value('RETIRE_HOLD')
+
+  assert.ok(hold > delivery, `hold ${hold} must stay above the delivery threshold ${delivery}`)
+  assert.ok(hold > retired, `hold ${hold} must keep the house visible (hidden at ${retired})`)
+  assert.ok(hold < 0.05, `hold ${hold} must be below the first furniture reveal at 0.05`)
+})
+
+test('a retiring entry is not removed until its van is home', () => {
+  const src = readFileSync('src/game/colony.js', 'utf8')
+  const remove = src.match(/_removeBuilding\(id, entry\) \{[\s\S]*?\n {2}\}/)
+  assert.ok(remove, '_removeBuilding not found')
+  assert.match(remove[0], /entry\.driven/, 'the retire path does not consult the van at all')
+  // The disposal has to sit behind the guard, not before it.
+  const guard = remove[0].indexOf('return')
+  const disposal = remove[0].indexOf('buildings.delete')
+  assert.ok(guard > -1 && disposal > guard, 'the removal must be gated on the van being home')
+
+  // And the guard has to be re-tried: gating the call itself on the progress threshold would
+  // deadlock, because the hold keeps progress above that threshold while the van is out.
+  assert.match(
+    src,
+    /if \(entry\.retiring\) this\._removeBuilding\(id, entry\)/,
+    'a retiring entry must be re-offered for removal every frame'
+  )
+})
+
+test('a retiring van is never sent back out, whatever its thread still says', () => {
+  // `_isActive` reads `this.threads`, which a building can outlive — a repo folded away as
+  // dormant keeps its threads on the books. A retiring entry whose van was still being driven
+  // *out* would be waiting on an arrival that never comes.
+  const src = readFileSync('src/game/colony.js', 'utf8')
+  assert.match(
+    src,
+    /const wants = !entry\.retiring && this\._isActive\(id\)/,
+    'a retiring site must want its van home regardless of its thread'
+  )
+  // And the ground-broken skip must not fire on a van that is already out, or `driven` freezes.
+  assert.match(
+    src,
+    /if \(entry\.progress <= DELIVERY_PROGRESS && entry\.driven <= 0\) continue/,
+    'a van already on the road has to keep being stepped'
+  )
 })
 
 // ── the badge is never suppressed along with the figure ────────────────────────────────────
