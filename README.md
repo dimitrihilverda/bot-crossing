@@ -1,18 +1,23 @@
-# Bot Crossing — your agent threads, as a colony
+# Moving-In Crossing — your agent threads, moving in furniture
 
-**[botcrossing.com](https://botcrossing.com)**
+**A Moving-In re-theme of [Bot Crossing](https://github.com/Station-Sciences/bot-crossing)**,
+Jarren Rocks' agent-colony sim. Everything underneath — the map, the pathing, the harness
+adapters, and the shared-colonies feature a colleague added on top of it — is upstream's
+engine, unchanged; this fork only recolours what is on screen and settles it onto its own port.
 
-Every coding-agent thread on this machine is a little astronaut. They walk out of the ship, claim
-a plot for their repo, and build something. When one needs you it stops and holds a `?` over
+Every coding-agent thread on this machine is a little crew member. They walk out of the depot,
+claim a plot for their repo, and move a house in — its walls filling in and its furniture
+appearing as the thread's transcript grows. When one needs you it stops and holds a `?` over
 its head; click it and the thread opens back in whichever harness it came from.
 
 It reads the harness's own files, on your own machine. Nothing is uploaded, there is no
 account, and **it never writes to a harness at all** — `data/colony.json`, where the map lives,
 is the only file it writes anywhere.
 
-> **Status:** published as-is. I built this for myself and cannot promise to maintain it —
-> issues and PRs are welcome but may go unanswered, and forking is an entirely reasonable
-> thing to do. [CONTRIBUTING.md](CONTRIBUTING.md) sets out what to expect.
+> **Status:** an internal Moving-In fork, reworded and reskinned for our own use — the
+> underlying sim is still Bot Crossing's. For the original project, its own status, and its
+> contribution policy, see [Station-Sciences/bot-crossing](https://github.com/Station-Sciences/bot-crossing)
+> and its [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Run it
 
