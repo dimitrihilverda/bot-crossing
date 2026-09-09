@@ -326,7 +326,9 @@ git commit -m "feat: the delivery drive's path, as pure arithmetic"
 - Consumes: `part()`, `CELL_CITY`, `atlasTexture()`, `cellMask()` from `src/world/kit.js`; `decorate()` and `depthMaterial()` from `src/world/buildings.js` (both already exported and used by `houses.js` and `ship.js`).
 - Produces:
   - `CAR_PARTS` — a frozen object naming the five kit parts, exported so a test can assert they exist without a browser.
-  - `WHEEL_RADIUS` — the number used to convert distance travelled into wheel spin.
+  - `CAR_SCALE` — the uniform scale the car geometry is drawn at, the same shape `HOUSE_SCALE` has in `houses.js`.
+  - `WHEEL_RADIUS` — the number used to convert distance travelled into wheel spin. Already measured from `city.glb` (0.1048); step 3a is the script to re-verify it with.
+  - `CAR_SPEED` — world units per second a car travels. Lives here with the other two so all three vehicle constants sit together, which is what makes "re-measure if the scale changes" actionable. Task 3 imports it.
   - `wheelSpin(distance, radius)` → radians a wheel of that radius has turned after rolling `distance`. Pure, and tested.
   - `class Deliveries` — constructed as `new Deliveries(scene, capacity = 64)`, with `update(vehicles)`, `dispose()`, and an `onSettingsChanged(changed)` matching how `Scaffolds` and the crew props are driven. `vehicles` is an array of `{ x, y, z, heading, distance, accent }`.
 
@@ -411,12 +413,19 @@ export const CAR_PARTS = Object.freeze({
   wheelRearRight: 'car_stationwagon_wheel_rear_right',
 })
 
+/** Authored on the city pack's grid and scaled once, the way HOUSE_SCALE does in houses.js. */
+export const CAR_SCALE = 1.45
+
 /**
- * Wheel radius in world units, measured from the wheel part's own bounding box at the
- * scale the car is drawn at. Re-measure if CAR_SCALE changes, or the wheels will visibly
- * skid instead of roll.
+ * Wheel radius in world units: half `car_stationwagon_wheel_front_left`'s own bounding-box
+ * height (0.1446 / 2 = 0.0723) times CAR_SCALE. Measured from city.glb, not guessed —
+ * re-measure with step 3a's script if CAR_SCALE changes, or the wheels will visibly skid
+ * instead of roll.
  */
-export const WHEEL_RADIUS = 0.18
+export const WHEEL_RADIUS = 0.1048
+
+/** World units per second. Tuned by eye in step 7; a colony crossing should take a few seconds. */
+export const CAR_SPEED = 3.2
 
 /**
  * How far a wheel of `radius` has rotated after rolling `distance`.
@@ -431,10 +440,40 @@ export function wheelSpin(distance, radius) {
 }
 ```
 
+- [ ] **Step 3a: Re-verify `WHEEL_RADIUS` against the kit**
+
+The value in the code above was measured from the built kit. Re-run the measurement to confirm it and state in your report what you got — if it disagrees, trust the measurement and correct the constant:
+
+```bash
+node --input-type=module -e "
+import { NodeIO } from '@gltf-transform/core'
+const doc = await new NodeIO().read('public/assets/city.glb')
+for (const node of doc.getRoot().listNodes()) {
+  if (node.getName() !== 'car_stationwagon_wheel_front_left') continue
+  const mesh = node.getMesh()
+  if (!mesh) continue
+  for (const prim of mesh.listPrimitives()) {
+    const pos = prim.getAttribute('POSITION')
+    let minY = Infinity, maxY = -Infinity
+    for (let i = 0; i < pos.getCount(); i++) {
+      const y = pos.getElement(i, [0, 0, 0])[1]
+      if (y < minY) minY = y
+      if (y > maxY) maxY = y
+    }
+    console.log('wheel height', (maxY - minY).toFixed(4), '-> radius', ((maxY - minY) / 2).toFixed(4))
+  }
+}
+"
+```
+
+`WHEEL_RADIUS` is that radius multiplied by `CAR_SCALE`, because the geometry is scaled
+before it is drawn. If the wheel is not a circle in cross-section, use the Y extent — that is
+the axis it rolls about.
+
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `node --test test/deliveries.test.mjs`
-Expected: PASS — 5 tests. The first test reads the real `city.glb`, so a wrong part name fails here rather than at runtime.
+Expected: PASS — 5 tests. The first test reads the real `city.glb`, so a wrong part name fails here rather than at runtime. The wheel-roll test is scale-independent — it asserts the relationship between distance and turns, so it passes for any radius you measured.
 
 - [ ] **Step 5: Commit the tested core**
 
@@ -532,7 +571,7 @@ In `src/game/colony.js`, replace `_updateScaffolds` with a `_updateDeliveries(dt
    - `const cells = hexLine(start.q, start.r, end.q, end.r)`
    - `const points = cells.map((c) => cellWorld(c.q, c.r))`, then replace the final point with the building's own position so the car parks at the house rather than at the cell centre
    - `const length = pathLength(points)`
-3. Advances `entry.driven` by `dt * CAR_SPEED` while the thread is arriving, and back down while it is leaving.
+3. Advances `entry.driven` by `dt * CAR_SPEED` (imported from `deliveries.js` — Task 2 defines it) while the thread is arriving, and back down while it is leaving.
 4. Produces one vehicle per entry: `pointAt(points, entry.driven)` for `x`, `z` and `heading`; `y` from `this.groundAt(x, z)`; `distance` = `entry.driven`; `accent` = `plot.accent`.
 5. Hands the array to `this.deliveries.update(vehicles)`.
 
