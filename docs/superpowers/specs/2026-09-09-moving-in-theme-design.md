@@ -51,9 +51,18 @@ matters.
 
 ### Explicitly not doing
 
-**No real street plan with house numbers.** The floating hex plots stay. Their stickiness is
-what lets you learn the map; a literal town would trade that away for realism that buys
-nothing. The van drives along the plot edge, not through a road network.
+**No real street plan with house numbers.** The hex plots stay, and so does their stickiness —
+that is what lets you learn the map, and a literal town would trade it away for realism that
+buys nothing. Nothing lays out roads, and no plot moves to accommodate a route.
+
+The van does, however, **drive the whole way** from the depot to the plot rather than only
+appearing at its kerb. That was reconsidered after Stage 1 landed, and it does not cost the
+stickiness this section protects: driving *across* the hexes changes nothing about where they
+sit. It is affordable because `src/world/plots.js` already holds the primitives — `HEX_DIRS`
+for the six neighbour directions, `hexToWorld()` and its inverse — and because `TILE` is
+`CELL * 0.992`, pulled in by less than one percent purely to stop z-fighting. The colony is
+therefore one continuous hex surface, not floating islands, so a journey is a hex line with
+height-following rather than pathfinding over gaps.
 
 **The badge never moves to the van.** One crew figure per thread does everything — loads,
 drives, unloads, assembles. A van is a tool it uses, not an actor. A moving target is hard to
@@ -82,6 +91,23 @@ Six areas carry it, across seven files:
 Van pulls up on arrival, crew loads and unloads, van leaves on archive. Split out because
 stage 1 is useful without it and it carries the one unresolved dependency (below).
 
+**The unresolved dependency is now resolved, and the answer was no.** There is no van in the
+free tier, and paying does not help — City Builder Bits' Extra tier adds park assets, not
+vehicles. The pack ships five cars: `car_hatchback`, `car_police`, `car_sedan`,
+`car_stationwagon` and `car_taxi`, each with its four wheels as separate nodes.
+
+Searching other CC0 libraries did not turn up a van in a matching style either. So the
+vehicle is **`car_stationwagon` with a load on its roof** — a furniture piece or a box, so it
+reads as a delivery rather than as someone dropping by. Three things make staying inside the
+city kit worth more than a closer-shaped model from elsewhere: it shares the houses' atlas, so
+it merges and takes the repo's accent through the same repainted-cell trick; its wheels are
+separate nodes, which `kit.js`'s `solo` mode exists for, so they can turn; and it is the same
+artist's hand, so it cannot clash. A van from another pack would bring a second atlas, a
+different scale and a different style.
+
+`Scaffolds` — currently timber poles round a finished house, and the last un-themed object in
+the colony — is what the parked car replaces.
+
 ## Assets
 
 Three kits in `assets-src/`, all CC0 from Kay Lousberg, all free tier:
@@ -105,9 +131,11 @@ masked via `ACCENT_MASK`. Which cell plays that role in the furniture and city a
 unknown until they are opened. Work, not a blocker; if no single swatch reads as "this
 house's colour", the fallback is to tint a separate small part (door, or the van's panel).
 
-**Vans may not be in the free tier.** City Builder Bits previews show vehicles, but whether
-they sit in the free tier or the $3.95 tier is unconfirmed. Affects stage 2 only, and $3.95
-is not a blocker — but it is not verified either.
+**Vans are not in the pack at all — resolved, see Stage 2.** The free tier ships five cars and
+no van or truck, and the paid tier adds park assets rather than vehicles. Stage 2 therefore
+uses `car_stationwagon` with a roof load. This risk is closed; it is left here because the
+mitigation it names ("$3.95 is not a blocker") turned out to buy nothing, which is worth
+knowing before anyone spends the money.
 
 **Scale mismatch.** Furniture Bits is interior-scale, City Builder Bits is city-scale. There
 is already a `BUILDING_SCALE` constant, so this is expected to be a per-kit factor rather
