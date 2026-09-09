@@ -26,6 +26,8 @@ const FOREST = [
 const STEPS = [
   ['tools/build-kit.mjs', 'assets-src/KayKit_Space_Base_Bits_1.0_FREE/Assets/gltf', 'public/assets/spacebase.glb'],
   ['tools/build-kit.mjs', 'assets-src/KayKit_Forest_Nature_Pack_1.0_FREE/Assets/gltf', 'public/assets/forest.glb', FOREST.join(',')],
+  ['tools/build-kit.mjs', 'assets-src/KayKit_City_Builder_Bits_1.0_FREE/Assets/gltf', 'public/assets/city.glb'],
+  ['tools/build-kit.mjs', 'assets-src/KayKit_Furniture_Bits_1.0_FREE/Assets/gltf', 'public/assets/furniture.glb'],
   ['tools/build-crew.mjs'],
 ]
 
