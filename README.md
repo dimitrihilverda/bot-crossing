@@ -81,7 +81,7 @@ than have you work around it.
 | One astronaut + one building | One session |
 | How finished a building looks | How large its transcript is, on a log scale |
 | A delivery car parked at a house | Somebody is at that site right now |
-| A car driving out from the depot | A thread arriving — its crew member is riding in it, so it is not on foot until the car parks |
+| A car on the road | A site opening up or closing down. A crew member with nothing to ask you rides along, so it is off screen until the car stops; one that wants you stays on its plot with its badge, wherever its car is |
 | Walking out of the ship | A thread that just appeared |
 | Walking back into the ship | You archived it |
 

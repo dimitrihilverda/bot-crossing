@@ -1242,12 +1242,23 @@ export class Astronauts {
       // agent than there are slots, which is exactly when the colony would empty.
       if (i >= this.capacity) break
       if (agent.state === 'gone') continue
-      // Riding in its delivery car on the way out to its plot — the colony sets this flag
-      // per frame. Skipping the slot is the only way to hide one crew member: everything
-      // here is packed into the first `n` instances, and an unused slot left in the middle
-      // still draws. This is a draw-time skip and nothing more — the agent keeps its state,
-      // its status and its place in the roster while it rides.
-      if (agent.riding) continue
+      // Riding in its delivery car — the colony sets this flag per frame. Skipping the slot
+      // is the only way to hide one crew member: everything here is packed into the first
+      // `n` instances, and an unused slot left in the middle still draws. This is a
+      // draw-time skip and nothing more — the agent keeps its state, its status and its
+      // place in the roster while it rides.
+      //
+      // Giving up the index matters as much as skipping the write. The colour gate below
+      // fires on `index !== i`, and every agent behind this one shifts down a slot and
+      // overwrites the colours in the slot this one vacated. Keep the stale index and the
+      // agent reclaims that same `i` on its way back with the gate reading "unchanged", so
+      // it is drawn in whatever suit, helmet, trim and eye its neighbour left there — until
+      // some unrelated status change happens to set `colorDirty`. `-1` is the same sentinel
+      // a capacity rebuild uses, and nothing else reads `index`.
+      if (agent.riding) {
+        agent.index = -1
+        continue
+      }
       const s = agent.scale
       if (s <= 0.001) continue
 
@@ -1369,6 +1380,10 @@ export class Astronauts {
       // A crew member riding in its car is not drawn, so it must not be clickable either —
       // picking is in screen space and would happily hand back an astronaut that is not
       // there, at the spot on the plot it is walking to.
+      //
+      // This is also why the colony refuses to set `riding` on a crew member whose status
+      // carries a badge: skipping it here is what would take away the click target for the
+      // one thread that is asking for you.
       if (agent.scale < 0.3 || agent.state === 'gone' || agent.riding) continue
       v.set(agent.pos.x, agent.pos.y + (this.headHeight || 0.75), agent.pos.z).project(camera)
       if (v.z > 1) continue // behind the camera

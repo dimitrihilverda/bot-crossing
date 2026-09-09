@@ -119,3 +119,76 @@ export function pointAt(points, distance) {
   const prev = points[points.length - 2]
   return { x: last.x, z: last.z, heading: Math.atan2(last.z - prev.z, last.x - prev.x) }
 }
+
+/**
+ * Air between the kerb and the wall of the house, on top of the building's own radius.
+ *
+ * Half a unit is roughly a car's width, so the body reads as parked beside the house rather
+ * than pressed against it.
+ */
+export const KERB_CLEARANCE = 0.5
+
+/**
+ * The thinnest clearance the kerb will ever settle for.
+ *
+ * Only reached when the final leg is too short to give the car its proper berth. It is a
+ * floor rather than a target: what it guarantees is that the car is still *outside* the
+ * building, which is all the parked car has to be in order to do its job.
+ */
+export const KERB_MIN_CLEARANCE = 0.1
+
+/**
+ * How far back along the final leg of a route the car should stop, given the length of that
+ * leg and the radius of the house at the end of it.
+ *
+ * Two constraints, and on a short leg they disagree:
+ *
+ *  - **Clear the footprint.** A car driven to the house's own centre parks *inside* the
+ *    building and cannot be seen at all, which defeats the entire point — the parked car is
+ *    what replaced the scaffolding.
+ *  - **Stay on the leg.** Back off further than the leg is long and the kerb lands behind
+ *    the cell the car approaches from, so the car drives past its stop and reverses into it.
+ *
+ * Where they disagree, clearance wins. A car parked a little early looks odd; a car parked
+ * inside its house is invisible, and invisible is the failure mode this whole route shaping
+ * exists to avoid. So the leg guard is applied first and then *floored* at the footprint —
+ * the clamp is two-sided.
+ *
+ * The earlier form was `Math.min(leg * 0.9, footprint + KERB_CLEARANCE)`: one-sided, so a
+ * leg shorter than about `(footprint + 0.5) / 0.9` silently re-parked the car inside the
+ * footprint. It does not fire at the shipping `CELL` of 7.6 — adjacent cell centres are far
+ * enough apart that the leg guard never binds — which is exactly why the rule belongs in a
+ * tested function instead of in a comment about the layout that happens to ship today.
+ *
+ * @param legLength length of the last segment, from the approach cell centre to the house
+ * @param footprint the house's own radius
+ * @returns how far back from the house to park, along that segment. 0 for a degenerate leg,
+ *   where there is no direction to back off in and the caller must leave the point alone.
+ */
+export function kerbBack(legLength, footprint, clearance = KERB_CLEARANCE) {
+  if (!(legLength > 1e-6)) return 0
+  const want = footprint + clearance
+  // Prefer to stay strictly between the approach cell centre and the house...
+  const onLeg = Math.min(legLength * 0.9, want)
+  // ...but never at the price of parking inside the building.
+  return Math.max(onLeg, footprint + KERB_MIN_CLEARANCE)
+}
+
+/**
+ * One frame of a car's progress along its route: `driven` moved toward `target` by `step`,
+ * and never past it.
+ *
+ * Arriving and leaving are the same one number running in opposite directions, which is why
+ * there is no "parked" flag and no direction to store — the target is the whole state. The
+ * clamp at both ends is what makes that work: a car that has arrived sits at exactly
+ * `route.length` rather than creeping past it, and one that has gone home sits at exactly 0
+ * rather than reversing off the start of its own route.
+ *
+ * @returns the next `driven`. Exactly equal to `target` on the frame it lands.
+ */
+export function driveStep(driven, target, step) {
+  if (!(step > 0)) return driven
+  if (driven < target) return Math.min(target, driven + step)
+  if (driven > target) return Math.max(target, driven - step)
+  return driven
+}

@@ -17,7 +17,7 @@ import {
 } from '../world/plots.js'
 import { buildingUniforms } from '../world/buildings.js'
 import { createHouse } from '../world/houses.js'
-import { hexLine, pathLength, pointAt } from '../world/drive-path.js'
+import { hexLine, pathLength, pointAt, kerbBack, driveStep } from '../world/drive-path.js'
 import { Deliveries, CAR_SPEED } from '../world/deliveries.js'
 import { Ship } from '../world/ship.js'
 import { Astronauts } from '../agents/astronauts.js'
@@ -869,17 +869,34 @@ export class Colony {
     return Boolean(thread && (thread.running || thread.unread || thread.hasError))
   }
 
-  _badgeFor(agent) {
-    // Riding in its delivery car, so there is no head for a badge to sit over. Left where
-    // the other state gates are rather than in the status mapping: what a thread wants has
-    // not changed, only whether anyone is on screen to ask.
-    if (agent.riding) return BADGE.none
+  /**
+   * The badge a crew member's own state and status earn, with no regard for whether it
+   * happens to be drawn this frame.
+   *
+   * Split out from `_badgeFor` because this is the axis the delivery decides suppression on
+   * (see `_markRiding`), and a suppression rule that consulted a badge which had already
+   * been zeroed *by* suppression would be circular — it would answer "no badge" for every
+   * crew member it had hidden on the previous frame and happily keep hiding it.
+   */
+  _statusBadgeFor(agent) {
     if (agent.state === 'spawning') return BADGE.spawning
     if (agent.state === 'leaving') return BADGE.leaving
     // Badges only appear once an astronaut has actually reached its post — a stream of
     // symbols bobbing over a walking crowd is noise.
     if (agent.state !== 'at-site') return BADGE.none
     return BADGE_FOR[agent.status] ?? BADGE.none
+  }
+
+  _badgeFor(agent) {
+    // Riding in its delivery car, so there is no head for a badge to sit over. Left where
+    // the other state gates are rather than in the status mapping: what a thread wants has
+    // not changed, only whether anyone is on screen to ask.
+    //
+    // This can only ever zero a badge that was already `none` — `_markRiding` refuses to
+    // set the flag on a crew member whose status carries one — so it is a consistency guard
+    // between the figure and its badge, not a decision.
+    if (agent.riding) return BADGE.none
+    return this._statusBadgeFor(agent)
   }
 
   /** Particle emission, driven by what each astronaut is doing. */
@@ -976,9 +993,7 @@ export class Colony {
 
       // One number, driven up on the way out and back down on the way home, never past
       // either end of the route.
-      const step = CAR_SPEED * dt
-      if (entry.driven < target) entry.driven = Math.min(target, entry.driven + step)
-      else if (entry.driven > target) entry.driven = Math.max(target, entry.driven - step)
+      entry.driven = driveStep(entry.driven, target, CAR_SPEED * dt)
 
       // Home again with nowhere to be: no car on the road at all, rather than a heap of
       // them idling on the depot pad for every thread the colony has ever seen.
@@ -998,10 +1013,9 @@ export class Colony {
       })
 
       // Whoever the car is carrying is inside it, so it is not also standing on the plot.
-      // Only on the way out: the return leg runs empty. The crew got out at the house and is
-      // waiting or asleep on it, and hiding it for the length of the drive home would take a
-      // badge off screen that somebody is waiting behind.
-      if (wants && entry.driven > 0 && entry.driven < route.length) this._markRiding(id)
+      // Both ways: a crew member rides home as well as out. Which direction the car is
+      // going is deliberately *not* part of this test — see `_markRiding` for what is.
+      if (entry.driven > 0 && entry.driven < route.length) this._markRiding(id)
     }
     this.deliveries.update(vehicles)
   }
@@ -1041,15 +1055,17 @@ export class Colony {
     // So the route ends at the kerb: the house position, pulled back along the last leg by
     // the building's own radius and a little clearance. That is where a delivery would
     // actually stop, and it is the same radius the scaffolding used to stand its poles on.
+    //
+    // How far back is `kerbBack` in `drive-path.js` — pure arithmetic, so the rule can be
+    // asserted rather than eyeballed against the layout that happens to ship today.
     const kerb = { x: p.x, z: p.z }
     const approach = points[points.length - 2]
     if (approach) {
       const dx = kerb.x - approach.x
       const dz = kerb.z - approach.z
       const d = Math.hypot(dx, dz)
-      if (d > 1e-6) {
-        // Never back past the cell it is coming from, however short that last leg is.
-        const back = Math.min(d * 0.9, (entry.mesh.userData.footprint || 1.4) + 0.5)
+      const back = kerbBack(d, entry.mesh.userData.footprint || 1.4)
+      if (back > 0) {
         kerb.x -= (dx / d) * back
         kerb.z -= (dz / d) * back
       }
@@ -1062,21 +1078,38 @@ export class Colony {
   }
 
   /**
-   * Mark a thread's crew member as riding in its car.
+   * Mark a thread's crew member as riding in its car, if it is one that may be hidden.
    *
    * Not a status and not a behaviour. `STATUS_ORDER` is a strict precedence and a seventh
    * state would compete with the six for the badge — a riding crew member is not doing a new
    * thing, it is just not drawn. The agent keeps its slot in the roster, keeps walking and
-   * keeps its status; the packing loop in `astronauts.js` steps over it, and `_badgeFor`
-   * hands back nothing, which is right for a thread that has only just appeared and wants
-   * nothing yet.
+   * keeps its status; the packing loop in `astronauts.js` steps over it and `_badgeFor` hands
+   * back nothing.
+   *
+   * **The one rule: never suppress a crew member whose status carries a badge.** The badge is
+   * what the application promises you can always find. Hide the figure and the badge goes
+   * with it (`_badgeFor`) and so does the click target (`astronauts.pick`), so a hidden crew
+   * member is a thread you cannot see and cannot open — and the single thread that is asking
+   * for you is the one that must never be either.
+   *
+   * Which way the car is driving is *not* the axis to decide this on, though it looks like
+   * it. `_isActive` is `running || unread || hasError`, so a thread that goes quiet sends its
+   * car home and parks it; when it next comes back as `unread` — `waiting`, the one `?` that
+   * wants you — or `hasError`, the car drives back *out*, and an outbound-only rule blanks
+   * that `?` for the three to eight seconds of the drive. The badge is the axis, and it holds
+   * on both legs.
+   *
+   * The cost is a car that sometimes drives with nobody visibly aboard. That is fine: it
+   * reads as a van running its own errand. A vanishing `?` does not.
    *
    * Only ever sets the flag. Clearing it is `_updateDeliveries`'s opening sweep, so an entry
    * that stops being visited cannot leave a crew member stranded off screen.
    */
   _markRiding(id) {
     const agent = this.astronauts.byId.get(id)
-    if (agent) agent.riding = true
+    if (!agent) return
+    if (this._statusBadgeFor(agent) !== BADGE.none) return
+    agent.riding = true
   }
 
   // ── interaction ─────────────────────────────────────────────────────────────────────
