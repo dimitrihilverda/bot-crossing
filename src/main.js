@@ -35,7 +35,7 @@ const app = document.getElementById('app')
 app.insertAdjacentHTML(
   'beforeend',
   `<div class="boot"><div class="inner">
-     <h1>Bot Crossing</h1>
+     <h1>Moving-In Crossing</h1>
      <p>Scanning for agent threads…</p>
      <div class="bar"><i></i></div>
    </div></div>`
@@ -851,7 +851,7 @@ async function boot() {
     hud.toggleHelp(true)
     localStorage.setItem('botcrossing.seen-help', '1')
   } else {
-    hud.hint('Drag to move · click an astronaut · H hides everything', 5200)
+    hud.hint('Drag to move · click a crew member · H hides everything', 5200)
   }
 }
 

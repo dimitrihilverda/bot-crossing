@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "A 3D colony sim where every coding-agent thread on your machine is a little astronaut building something.",
+  "description": "A 3D colony sim where every coding-agent thread on your machine is a little crew member moving furniture in.",
   "license": "MIT",
   "author": "Jarren Rocks",
   "homepage": "https://botcrossing.com",
@@ -32,10 +32,10 @@
     "linux"
   ],
   "scripts": {
-    "dev": "npm run assets --silent && vite",
+    "dev": "npm run assets --silent && node -e \"process.env.PORT=process.env.PORT||'5280';require('child_process').spawn(process.execPath,['node_modules/vite/bin/vite.js'],{stdio:'inherit'}).on('exit',c=>process.exit(c??0))\"",
     "build": "npm run assets --silent && vite build",
-    "start": "vite build && node server/serve.mjs",
-    "serve": "node server/serve.mjs",
+    "start": "vite build && node -e \"process.env.PORT=process.env.PORT||'5280';import('./server/serve.mjs')\"",
+    "serve": "node -e \"process.env.PORT=process.env.PORT||'5280';import('./server/serve.mjs')\"",
     "assets": "node tools/build-assets.mjs",
     "test": "node --test \"test/**/*.test.mjs\""
   },
