@@ -66,11 +66,11 @@ click and its status is hard to read, and finding that one `?` is the whole poin
 Ends with something that works end to end: houses on plots, crew members with correct badges,
 furniture accumulating, clicking a crew member still opens the thread in its harness.
 
-Six files carry it:
+Six areas carry it, across seven files:
 
 | File | Change |
 | --- | --- |
-| `src/world/buildings.js` | `KINDS` becomes houses; progress becomes furniture fill rather than build stages. ~565 lines, the bulk of the work |
+| `src/world/buildings.js` | `KINDS` becomes houses; progress becomes furniture fill rather than build stages, on the same log-scale curve upstream uses for building completeness. ~565 lines, the bulk of the work |
 | `src/world/kit.js` | Register the furniture and city kits |
 | `src/world/planet.js` | Default to Terra; retune ground and scatter for a residential setting |
 | `src/world/ship.js` | Ship becomes the depot |
