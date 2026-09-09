@@ -14,7 +14,7 @@
 
 - Node >= 22.13. UI language stays **English** so upstream merges stay clean.
 - The 33 existing tests in `test/` must stay green after every task. They cover harness scanning and state merging and are the safety net proving the re-theme did not change how threads are read.
-- Runs on **port 5275** via `PORT`; the original Bot Crossing keeps 5274 and its logon autostart.
+- Runs on **port 5280** via `PORT`. 5274 is the shared install's owner UI, and 5275 / 5276 are Dimitri's guest API and UDP discovery — so the theme has to stay clear of all three.
 - `upstream` remote points at `Station-Sciences/bot-crossing`; work happens on branch `moving-in-theme`.
 - Art is CC0 by Kay Lousberg. Raw packs are **never** committed — only the built `.glb`. `public/assets/CREDITS.md` must list every pack used.
 - One thread is only ever doing one thing: `STATUS_ORDER` in `src/game/colony.js:51` stays the single strict precedence. Do not add parallel status flags.
@@ -428,10 +428,10 @@ Expected: PASS — 38 tests. The existing space-base recipes still work because 
 - [ ] **Step 5: Verify nothing changed on screen**
 
 ```bash
-PORT=5275 npm run dev
+PORT=5280 npm run dev
 ```
 
-Open http://localhost:5275 and confirm the colony renders exactly as before. This task is a pure refactor; anything visibly different is a bug in it.
+Open http://localhost:5280 and confirm the colony renders exactly as before. This task is a pure refactor; anything visibly different is a bug in it.
 
 - [ ] **Step 6: Commit**
 
@@ -700,7 +700,7 @@ One known cosmetic consequence, not worth fixing here: line 841 computes `entry.
 
 ```bash
 npm test
-PORT=5275 npm run dev
+PORT=5280 npm run dev
 ```
 
 Expected: all tests pass. On screen: houses on the plots, each holding furniture, and a plot whose threads have small transcripts visibly emptier than one whose threads are large. Compare against http://localhost:5274 — same threads, same layout, different world.
@@ -744,7 +744,7 @@ In `src/world/planet.js`, weight Terra's `SCATTER` towards trees, bushes and gra
 - [ ] **Step 4: Look at it**
 
 ```bash
-PORT=5275 npm run dev
+PORT=5280 npm run dev
 ```
 
 Expected: opens on Terra, green ground, planting rather than rubble, houses reading as houses standing on it.
@@ -793,7 +793,7 @@ Change only what the depot is built from. Keep the module's exports, its placeme
 - [ ] **Step 4: Look at it, run the suite, commit**
 
 ```bash
-PORT=5275 npm run dev
+PORT=5280 npm run dev
 npm test
 git add src/world/ship.js
 git commit -m "feat: the ship becomes the depot"
@@ -895,7 +895,7 @@ Follow the pattern the hammer already uses. `src/agents/astronauts.js:1203` expl
 
 ```bash
 npm test
-PORT=5275 npm run dev
+PORT=5280 npm run dev
 ```
 
 Expected: all pass. On screen, find one of each state you can: a running thread working at a piece of furniture, an unread one standing still under a `?`, a three-day-old one sitting down. An `idle` or `sleeping` crew member must have **no** badge.
@@ -945,14 +945,14 @@ Two deliberate exceptions: **`repos` stays `repos`** — the sidebar lists real 
       "name": "moving-in-crossing",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
-      "port": 5275,
+      "port": 5280,
       "autoPort": true
     }
   ]
 }
 ```
 
-Set `PORT=5275` for the `dev` and `serve` scripts in `package.json` so the fork does not have to be started with an environment variable by hand. It must not default to 5274.
+Set `PORT=5280` for the `dev` and `serve` scripts in `package.json` so the fork does not have to be started with an environment variable by hand. It must not default to 5274.
 
 - [ ] **Step 4: Rewrite the README's opening**
 
@@ -972,13 +972,13 @@ npm run build
 npm run serve
 ```
 
-Expected: every test passes, the build succeeds, and the production server serves the themed colony on 5275 while the original still answers on 5274.
+Expected: every test passes, the build succeeds, and the production server serves the themed colony on 5280 while the original still answers on 5274.
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add src/ui/hud.js index.html README.md .claude/launch.json package.json
-git commit -m "docs: reword for Moving-In, and settle on port 5275"
+git commit -m "docs: reword for Moving-In, and settle on port 5280"
 ```
 
 ---

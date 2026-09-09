@@ -125,7 +125,7 @@ unit-tested, matching how upstream is built.
 
 ## Deployment
 
-Runs on **port 5275** via `PORT`, which both `serve.mjs` and `vite.config.js` already read,
+Runs on **port 5280** via `PORT`, which both `serve.mjs` and `vite.config.js` already read,
 so it lives alongside the existing Bot Crossing on 5274. The logon autostart
 (`shell:startup\Bot Crossing.vbs` → `%LOCALAPPDATA%\bot-crossing\start-bot-crossing.ps1`)
 keeps pointing at 5274 until this version is good enough to replace it.
