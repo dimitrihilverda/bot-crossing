@@ -61,9 +61,10 @@ const NO_METAL = new Float32Array(CELL_COUNT).fill(0)
 const ACCENT_MASK = cellMask([CELL_CITY.ACCENT])
 
 /**
- * Fallback brand colour, used only until a vehicle's own accent is written in per instance
- * (see `update()`) — the same default `houses.js`/`ship.js` fall back to for an unowned
- * structure.
+ * Fallback brand colour for a vehicle with no accent of its own — the same default
+ * `houses.js`/`ship.js` fall back to for an unowned structure. Vehicles with no accent all
+ * share the one mesh pair built for this colour (see `update()`), rather than each getting
+ * a pair of their own.
  */
 const DEFAULT_ACCENT = 0xc96442
 
@@ -111,15 +112,22 @@ function readWheelOffsets() {
   return offsets
 }
 
-/** One uniform block per mesh — `uSink` is 0 and `uProgress` pinned at 1: a car is whole
- *  from its first frame and never rises out of the ground the way a growing building does. */
-function carUniforms(geo) {
+/**
+ * One uniform block per mesh — `uSink` is 0 and `uProgress` pinned at 1: a car is whole
+ * from its first frame and never rises out of the ground the way a growing building does.
+ *
+ * `uAccent` is fixed for the lifetime of the material it's built for (see the module doc):
+ * `decorate()` only has one `uAccent` per material, so the per-car colour comes from *which*
+ * material — and therefore which `InstancedMesh` — a car is drawn with, not from a value
+ * written here per instance.
+ */
+function carUniforms(geo, accent) {
   return {
     uProgress: { value: 1 },
     uMaxY: { value: geo.boundingBox.max.y },
     uMinY: { value: geo.boundingBox.min.y },
     uSink: { value: 0 },
-    uAccent: { value: new THREE.Color(DEFAULT_ACCENT) },
+    uAccent: { value: new THREE.Color(accent) },
     uNight: buildingUniforms.uNight,
     uTime: buildingUniforms.uTime,
     uCellAccent: { value: ACCENT_MASK },
@@ -128,7 +136,7 @@ function carUniforms(geo) {
   }
 }
 
-function carMaterial(geo) {
+function carMaterial(geo, accent) {
   return decorate(
     new THREE.MeshStandardMaterial({
       map: atlasTexture('city'),
@@ -138,7 +146,7 @@ function carMaterial(geo) {
       // A closed solid, like every shell in the pack — nothing to see through.
       side: THREE.FrontSide,
     }),
-    carUniforms(geo)
+    carUniforms(geo, accent)
   )
   // No custom depth material: with uSink 0 and uProgress pinned at 1, three's own depth pass
   // already puts every vertex exactly where this material does — the same reasoning
@@ -146,11 +154,30 @@ function carMaterial(geo) {
 }
 
 /**
- * The delivery fleet: two instanced meshes for the whole colony, one for every car body and
- * one for every wheel — separate meshes because the body and the wheels are different
- * geometry, the same reason `houses.js` keeps a shell and its furniture apart.
+ * The delivery fleet: one `InstancedMesh` pair (car bodies + wheels) **per distinct accent
+ * colour**, rather than one pair for the whole colony.
  *
- * Follows `Scaffolds` in `buildings.js`: geometry built once, `DynamicDrawUsage`, `count` and
+ * `decorate()`'s `uAccent` is one uniform for the whole material (see `buildings.js`), and
+ * three.js's own per-instance `instanceColor` cannot stand in for it: `instanceColor`
+ * multiplies `diffuseColor` at `#include <color_fragment>`, which three concatenates
+ * *before* `decorate()`'s accent-mix code runs, and on the accent swatch itself the mix is
+ * `mix(diffuseColor, uAccent * …, accentAmount)` with `accentAmount == 1.0` — so
+ * `diffuseColor` (and with it `instanceColor`) is discarded exactly where the per-car colour
+ * was supposed to land, and multiplies in everywhere else instead (body paint, glass,
+ * chrome). A prior version of this module tried that and had it backwards; see
+ * `task-2-review.md` for the traced shader composition.
+ *
+ * So instead: group cars by accent and give each group its own mesh pair, each with its own
+ * material cloned from the same `decorate()` recipe and its own fixed `uAccent`. The pair
+ * count is bounded — `PLOT_PALETTE` (`src/world/plots.js`) holds 12 colours, and only
+ * threads that are running, unread or errored get a car at all — so in practice this is a
+ * handful of meshes, built lazily as an accent first appears (an accent that never shows up
+ * costs nothing). This also closes the "stale colour in a reused slot" problem for free: a
+ * slot's colour comes from which mesh it sits in, not from a per-instance buffer that might
+ * not get rewritten.
+ *
+ * Follows `Scaffolds` in `buildings.js` for each pair: geometry built once (and shared
+ * across every pair — only the material differs), `DynamicDrawUsage`, `count` and
  * `instanceMatrix.needsUpdate` written per frame.
  *
  * A car never carries the crew's own status marker — see the Stage 2 spec's rule on that —
@@ -160,39 +187,65 @@ export class Deliveries {
   constructor(scene, capacity = 64) {
     this.scene = scene
     this.capacity = capacity
-    this.meshes = {}
+    // Lazily created, one entry per distinct accent value: accent -> { bodies, wheels }.
+    this._pairs = new Map()
     this._wheelOffsets = []
     this._disposed = false
+    this._built = false
 
     // Reused every frame, to keep `update()` allocation-free.
     this._dummy = new THREE.Object3D()
     this._yaw = new THREE.Quaternion()
     this._spin = new THREE.Quaternion()
     this._offset = new THREE.Vector3()
-    this._color = new THREE.Color()
 
     // The kit may still be loading when the colony constructs its scenery — see the same
     // note on `Ship`'s constructor in ship.js. `loadKit()` is idempotent, so this just joins
-    // whichever fetch is already in flight.
-    loadKit().then(() => {
-      if (this._disposed) return
-      this._build()
-    })
+    // whichever fetch is already in flight. Guarded: `loadKit()` reads
+    // `import.meta.env.BASE_URL`, which only a bundler defines, so it throws synchronously
+    // outside one (a plain `node --test` run, for instance) — construction should not fail
+    // just because nothing is there to fetch a kit; `_built` simply stays false, same as
+    // "still loading".
+    try {
+      loadKit().then(() => {
+        if (this._disposed) return
+        this._build()
+      })
+    } catch {
+      // No bundler in this process.
+    }
   }
 
-  /** Requires `loadKit()` to have resolved — see the constructor. */
+  /**
+   * Requires `loadKit()` to have resolved — see the constructor. Builds the geometry shared
+   * by every accent's mesh pair; each pair's own material (and its own fixed `uAccent`) is
+   * what actually varies per accent, made lazily in `_pairFor()`.
+   */
   _build() {
-    const bodyGeo = new Composer({ kit: 'city' }).add(CAR_PARTS.body, { solo: true, s: CAR_SCALE }).finish()
-    const wheelGeo = new Composer({ kit: 'city' }).add(CAR_PARTS.wheelFrontLeft, { solo: true, s: CAR_SCALE }).finish()
+    this._bodyGeo = new Composer({ kit: 'city' }).add(CAR_PARTS.body, { solo: true, s: CAR_SCALE }).finish()
+    this._wheelGeo = new Composer({ kit: 'city' })
+      .add(CAR_PARTS.wheelFrontLeft, { solo: true, s: CAR_SCALE })
+      .finish()
 
     // Measured once, in the kit's own units, then brought into the same scaled frame the
     // rendered geometry is drawn at.
     this._wheelOffsets = readWheelOffsets().map((v) => v.multiplyScalar(CAR_SCALE))
+    this._built = true
+  }
 
-    this.bodies = new THREE.InstancedMesh(bodyGeo, carMaterial(bodyGeo), this.capacity)
-    this.wheels = new THREE.InstancedMesh(wheelGeo, carMaterial(wheelGeo), this.capacity * 4)
+  /**
+   * The mesh pair for one accent colour, creating it the first time that colour is needed.
+   * `accent` is used both as the `Map` key and, via `carMaterial()`, as the pair's fixed
+   * `uAccent` — so two vehicles that share an accent value always land in the same pair, and
+   * two different accents always land in different ones.
+   */
+  _pairFor(accent) {
+    let pair = this._pairs.get(accent)
+    if (pair) return pair
 
-    for (const mesh of [this.bodies, this.wheels]) {
+    const bodies = new THREE.InstancedMesh(this._bodyGeo, carMaterial(this._bodyGeo, accent), this.capacity)
+    const wheels = new THREE.InstancedMesh(this._wheelGeo, carMaterial(this._wheelGeo, accent), this.capacity * 4)
+    for (const mesh of [bodies, wheels]) {
       mesh.castShadow = true
       mesh.receiveShadow = true
       mesh.count = 0
@@ -200,15 +253,49 @@ export class Deliveries {
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
     }
 
-    this.meshes = { bodies: this.bodies, wheels: this.wheels }
-    this.scene.add(this.bodies, this.wheels)
+    pair = { bodies, wheels }
+    this._pairs.set(accent, pair)
+    this.scene.add(bodies, wheels)
+    return pair
   }
 
   /** `vehicles` are `{ x, y, z, heading, distance, accent }` for every car currently on the
-   *  road. A no-op until the kit has resolved and the meshes exist. */
+   *  road. A no-op until the kit has resolved and the shared geometry exists. */
   update(vehicles) {
-    if (!this.bodies) return
+    if (!this._built) return
 
+    // Bucket by accent first. A vehicle with no accent falls back to the same default
+    // colour houses.js/ship.js use for an unowned structure — one shared pair, not a fresh
+    // one every frame.
+    const buckets = new Map()
+    for (const v of vehicles) {
+      const key = v.accent == null ? DEFAULT_ACCENT : v.accent
+      let bucket = buckets.get(key)
+      if (!bucket) {
+        bucket = []
+        buckets.set(key, bucket)
+      }
+      bucket.push(v)
+    }
+
+    for (const [accent, bucket] of buckets) {
+      this._writeBucket(this._pairFor(accent), bucket)
+    }
+
+    // A pair that held cars on some earlier frame but none this frame must be emptied —
+    // a stale `count` would leave last frame's cars parked where a thread used to run.
+    for (const [accent, pair] of this._pairs) {
+      if (buckets.has(accent)) continue
+      pair.bodies.count = 0
+      pair.wheels.count = 0
+      pair.bodies.instanceMatrix.needsUpdate = true
+      pair.wheels.instanceMatrix.needsUpdate = true
+    }
+  }
+
+  /** Writes one accent's cars into its own mesh pair, capped at `this.capacity` bodies (and
+   *  therefore `this.capacity * 4` wheels), the same cap the single shared mesh used to have. */
+  _writeBucket(pair, vehicles) {
     const d = this._dummy
     let nBodies = 0
     let nWheels = 0
@@ -220,12 +307,7 @@ export class Deliveries {
       d.quaternion.setFromAxisAngle(Y_AXIS, v.heading)
       d.scale.set(1, 1, 1)
       d.updateMatrix()
-      this.bodies.setMatrixAt(nBodies, d.matrix)
-      // The repainted cell in decorate()'s shader is one uniform for the whole mesh, which
-      // cannot vary per car — three's own per-instance colour can, so a car's own accent
-      // rides in on that instead, tinting the body distinctly from every other car on the
-      // road at once.
-      if (v.accent != null) this.bodies.setColorAt(nBodies, this._color.set(v.accent))
+      pair.bodies.setMatrixAt(nBodies, d.matrix)
       nBodies++
 
       const spin = wheelSpin(v.distance, WHEEL_RADIUS)
@@ -242,35 +324,41 @@ export class Deliveries {
         d.quaternion.copy(this._yaw).multiply(this._spin)
         d.scale.set(1, 1, 1)
         d.updateMatrix()
-        this.wheels.setMatrixAt(nWheels, d.matrix)
+        pair.wheels.setMatrixAt(nWheels, d.matrix)
         nWheels++
       }
     }
 
-    this.bodies.count = nBodies
-    this.wheels.count = nWheels
-    this.bodies.instanceMatrix.needsUpdate = true
-    this.wheels.instanceMatrix.needsUpdate = true
-    if (this.bodies.instanceColor) this.bodies.instanceColor.needsUpdate = true
+    pair.bodies.count = nBodies
+    pair.wheels.count = nWheels
+    pair.bodies.instanceMatrix.needsUpdate = true
+    pair.wheels.instanceMatrix.needsUpdate = true
   }
 
+  /** Frees every accent's mesh pair — iterated generically, mirroring `Scaffolds.dispose()`,
+   *  so a pair added later (a new accent showing up) cannot leak. */
   dispose() {
     this._disposed = true // in case the kit resolves after this call
-    for (const mesh of Object.values(this.meshes)) {
-      mesh.geometry.dispose()
-      mesh.material.dispose()
-      this.scene.remove(mesh)
+    for (const pair of this._pairs.values()) {
+      for (const mesh of [pair.bodies, pair.wheels]) {
+        mesh.geometry.dispose()
+        mesh.material.dispose()
+        this.scene.remove(mesh)
+      }
     }
-    this.meshes = {}
+    this._pairs.clear()
   }
 
-  /** Iterates `this.meshes` generically, the way the crew props do, so a mesh added later
-   *  is covered here for free instead of leaking because someone forgot to list it by name. */
+  /** Iterates every accent's mesh pair generically, the way the crew props do, so a pair
+   *  added later is covered here for free instead of leaking because someone forgot to list
+   *  it by name. */
   onSettingsChanged(changed) {
     if (!changed.has('shadows')) return
-    for (const mesh of Object.values(this.meshes)) {
-      mesh.castShadow = true
-      mesh.receiveShadow = true
+    for (const pair of this._pairs.values()) {
+      for (const mesh of [pair.bodies, pair.wheels]) {
+        mesh.castShadow = true
+        mesh.receiveShadow = true
+      }
     }
   }
 }
