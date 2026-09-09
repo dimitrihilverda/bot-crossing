@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Node >= 22.13. UI language stays **English** so upstream merges stay clean.
-- The 33 existing tests in `test/` must stay green after every task. They cover harness scanning and state merging and are the safety net proving the re-theme did not change how threads are read.
+- The **44 existing tests** in `test/` must stay green after every task (the baseline includes Dimitri's shared-colonies tests). Test counts below are **relative to 44** — where a step says "PASS — N tests", read it as 44 plus the tests that task adds. They cover harness scanning and state merging and are the safety net proving the re-theme did not change how threads are read.
 - Runs on **port 5280** via `PORT`. 5274 is the shared install's owner UI, and 5275 / 5276 are Dimitri's guest API and UDP discovery — so the theme has to stay clear of all three.
 - This is a **git worktree** of `C:\PhpstormProjects\bot-crossing`, on branch `moving-in-theme` based on `origin/shared-colonies`. `origin` is `dimitrihilverda/bot-crossing` (shared with Dimitri); `upstream` is `Station-Sciences/bot-crossing`. The branch tracks `origin/moving-in-theme` — its **own** remote branch. Verify with `git rev-parse --abbrev-ref '@{push}'` before any push; if that ever answers `origin/shared-colonies`, stop and fix it, because a bare `git push` would then land the theme in Dimitri's shared working branch.
 - **Never switch branches in `C:\PhpstormProjects\bot-crossing`.** That checkout is a live installation whose logon autostart serves its `dist/`; the whole point of this worktree is that it stays on `shared-colonies`.
@@ -183,7 +183,7 @@ Add two rows to the table in `public/assets/CREDITS.md`:
 - [ ] **Step 8: Run the whole suite**
 
 Run: `npm test`
-Expected: PASS — 35 tests (33 existing + 2 new).
+Expected: PASS — 46 tests (44 baseline + 2 new).
 
 - [ ] **Step 9: Commit**
 
@@ -345,7 +345,7 @@ export const CELL_FURNITURE = {
 - [ ] **Step 6: Run the tests**
 
 Run: `npm test`
-Expected: PASS — 37 tests.
+Expected: PASS — 48 tests (44 + 2 from Task 1 + 2 here).
 
 - [ ] **Step 7: Commit**
 
@@ -424,7 +424,7 @@ Leave the rest of `add` untouched.
 - [ ] **Step 4: Run the tests**
 
 Run: `npm test`
-Expected: PASS — 38 tests. The existing space-base recipes still work because the default is `'base'`.
+Expected: PASS — 49 tests. The existing space-base recipes still work because the default is `'base'`.
 
 - [ ] **Step 5: Verify nothing changed on screen**
 
@@ -493,8 +493,10 @@ test('thresholds ascend and stay inside (0, 1]', () => {
 test('the first piece is there for the smallest live thread', () => {
   // threadProgress in src/game/colony.js floors at 0.05, so anything above that leaves
   // a real thread's house empty.
+  // Compared in Float32, because that is the precision the array stores: a Float32Array
+  // holds 0.05 as 0.05000000074505806, so `<= 0.05` against the double is false.
   const t = revealThresholds(4)
-  assert.ok(t[0] <= 0.05, `first threshold ${t[0]} would leave a live thread empty`)
+  assert.ok(t[0] <= Math.fround(0.05), `first threshold ${t[0]} would leave a live thread empty`)
 })
 
 test('the last piece needs full progress', () => {
@@ -502,8 +504,11 @@ test('the last piece needs full progress', () => {
   assert.equal(t[3], 1)
 })
 
-test('one piece is degenerate but valid', () => {
-  assert.deepEqual(Array.from(revealThresholds(1)), [1])
+test('one piece is first, not last', () => {
+  // The single piece of a one-piece house is both the first and the last, and those two
+  // rules disagree. First wins: an empty house for a live thread is the failure that
+  // matters, and a one-piece house furnished from the start is harmless.
+  assert.deepEqual(Array.from(revealThresholds(1)), [Math.fround(0.05)])
 })
 
 test('no pieces is not a crash', () => {
@@ -542,7 +547,7 @@ export function revealThresholds(count) {
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `node --test test/houses.test.mjs`
-Expected: PASS — 5 tests.
+Expected: PASS — 5 tests in this file.
 
 - [ ] **Step 5: Commit the tested core before touching the scene**
 
@@ -992,7 +997,7 @@ One row of the spec's mapping table is not implemented here, and it is worth nam
 
 ## Done when
 
-- `npm test` passes, and the count is the original 33 plus the tests added here.
+- `npm test` passes, and the count is the 44-test baseline plus the tests added here.
 - `npm run dev` shows houses on the hex plots, crew members with the right badges, and furniture that visibly tracks transcript size.
 - **Clicking a crew member still opens its thread in the right harness.** This is the one thing the re-theme must not break — it is the whole reason the app exists.
 - No `idle` or `sleeping` crew member carries a badge.
