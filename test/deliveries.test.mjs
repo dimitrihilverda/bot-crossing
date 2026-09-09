@@ -211,12 +211,72 @@ test('dispose frees every accent pair, not just a couple of named ones', () => {
   const removed = []
   const d = makeDeliveries()
   d.scene = { add() {}, remove: (m) => removed.push(m) }
+
+  // The load has to exist here the same way `makeDeliveries()` stands in the kit-dependent
+  // body and wheel geometry — otherwise `_load` stays null (as the constructor leaves it) and
+  // `_meshes()` simply skips it, so this test would pass whether or not `dispose()` actually
+  // frees the load. Set up exactly as 'every car gets a load' does.
+  const loadGeo = new THREE.BoxGeometry(0.4, 0.3, 0.4)
+  loadGeo.computeBoundingBox()
+  d._loadGeo = loadGeo
+  d._load = d._makeLoadMesh()
+
   d.update([vehicle(0xff0000, 0), vehicle(0x00ff00, 1), vehicle(0x0000ff, 2)])
   assert.equal(d._pairs.size, 3)
 
   d.dispose()
   assert.equal(d._pairs.size, 0)
-  assert.equal(removed.length, 6, '3 accents * (bodies + wheels)')
+  assert.equal(removed.length, 7, '3 accents * (bodies + wheels), plus the one shared load')
+})
+
+test('onSettingsChanged walks the same generator dispose does, load included', () => {
+  // `onSettingsChanged` and `dispose()` both walk `_meshes()` so that a mesh added later
+  // (or the load, added earlier) cannot be missed by one and not the other. Prove it by
+  // flipping every mesh's shadow flags off by hand first, then checking the sweep put them
+  // all back — including the load, which is the one `dispose()`'s own test used to miss.
+  const d = makeDeliveries()
+  const loadGeo = new THREE.BoxGeometry(0.4, 0.3, 0.4)
+  loadGeo.computeBoundingBox()
+  d._loadGeo = loadGeo
+  d._load = d._makeLoadMesh()
+
+  d.update([vehicle(0xff0000, 0), vehicle(0x00ff00, 1)])
+  assert.equal(d._pairs.size, 2)
+
+  const meshes = [...d._meshes()]
+  assert.equal(meshes.length, 5, '2 accents * (bodies + wheels), plus the one shared load')
+  for (const mesh of meshes) {
+    mesh.castShadow = false
+    mesh.receiveShadow = false
+  }
+
+  d.onSettingsChanged(new Set(['shadows']))
+
+  for (const mesh of meshes) {
+    assert.equal(mesh.castShadow, true)
+    assert.equal(mesh.receiveShadow, true)
+  }
+})
+
+test('onSettingsChanged is a no-op when "shadows" is not among the changed settings', () => {
+  const d = makeDeliveries()
+  const loadGeo = new THREE.BoxGeometry(0.4, 0.3, 0.4)
+  loadGeo.computeBoundingBox()
+  d._loadGeo = loadGeo
+  d._load = d._makeLoadMesh()
+
+  d.update([vehicle(0xff0000, 0)])
+  for (const mesh of d._meshes()) {
+    mesh.castShadow = false
+    mesh.receiveShadow = false
+  }
+
+  d.onSettingsChanged(new Set(['quality']))
+
+  for (const mesh of d._meshes()) {
+    assert.equal(mesh.castShadow, false)
+    assert.equal(mesh.receiveShadow, false)
+  }
 })
 
 test('the colony drives deliveries and no longer builds scaffolding', () => {
