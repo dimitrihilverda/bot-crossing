@@ -1,3 +1,7 @@
+import * as THREE from 'three'
+import { ATLAS, CELL_CITY, atlasTexture, cellMask, loadKit, part } from './kit.js'
+import { Composer, buildingUniforms, decorate } from './buildings.js'
+
 /**
  * The delivery vehicles: a loaded car per thread, driving between the depot and a plot.
  *
@@ -42,4 +46,231 @@ export const CAR_SPEED = 3.2
 export function wheelSpin(distance, radius) {
   if (!radius) return 0
   return distance / radius
+}
+
+// ── the scene half ───────────────────────────────────────────────────────────────────
+
+/**
+ * Surface response for the car, one value for the whole atlas — the same call `houses.js`
+ * makes for the city pack: painted panels and glass here are both roughly matte at this
+ * scale, and a per-cell table would be guessing dressed up as data.
+ */
+const CELL_COUNT = ATLAS.cols * ATLAS.rows
+const CAR_ROUGHNESS = new Float32Array(CELL_COUNT).fill(0.6)
+const NO_METAL = new Float32Array(CELL_COUNT).fill(0)
+const ACCENT_MASK = cellMask([CELL_CITY.ACCENT])
+
+/**
+ * Fallback brand colour, used only until a vehicle's own accent is written in per instance
+ * (see `update()`) — the same default `houses.js`/`ship.js` fall back to for an unowned
+ * structure.
+ */
+const DEFAULT_ACCENT = 0xc96442
+
+const Y_AXIS = new THREE.Vector3(0, 1, 0)
+const X_AXIS = new THREE.Vector3(1, 0, 0)
+
+/**
+ * The four wheels' positions relative to the body, read from the kit rather than
+ * hand-typed.
+ *
+ * `part(CAR_PARTS.body, 'city')` *without* `solo` merges the body with all four wheel
+ * children still attached, each already sitting at its correct offset. That offset only
+ * survives in this merged copy: `solo` mode (used below for the render geometry, precisely
+ * to drop the wheels) bakes a part into its *own* local frame, which is exactly what erases
+ * the position we need here. So the body's own vertex count marks where the wheels' vertices
+ * start in the merged buffer, and every wheel model in the kit has the same vertex count,
+ * which is what makes each wheel's stretch of the buffer easy to find without ever naming
+ * which corner it is — a mis-assigned corner is still a wheel in the right place, since all
+ * four are visually identical.
+ */
+function readWheelOffsets() {
+  const assembled = part(CAR_PARTS.body, 'city') // body + all 4 wheels, each already placed
+  const bodyOnly = part(CAR_PARTS.body, 'city', { solo: true })
+  const wheelShape = part(CAR_PARTS.wheelFrontLeft, 'city', { solo: true })
+
+  const nBody = bodyOnly.attributes.position.count
+  const nWheel = wheelShape.attributes.position.count
+  const pos = assembled.attributes.position
+
+  const offsets = []
+  for (let w = 0; w < 4; w++) {
+    const start = nBody + w * nWheel
+    const min = new THREE.Vector3(Infinity, Infinity, Infinity)
+    const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity)
+    for (let i = start; i < start + nWheel; i++) {
+      min.min({ x: pos.getX(i), y: pos.getY(i), z: pos.getZ(i) })
+      max.max({ x: pos.getX(i), y: pos.getY(i), z: pos.getZ(i) })
+    }
+    offsets.push(min.add(max).multiplyScalar(0.5))
+  }
+
+  assembled.dispose()
+  bodyOnly.dispose()
+  wheelShape.dispose()
+  return offsets
+}
+
+/** One uniform block per mesh — `uSink` is 0 and `uProgress` pinned at 1: a car is whole
+ *  from its first frame and never rises out of the ground the way a growing building does. */
+function carUniforms(geo) {
+  return {
+    uProgress: { value: 1 },
+    uMaxY: { value: geo.boundingBox.max.y },
+    uMinY: { value: geo.boundingBox.min.y },
+    uSink: { value: 0 },
+    uAccent: { value: new THREE.Color(DEFAULT_ACCENT) },
+    uNight: buildingUniforms.uNight,
+    uTime: buildingUniforms.uTime,
+    uCellAccent: { value: ACCENT_MASK },
+    uCellRoughness: { value: CAR_ROUGHNESS },
+    uCellMetalness: { value: NO_METAL },
+  }
+}
+
+function carMaterial(geo) {
+  return decorate(
+    new THREE.MeshStandardMaterial({
+      map: atlasTexture('city'),
+      roughness: 0.6,
+      metalness: 0,
+      emissive: 0x000000,
+      // A closed solid, like every shell in the pack — nothing to see through.
+      side: THREE.FrontSide,
+    }),
+    carUniforms(geo)
+  )
+  // No custom depth material: with uSink 0 and uProgress pinned at 1, three's own depth pass
+  // already puts every vertex exactly where this material does — the same reasoning
+  // houses.js gives for its own shell.
+}
+
+/**
+ * The delivery fleet: two instanced meshes for the whole colony, one for every car body and
+ * one for every wheel — separate meshes because the body and the wheels are different
+ * geometry, the same reason `houses.js` keeps a shell and its furniture apart.
+ *
+ * Follows `Scaffolds` in `buildings.js`: geometry built once, `DynamicDrawUsage`, `count` and
+ * `instanceMatrix.needsUpdate` written per frame.
+ *
+ * A car never carries the crew's own status marker — see the Stage 2 spec's rule on that —
+ * so nothing here reaches toward that system at all.
+ */
+export class Deliveries {
+  constructor(scene, capacity = 64) {
+    this.scene = scene
+    this.capacity = capacity
+    this.meshes = {}
+    this._wheelOffsets = []
+    this._disposed = false
+
+    // Reused every frame, to keep `update()` allocation-free.
+    this._dummy = new THREE.Object3D()
+    this._yaw = new THREE.Quaternion()
+    this._spin = new THREE.Quaternion()
+    this._offset = new THREE.Vector3()
+    this._color = new THREE.Color()
+
+    // The kit may still be loading when the colony constructs its scenery — see the same
+    // note on `Ship`'s constructor in ship.js. `loadKit()` is idempotent, so this just joins
+    // whichever fetch is already in flight.
+    loadKit().then(() => {
+      if (this._disposed) return
+      this._build()
+    })
+  }
+
+  /** Requires `loadKit()` to have resolved — see the constructor. */
+  _build() {
+    const bodyGeo = new Composer({ kit: 'city' }).add(CAR_PARTS.body, { solo: true, s: CAR_SCALE }).finish()
+    const wheelGeo = new Composer({ kit: 'city' }).add(CAR_PARTS.wheelFrontLeft, { solo: true, s: CAR_SCALE }).finish()
+
+    // Measured once, in the kit's own units, then brought into the same scaled frame the
+    // rendered geometry is drawn at.
+    this._wheelOffsets = readWheelOffsets().map((v) => v.multiplyScalar(CAR_SCALE))
+
+    this.bodies = new THREE.InstancedMesh(bodyGeo, carMaterial(bodyGeo), this.capacity)
+    this.wheels = new THREE.InstancedMesh(wheelGeo, carMaterial(wheelGeo), this.capacity * 4)
+
+    for (const mesh of [this.bodies, this.wheels]) {
+      mesh.castShadow = true
+      mesh.receiveShadow = true
+      mesh.count = 0
+      mesh.frustumCulled = false
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+    }
+
+    this.meshes = { bodies: this.bodies, wheels: this.wheels }
+    this.scene.add(this.bodies, this.wheels)
+  }
+
+  /** `vehicles` are `{ x, y, z, heading, distance, accent }` for every car currently on the
+   *  road. A no-op until the kit has resolved and the meshes exist. */
+  update(vehicles) {
+    if (!this.bodies) return
+
+    const d = this._dummy
+    let nBodies = 0
+    let nWheels = 0
+
+    for (const v of vehicles) {
+      if (nBodies >= this.capacity) break
+
+      d.position.set(v.x, v.y, v.z)
+      d.quaternion.setFromAxisAngle(Y_AXIS, v.heading)
+      d.scale.set(1, 1, 1)
+      d.updateMatrix()
+      this.bodies.setMatrixAt(nBodies, d.matrix)
+      // The repainted cell in decorate()'s shader is one uniform for the whole mesh, which
+      // cannot vary per car — three's own per-instance colour can, so a car's own accent
+      // rides in on that instead, tinting the body distinctly from every other car on the
+      // road at once.
+      if (v.accent != null) this.bodies.setColorAt(nBodies, this._color.set(v.accent))
+      nBodies++
+
+      const spin = wheelSpin(v.distance, WHEEL_RADIUS)
+      this._yaw.setFromAxisAngle(Y_AXIS, v.heading)
+      this._spin.setFromAxisAngle(X_AXIS, spin)
+
+      for (const offset of this._wheelOffsets) {
+        // The offset is in the car's own frame; turn it the same way the body is turned
+        // before adding it to the car's world position.
+        this._offset.copy(offset).applyQuaternion(this._yaw)
+        d.position.set(v.x + this._offset.x, v.y + this._offset.y, v.z + this._offset.z)
+        // Yaw first, then roll about the wheel's own (now-turned) axle, so a wheel spins on
+        // the right axis however the car is currently facing.
+        d.quaternion.copy(this._yaw).multiply(this._spin)
+        d.scale.set(1, 1, 1)
+        d.updateMatrix()
+        this.wheels.setMatrixAt(nWheels, d.matrix)
+        nWheels++
+      }
+    }
+
+    this.bodies.count = nBodies
+    this.wheels.count = nWheels
+    this.bodies.instanceMatrix.needsUpdate = true
+    this.wheels.instanceMatrix.needsUpdate = true
+    if (this.bodies.instanceColor) this.bodies.instanceColor.needsUpdate = true
+  }
+
+  dispose() {
+    this._disposed = true // in case the kit resolves after this call
+    for (const mesh of Object.values(this.meshes)) {
+      mesh.geometry.dispose()
+      mesh.material.dispose()
+      this.scene.remove(mesh)
+    }
+    this.meshes = {}
+  }
+
+  /** Iterates `this.meshes` generically, the way the crew props do, so a mesh added later
+   *  is covered here for free instead of leaking because someone forgot to list it by name. */
+  onSettingsChanged(changed) {
+    if (!changed.has('shadows')) return
+    for (const mesh of Object.values(this.meshes)) {
+      mesh.castShadow = true
+      mesh.receiveShadow = true
+    }
+  }
 }
