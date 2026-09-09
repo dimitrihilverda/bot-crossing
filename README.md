@@ -5,10 +5,15 @@ Jarren Rocks' agent-colony sim. Everything underneath — the map, the pathing, 
 adapters, and the shared-colonies feature a colleague added on top of it — is upstream's
 engine, unchanged; this fork only recolours what is on screen and settles it onto its own port.
 
-Every coding-agent thread on this machine is a little crew member. They walk out of the depot,
-claim a plot for their repo, and move a house in — its furniture appearing as the thread's
-transcript grows. When one needs you it stops and holds a `?` over its head; click it and the
-thread opens back in whichever harness it came from.
+Every coding-agent thread on this machine is a little crew member. The moment its thread
+appears, a delivery car leaves the depot and drives the whole way to the plot for its repo,
+over the open ground, and parks at the kerb; the crew rides along, so a car can arrive with
+nobody visibly aboard. It moves a house in — its furniture appearing as the thread's
+transcript grows. When one needs you it stops and holds a `?` over its head — that badge
+stays on the crew member, never on the car, so a thread asking for you is never hidden by a
+drive in progress — click it and the thread opens back in whichever harness it came from.
+Archive the thread and the car drives all the way back to the depot; the house only
+disappears once it is home.
 
 It reads the harness's own files, on your own machine. Nothing is uploaded, there is no
 account, and **it never writes to a harness at all** — `data/colony.json`, where the map lives,

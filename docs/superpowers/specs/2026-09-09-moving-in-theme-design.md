@@ -1,8 +1,8 @@
 # Moving-In Crossing — design
 
 A fork of [Bot Crossing](https://github.com/Station-Sciences/bot-crossing) that re-themes the
-colony from a moon base into Moving-In's own work: crew assembling rental furniture, loading
-it into vans, driving it to houses, and collecting it again.
+colony from a moon base into Moving-In's own work: crew assembling rental furniture, delivering
+it to houses by car, and collecting it again.
 
 - **Upstream:** `bot-crossing` (`git pull upstream main` stays available)
 - **Branch:** `moving-in-theme`
@@ -28,10 +28,10 @@ realism.
 | Hex zone | A plot with a house on it | One repo |
 | Astronaut | A crew member | One session |
 | Building nears completion | House fills up with furniture | Transcript size (log scale) |
-| Scaffolding | Van parked out front | Somebody is at that site now |
+| Scaffolding | A delivery car parked at the kerb | Somebody is at that site now |
 | The ship, centre of the colony | The depot | — |
-| Walking out of the ship | Van pulls up, crew unloads | A thread that just appeared |
-| Walking back into the ship | Crew loads up, van returns to the depot | You archived it |
+| Walking out of the ship | A car drives the whole way out from the depot, crew riding inside | A thread that just appeared |
+| Walking back into the ship | The car drives the whole way back to the depot | You archived it |
 
 ### Behaviour
 
@@ -55,7 +55,7 @@ matters.
 that is what lets you learn the map, and a literal town would trade it away for realism that
 buys nothing. Nothing lays out roads, and no plot moves to accommodate a route.
 
-The van does, however, **drive the whole way** from the depot to the plot rather than only
+The car does, however, **drive the whole way** from the depot to the plot rather than only
 appearing at its kerb. That was reconsidered after Stage 1 landed, and it does not cost the
 stickiness this section protects: driving *across* the hexes changes nothing about where they
 sit. It is affordable because `src/world/plots.js` already holds the primitives — `HEX_DIRS`
@@ -64,9 +64,16 @@ for the six neighbour directions, `hexToWorld()` and its inverse — and because
 therefore one continuous hex surface, not floating islands, so a journey is a hex line with
 height-following rather than pathfinding over gaps.
 
-**The badge never moves to the van.** One crew figure per thread does everything — loads,
-drives, unloads, assembles. A van is a tool it uses, not an actor. A moving target is hard to
-click and its status is hard to read, and finding that one `?` is the whole point of the app.
+**A crew member whose status carries a badge is never hidden — not "the badge never moves to
+the van".** Implementation sharpened this rule past what it reads like above: the car is not
+a thing the crew figure rides visibly the way a person rides a vehicle in a cutscene. Instead,
+while a car is in transit its crew member simply is not drawn — one figure per thread still
+does everything, the car is a prop it uses, not a second actor with its own state. But that
+only holds for a crew member with nothing to say. The one rule that actually governs it is
+narrower and stricter: a thread whose status carries a badge is drawn regardless of whether
+its car is on the road, because the badge is the one thing the whole application exists to
+make findable, and a moving, half-hidden target defeats that. So a car may legitimately drive
+with nobody visibly aboard.
 
 ## Staging
 
@@ -86,10 +93,12 @@ Six areas carry it, across seven files:
 | `src/agents/astronauts.js`, `crew.js` | Re-theme behaviour, add clips |
 | `src/ui/hud.js` | Terminology (English) |
 
-### Stage 2 — the vans drive
+### Stage 2 — the delivery drives — **Implemented**
 
-Van pulls up on arrival, crew loads and unloads, van leaves on archive. Split out because
-stage 1 is useful without it and it carries the one unresolved dependency (below).
+Originally scoped as: van pulls up on arrival, crew loads and unloads, van leaves on archive.
+Split out because Stage 1 is useful without it and it carried the one unresolved dependency
+(below). What actually shipped differs from that framing in two deliberate ways — see
+"What changed from the plan" at the end of this section.
 
 **The unresolved dependency is now resolved, and the answer was no.** There is no van in the
 free tier, and paying does not help — City Builder Bits' Extra tier adds park assets, not
@@ -97,16 +106,37 @@ vehicles. The pack ships five cars: `car_hatchback`, `car_police`, `car_sedan`,
 `car_stationwagon` and `car_taxi`, each with its four wheels as separate nodes.
 
 Searching other CC0 libraries did not turn up a van in a matching style either. So the
-vehicle is **`car_stationwagon` with a load on its roof** — a furniture piece or a box, so it
-reads as a delivery rather than as someone dropping by. Three things make staying inside the
-city kit worth more than a closer-shaped model from elsewhere: it shares the houses' atlas, so
-it merges and takes the repo's accent through the same repainted-cell trick; its wheels are
-separate nodes, which `kit.js`'s `solo` mode exists for, so they can turn; and it is the same
-artist's hand, so it cannot clash. A van from another pack would bring a second atlas, a
-different scale and a different style.
+vehicle is **`car_stationwagon` with a load on its roof** — an armchair from the furniture
+kit, so it reads as a delivery rather than as someone dropping by. Three things make staying
+inside the city kit worth more than a closer-shaped model from elsewhere: it shares the
+houses' atlas, so it merges and takes the repo's accent through the same repainted-cell
+trick; its wheels are separate nodes, which `kit.js`'s `solo` mode exists for, so they can
+turn; and it is the same artist's hand, so it cannot clash. A van from another pack would
+bring a second atlas, a different scale and a different style.
 
-`Scaffolds` — currently timber poles round a finished house, and the last un-themed object in
-the colony — is what the parked car replaces.
+`Scaffolds` — the timber poles that used to ring a finished house, and the last un-themed
+object in the colony — is gone. The parked car, at the kerb rather than at the house itself
+(so it stays visible instead of vanishing behind the building), is now the "somebody is
+working here right now" marker, using the same `_isActive` predicate `Scaffolds` used.
+
+**What changed from the plan.**
+
+- **The crew rides; it does not load or unload.** `astronauts.js` derives a crew member's
+  behaviour from `STATUS_ORDER`, a strict, first-match-wins precedence over six statuses plus
+  the two states a crew member passes through on its way in and out. A "loading" or
+  "unloading" animation would have been a seventh behaviour competing with those eight for
+  the same figure, and the plan gave no rule for how it should lose to, say, an `!` that
+  starts mid-load. Rather than invent one, the crew member is simply not drawn while its car
+  is in transit — the car carries it, off screen, and reappears with it when the car parks.
+  `STATUS_ORDER` stays untouched and a thread still does exactly one thing.
+- **The badge rule is sharper than "never moves to the van."** That phrasing implied the
+  badge and the van were both candidates for carrying it and the badge always won. What was
+  actually built is narrower: a crew member whose status carries a badge is never hidden at
+  all, full stop — not hidden while riding, not hidden for any other reason a future feature
+  might introduce. The badge is the one thing the whole application exists to make findable,
+  so the rule is about visibility of that crew member, not about where the badge itself can
+  live. One concrete effect: a car can be seen driving with nobody visibly aboard, whenever
+  the thread it belongs to has nothing to say.
 
 ## Assets
 
@@ -115,7 +145,7 @@ Three kits in `assets-src/`, all CC0 from Kay Lousberg, all free tier:
 | Pack | For | Output |
 | --- | --- | --- |
 | KayKit Furniture Bits | Sofas, beds, tables, cabinets, lamps | `public/assets/furniture.glb` |
-| KayKit City Builder Bits | Houses, pavement, fences, later the vans | `public/assets/city.glb` |
+| KayKit City Builder Bits | Houses, pavement, fences, and the delivery car | `public/assets/city.glb` |
 | KayKit Character Animations *(already used)* | Longer clip list: lifting, carrying, sitting | `public/assets/crew.glb` |
 
 Both new packs use a single 1024px gradient atlas — the same property `kit.js` already relies
@@ -129,7 +159,7 @@ grows: the pack ships 161 clips and the colony currently keeps 14.
 building shader repaints one atlas swatch — `CELL.TRIM`, cell 11 in the Space Base atlas,
 masked via `ACCENT_MASK`. Which cell plays that role in the furniture and city atlases is
 unknown until they are opened. Work, not a blocker; if no single swatch reads as "this
-house's colour", the fallback is to tint a separate small part (door, or the van's panel).
+house's colour", the fallback is to tint a separate small part (door, or the car's panel).
 
 **Vans are not in the pack at all — resolved, see Stage 2.** The free tier ships five cars and
 no van or truck, and the paid tier adds park assets rather than vehicles. Stage 2 therefore

@@ -1,5 +1,5 @@
 /**
- * Packs every source pack the colony needs into the three glbs it loads.
+ * Packs every source pack the colony needs into the five glbs it loads.
  *
  * The raw packs are not checked in and the built glbs are, so this is a no-op on a fresh
  * clone — it only has work to do when a pack has been re-downloaded into `assets-src/` or
