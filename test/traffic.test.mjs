@@ -80,3 +80,18 @@ test('a vehicle is fully determined by its seed', () => {
   assert.deepEqual(newVehicle(7), newVehicle(7))
   assert.notDeepEqual(newVehicle(7), newVehicle(8))
 })
+
+test('a non-positive dt changes nothing at all', () => {
+  // `growth.js` guards its own input this way, and without it a negative dt drives `driven`
+  // unboundedly away from both ends of the route and grows `dwell` without limit.
+  const random = () => 0.5
+  for (const dt of [0, -1 / 60, -100, Number.NaN]) {
+    let v = newVehicle(11)
+    // Advance into each phase in turn and confirm the guard holds in all four.
+    for (const phase of ['parked', 'out', 'waiting', 'back']) {
+      while (v.phase !== phase) v = stepVehicle(v, 1 / 60, 12, random)
+      const before = { ...v }
+      assert.deepEqual(stepVehicle(v, dt, 12, random), before, `dt ${dt} changed a ${phase} vehicle`)
+    }
+  }
+})

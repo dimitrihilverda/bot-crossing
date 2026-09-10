@@ -106,6 +106,13 @@ export function newVehicle(seed) {
  * house was never drawn.
  */
 export function stepVehicle(vehicle, dt, routeLength, random) {
+  // No time has passed, so nothing happens — including the pull-away from `parked`. A
+  // transition that fires on a zero-length frame is the same class of bug as one that fires
+  // a frame late, and a negative `dt` would otherwise drive `driven` unboundedly away from
+  // both ends of the route and grow `dwell` without limit. `growth.js`'s `stepProgress`
+  // guards its own input the same way.
+  if (!(dt > 0)) return vehicle
+
   const step = TRAFFIC_SPEED * dt
   const next = { ...vehicle }
 
