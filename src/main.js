@@ -881,6 +881,10 @@ async function poll() {
 }
 
 function queueSave() {
+  // The hub is a read-only viewer: it must never write colony.json. Otherwise its own kiosk page
+  // keeps saving the (transient) visiting layout and clobbers config changes made from another
+  // device against the same NUC — e.g. adding a neighbour from a laptop.
+  if (HUB) return
   clearTimeout(pendingSave)
   pendingSave = setTimeout(async () => {
     try {
