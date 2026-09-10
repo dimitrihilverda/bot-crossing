@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bot Crossing hub setup</title>
+<style>
+  :root { color-scheme: dark; --bg:#0b1020; --card:#141b33; --line:#26304f; --ink:#eaf0ff;
+          --dim:#9fb0d8; --accent:#5cc8ff; --accent2:#7cf6c0; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#0b1020; color:#eaf0ff; font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+         -webkit-text-size-adjust:100%; }
+  .wrap { max-width:520px; margin:0 auto; padding:24px 18px 48px; }
+  header { display:flex; align-items:center; gap:12px; margin:8px 0 20px; }
+  .badge { width:44px; height:44px; border-radius:12px; background:linear-gradient(140deg,#5cc8ff,#7cf6c0);
+           display:grid; place-items:center; font-size:24px; }
+  h1 { font-size:20px; margin:0; letter-spacing:.2px; }
+  .sub { color:#9fb0d8; font-size:13px; margin:2px 0 0; }
+  .card { background:#141b33; border:1px solid #26304f; border-radius:16px; padding:18px; margin:16px 0; }
+  .card h2 { font-size:14px; text-transform:uppercase; letter-spacing:.08em; color:#9fb0d8; margin:0 0 12px; }
+  label { display:block; font-size:14px; color:#cdd8f5; margin:14px 0 6px; }
+  label:first-of-type { margin-top:0; }
+  input[type=text], input[type=password], textarea {
+    width:100%; padding:13px 14px; font-size:16px; color:#eaf0ff; background:#0e1526;
+    border:1px solid #2b3560; border-radius:11px; outline:none; }
+  input:focus, textarea:focus { border-color:#5cc8ff; box-shadow:0 0 0 3px rgba(92,200,255,.18); }
+  textarea { min-height:92px; resize:vertical; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:14px; }
+  .hint { color:#8b9bc4; font-size:12.5px; margin:6px 0 0; }
+  .row-check { display:flex; align-items:center; gap:10px; margin:6px 0 2px; }
+  .row-check input { width:20px; height:20px; accent-color:#5cc8ff; }
+  .row-check label { margin:0; font-size:15px; color:#eaf0ff; }
+  #wifiFields[hidden] { display:none; }
+  button { width:100%; margin-top:20px; padding:15px; font-size:17px; font-weight:600; color:#06210f;
+           background:linear-gradient(140deg,#7cf6c0,#5cc8ff); border:0; border-radius:13px; }
+  button:active { transform:translateY(1px); }
+  .foot { color:#6f80ab; font-size:12px; text-align:center; margin-top:22px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="badge">🛰️</div>
+    <div>
+      <h1>Bot Crossing hub</h1>
+      <p class="sub">Set this wall display up from your phone. No keyboard needed.</p>
+    </div>
+  </header>
+
+  <form method="POST" action="/save">
+    <div class="card">
+      <h2>Network</h2>
+      <div class="row-check">
+        <input type="checkbox" id="ethernet" name="ethernet">
+        <label for="ethernet">This NUC is on a wired ethernet cable</label>
+      </div>
+      <div id="wifiFields">
+        <label for="wifi_ssid">Wi-Fi network (SSID)</label>
+        <input type="text" id="wifi_ssid" name="wifi_ssid" autocapitalize="none" autocorrect="off" placeholder="OfficeWifi">
+        <label for="wifi_password">Wi-Fi password</label>
+        <input type="password" id="wifi_password" name="wifi_password" placeholder="••••••••">
+        <p class="hint">The hub joins this network, then this setup hotspot disappears.</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>The wall</h2>
+      <label for="colony_name">This hub's name</label>
+      <input type="text" id="colony_name" name="colony_name" value="Hub">
+      <label for="neighbors">Teammates to show</label>
+      <textarea id="neighbors" name="neighbors" placeholder="Dimitri=100.123.187.42&#10;Chantal=100.100.1.85"></textarea>
+      <p class="hint">One per line: <b>Name=Tailscale-IP</b>. Each teammate must also allow this hub
+        under Settings &rarr; Shared colonies. You can change these later from your phone.</p>
+    </div>
+
+    <button type="submit">Set up the wall &rarr;</button>
+    <p class="foot">Tailscale is connected next, by scanning a QR on the wall itself.</p>
+  </form>
+</div>
+<script>
+  var eth = document.getElementById('ethernet');
+  var wifi = document.getElementById('wifiFields');
+  function sync(){ wifi.hidden = eth.checked; }
+  eth.addEventListener('change', sync); sync();
+</script>
+</body>
+</html>

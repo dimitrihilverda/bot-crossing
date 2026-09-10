@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bot Crossing hub — setup</title>
+<style>
+  html,body { margin:0; height:100%; background:#0b1020; color:#eaf0ff;
+              font:20px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  #stage { min-height:100%; display:grid; place-items:center; text-align:center; padding:6vmin; }
+  .panel { max-width:min(880px,90vw); }
+  .badge { width:88px; height:88px; border-radius:24px; margin:0 auto 26px;
+           background:linear-gradient(140deg,#5cc8ff,#7cf6c0); display:grid; place-items:center; font-size:48px; }
+  h1 { font-size:clamp(28px,5vmin,52px); margin:0 0 14px; letter-spacing:.2px; }
+  p { color:#b7c4e6; font-size:clamp(16px,2.4vmin,24px); margin:10px 0; }
+  .spin { width:56px; height:56px; margin:8px auto 0; border-radius:50%;
+          border:5px solid #26304f; border-top-color:#5cc8ff; animation:spin 1s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation:none; } }
+  .qrwrap { background:#fff; padding:22px; border-radius:20px; display:inline-block; margin:10px 0 18px; }
+  .qrwrap img { display:block; width:min(360px,60vmin); height:auto; image-rendering:pixelated; }
+  .url { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:clamp(13px,1.8vmin,18px);
+         color:#7cf6c0; word-break:break-all; max-width:80vw; margin:0 auto; }
+  .dim { color:#7f90ba; font-size:15px; margin-top:22px; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <div class="panel">
+      <div class="badge">🛰️</div>
+
+      <section id="v-collecting" hidden>
+        <h1>Set me up from your phone</h1>
+        <p>Join the Wi-Fi network <b>BotCrossing-Setup</b> on your phone, and a setup page opens.</p>
+      </section>
+
+      <section id="v-working" hidden>
+        <h1 id="workTitle">Installing the wall…</h1>
+        <p id="workNote">This takes a few minutes. Nothing to do here.</p>
+        <div class="spin"></div>
+      </section>
+
+      <section id="v-tailscale" hidden>
+        <h1>Scan to connect to Tailscale</h1>
+        <div class="qrwrap"><img id="qr" src="/ts-qr.png" alt="Tailscale login QR"></div>
+        <p>Scan with your phone and approve <b>this hub</b> in the Tailscale app.</p>
+        <p class="url" id="tsUrl"></p>
+      </section>
+
+      <section id="v-done" hidden>
+        <h1>All set 🎉</h1>
+        <p>The wall is coming up now.</p>
+      </section>
+    </div>
+  </div>
+<script>
+  var views = { collecting:'v-collecting', working:'v-working', tailscale:'v-tailscale', done:'v-done' };
+  function show(phase) {
+    var id = views[phase] || 'v-working';
+    for (var k in views) document.getElementById(views[k]).hidden = (views[k] !== id);
+  }
+  var lastQr = 0;
+  async function tick() {
+    try {
+      var r = await fetch('/status', { cache:'no-store' });
+      var s = await r.json();
+      var phase = s.phase || 'working';
+      // 'connecting'/'installing' both map to the generic working view.
+      show(views[phase] ? phase : 'working');
+      if (phase === 'working' || phase === 'connecting' || phase === 'installing') {
+        document.getElementById('workTitle').textContent =
+          phase === 'connecting' ? 'Joining your Wi-Fi…' : 'Installing the wall…';
+      }
+      if (phase === 'tailscale') {
+        document.getElementById('tsUrl').textContent = s.tsUrl || '';
+        // bust the QR cache each poll until it appears
+        var img = document.getElementById('qr');
+        img.src = '/ts-qr.png?ts=' + (Date.now());
+      }
+    } catch (e) { /* server not up yet — keep the current view */ }
+  }
+  show('working');
+  tick(); setInterval(tick, 2000);
+</script>
+</body>
+</html>

@@ -18,8 +18,10 @@
 #                         `chromium-browser` (the name Debian/Ubuntu package under).
 #   BOT_CROSSING_CHROME_PROFILE_DIR
 #                         Chromium `--user-data-dir` for the kiosk profile. Default
-#                         "$HOME/.config/bot-crossing-hub-chrome", created if missing. A
-#                         persistent (non-incognito) profile so the hub's mute state
+#                         "$HOME/bot-crossing-hub-chrome" — a NON-hidden path on purpose: the
+#                         Chromium snap's confinement blocks `--user-data-dir` under dot-dirs
+#                         like ~/.config, so a hidden profile makes the kiosk browser exit at
+#                         once. A persistent (non-incognito) profile so the hub's mute state
 #                         (`botcrossing.hub.muted`) and render-quality preset
 #                         (`botcrossing.settings.v1`), both `localStorage`, survive restarts.
 #   BOT_CROSSING_PORT_WAIT_SECS
@@ -33,7 +35,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${BOT_CROSSING_REPO:-$(cd "$HERE/.." && pwd)}"
 PORT="${PORT:-5274}"
 WAIT_SECS="${BOT_CROSSING_PORT_WAIT_SECS:-60}"
-CHROME_PROFILE_DIR="${BOT_CROSSING_CHROME_PROFILE_DIR:-$HOME/.config/bot-crossing-hub-chrome}"
+CHROME_PROFILE_DIR="${BOT_CROSSING_CHROME_PROFILE_DIR:-$HOME/bot-crossing-hub-chrome}"
 URL="http://localhost:${PORT}/?hub=1"
 
 cd "$REPO"
