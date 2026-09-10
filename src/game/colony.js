@@ -29,6 +29,8 @@ import { planStreets } from '../world/streets.js'
 import { roadCells } from '../world/road-path.js'
 import { createRoads } from '../world/road-mesh.js'
 import { Deliveries, CAR_SPEED } from '../world/deliveries.js'
+import { TrafficCars } from '../world/traffic-cars.js'
+import { MAX_TRAFFIC, newVehicle, stepVehicle, trafficCount } from '../world/traffic.js'
 import { Ship } from '../world/ship.js'
 import { Astronauts } from '../agents/astronauts.js'
 import { Indicators, BADGE } from '../agents/indicators.js'
@@ -208,6 +210,16 @@ export class Colony {
     // rather than per colony — `Deliveries` keeps a mesh pair per plot colour — so this is a
     // generous bound either way, and an unused instance slot costs nothing until it is written.
     this.deliveries = new Deliveries(scene, MAX_AGENT_CAP)
+    // Ambient traffic: cars nobody owns, driving the same streets. Its own pool, capped well
+    // above `MAX_TRAFFIC` (the most that will ever be on the road at once) rather than at it,
+    // for the same "unused instance slot costs nothing" reason the delivery fleet is sized
+    // generously above.
+    this.traffic = new TrafficCars(scene, MAX_TRAFFIC * 2)
+    this._trafficVehicles = []
+    this._trafficRoutes = new Map()
+    // Ever-increasing, so a vehicle that leaves the pool and a different one that later
+    // takes its slot are never the same car with the same seed.
+    this._trafficSeed = 0
     this.nav = new Navigation()
     this.astronauts.setNavigation(this.nav)
 
@@ -315,6 +327,7 @@ export class Colony {
     this.astronauts.onSettingsChanged(changed)
     this.particles.onSettingsChanged(changed)
     this.deliveries.onSettingsChanged(changed)
+    this.traffic.onSettingsChanged(changed)
     if (changed.has('showLabels')) this._syncLabels()
     if (changed.has('timeOfDay')) this.sky.setTime(this.settings.get('timeOfDay'))
   }
@@ -923,6 +936,7 @@ export class Colony {
     // car this frame, and both of those pack their instances from that flag — run it after
     // them and every crew member would be drawn one frame behind its own car.
     this._updateDeliveries(dt)
+    this._updateTraffic(dt)
     this.astronauts.update(dt, elapsed)
     this.astronauts.updateRings(elapsed)
     this.indicators.update(this.astronauts.agents, elapsed, (a) => this._badgeFor(a))
@@ -964,6 +978,17 @@ export class Colony {
   _isActive(id) {
     const thread = this.threads.get(id)
     return Boolean(thread && (thread.running || thread.unread || thread.hasError))
+  }
+
+  /** How many buildings currently have somebody standing at them, by `_isActive`'s own
+   *  reckoning — the same test `_updateDeliveries` uses to decide whether a site gets a
+   *  delivery car, so traffic density and delivery presence agree on what "active" means. */
+  _activeThreadCount() {
+    let n = 0
+    for (const id of this.buildings.keys()) {
+      if (this._isActive(id)) n++
+    }
+    return n
   }
 
   /**
@@ -1129,6 +1154,92 @@ export class Colony {
   }
 
   /**
+   * Ambient traffic: cars nobody owns, driving the same streets a busy colony's deliveries
+   * do. The pool is sized off how many threads are active (`trafficCount`, `traffic.js`) and
+   * grown or shrunk toward that target; each vehicle steps its own four-state machine
+   * (`stepVehicle`) between the depot and a house picked by its own `addressSeed`.
+   *
+   * Deliberately after `_updateDeliveries` in `update()`, the same way that method is
+   * deliberately ahead of the crew: ambient traffic has no rider and nothing downstream
+   * depends on its ordering, so there is no similar constraint here — it simply has to run
+   * once a frame like everything else.
+   */
+  _updateTraffic(dt) {
+    const wanted = trafficCount(this._activeThreadCount())
+    while (this._trafficVehicles.length < wanted) {
+      this._trafficVehicles.push(newVehicle(this._trafficSeed++))
+    }
+    while (this._trafficVehicles.length > wanted) {
+      const dropped = this._trafficVehicles.pop()
+      // A vehicle dropped from the pool takes its cached route with it, or the cache would
+      // grow by one entry for every car the colony has ever shed instead of staying bounded
+      // by the pool it currently holds.
+      if (dropped._routeKey) this._trafficRoutes.delete(dropped._routeKey)
+    }
+
+    const houses = [...this.buildings.values()]
+    const rendered = []
+    for (let i = 0; i < this._trafficVehicles.length; i++) {
+      const route = this._trafficRouteFor(this._trafficVehicles[i], houses)
+      const vehicle = stepVehicle(this._trafficVehicles[i], dt, route.length, Math.random)
+      this._trafficVehicles[i] = vehicle
+
+      const at = pointAt(route.points, vehicle.driven)
+      rendered.push({
+        x: at.x,
+        // Sampled the same way `_updateDeliveries` samples it, for the same reason: the
+        // route is drawn cell to cell, but the ground under it rolls between plots.
+        y: this.groundAt(at.x, at.z),
+        z: at.z,
+        heading: at.heading,
+        distance: vehicle.driven,
+        body: vehicle.body,
+        tint: vehicle.tint,
+      })
+    }
+    this.traffic.update(rendered)
+  }
+
+  /**
+   * The route from the depot to one traffic vehicle's address.
+   *
+   * Cached in `this._trafficRoutes`, keyed on `addressSeed` plus `this._streetStamp`, for
+   * the same reason `_routeFor` caches: a route only changes when its destination or the
+   * streets do. `houses` is handed in fresh each frame — the colony's building roster can
+   * change under a vehicle mid-journey — but only consulted on a cache miss, so a vehicle's
+   * route does not jump to a different house just because one was added or removed.
+   *
+   * With no house built yet, there is nowhere to send a car: it gets a single-point,
+   * zero-length route and sits at the depot rather than throwing on an empty `houses`.
+   */
+  _trafficRouteFor(vehicle, houses) {
+    if (houses.length === 0) {
+      const depot = shipPosition()
+      return { points: [{ x: depot.x, z: depot.z }], length: 0 }
+    }
+
+    const key = `${vehicle.addressSeed}|${this._streetStamp}`
+    let route = this._trafficRoutes.get(key)
+    if (!route) {
+      const house = houses[vehicle.addressSeed % houses.length]
+      const houseCell = worldToHex(house.mesh.position.x, house.mesh.position.z)
+      const points = roadCells(SHIP_CELL_FOR_STREETS, houseCell, this.streets?.all).map((c) => cellWorld(c.q, c.r))
+      route = { points, length: pathLength(points) }
+      this._trafficRoutes.set(key, route)
+    }
+
+    // The vehicle has moved on to a different address since the last time this ran — a
+    // round trip re-seeds `addressSeed` (see `stepVehicle`'s `'back'` phase in `traffic.js`)
+    // — so its previous cache entry is now unreachable by any key this method will look up
+    // again for it, and is dropped here rather than left to sit forever.
+    if (vehicle._routeKey && vehicle._routeKey !== key) {
+      this._trafficRoutes.delete(vehicle._routeKey)
+    }
+    vehicle._routeKey = key
+    return route
+  }
+
+  /**
    * The route from the depot to one house, built once and kept on the building entry.
    *
    * A hex line is cheap but not free, and redrawing one every frame for every thread in a
@@ -1257,6 +1368,7 @@ export class Colony {
     this.indicators.dispose()
     this.particles.dispose()
     this.deliveries.dispose()
+    this.traffic.dispose()
     this.roadGroup?.userData.dispose?.()
     disposeTree(this.worldGroup)
     disposeTree(this.plotGroup)
