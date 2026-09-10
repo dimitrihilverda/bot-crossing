@@ -3,7 +3,7 @@ import * as THREE from 'three'
 /**
  * The little digital faces.
  *
- * Every astronaut's visor is a tiny screen showing one of sixteen expressions. They are all
+ * Every astronaut's face is a tiny screen showing one of sixteen expressions. They are all
  * drawn once into a single 4×4 canvas atlas as a white-on-black *mask*, never as finished
  * artwork — the colour arrives per-astronaut at draw time, so one 512px texture gives every
  * agent its own eye colour without a second byte of memory.

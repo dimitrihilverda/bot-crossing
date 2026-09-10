@@ -23,8 +23,8 @@ import { assertIdentity } from './head-bind.js'
  * that the crew costs the same whether there are six of them or six hundred.
  *
  * Because the matrices also sit in an ordinary array on the CPU, anything that has to ride
- * *on* a bone — the helmet, the visor, the backpack — can be placed by reading one matrix
- * out of it, with no skeleton to evaluate. See `boneMatrixAt()`.
+ * *on* a bone — the head, the hair, the hi-vis bands — can be placed by reading one matrix
+ * out of it, with no skeleton to evaluate. See `attachMatrixAt(rig, frame, slot, out)`.
  */
 
 /** Sampling rate for the bake. Fast enough that the shader's lerp has nothing to hide. */
@@ -35,7 +35,7 @@ const TEXELS_PER_BONE = 4
 
 /**
  * Bones the colony hangs things off. Their *world* transforms are baked into a small
- * side-table on the CPU as well, because a helmet does not want the skinning matrix — it
+ * side-table on the CPU as well, because a hairstyle does not want the skinning matrix — it
  * wants to know where the head actually is. Three bones over the whole animation set is a
  * hundred and forty kilobytes; the alternative is evaluating a skeleton per astronaut per
  * frame.
@@ -264,8 +264,8 @@ function bakeClips(root, skeleton, mesh, animations) {
   const stride = boneCount * TEXELS_PER_BONE * 4
   const data = new Float32Array(frameCount * stride)
 
-  // Side-table of world transforms for the attachment bones — what the helmet and backpack
-  // read. The skinning matrices in `data` cannot answer "where is the head": they map bind
+  // Side-table of world transforms for the attachment bones — what the head, the hair and the
+  // bands read. The skinning matrices in `data` cannot answer "where is the head": they map bind
   // space to posed space, which is only the same thing when the bind matrices are identity.
   // Names are matched through `plain()` above, because three sanitises them on the way in.
   const attachBones = ATTACH.map((name) => skeleton.bones.findIndex((b) => plain(b.name) === plain(name)))
@@ -345,11 +345,11 @@ function bakeClips(root, skeleton, mesh, animations) {
 /**
  * Where an attachment bone is, in character space, on a given frame.
  *
- * This is how anything worn rather than skinned gets placed: the helmet reads `head`, the
- * backpack reads `chest`. A straight array slice — no skeleton is evaluated and nothing is
- * allocated. The frame is rounded rather than interpolated; at 30 fps the worst case is
- * half a frame of lag on a helmet whose own body is drawn from the same table, and matrix
- * interpolation here would cost more than it is worth.
+ * This is how anything worn rather than skinned gets placed: the head and the hair read
+ * `head`, the bands read `chest`. A straight array slice — no skeleton is evaluated and
+ * nothing is allocated. The frame is rounded rather than interpolated; at 30 fps the worst
+ * case is half a frame of lag on a worn part whose own body is drawn from the same table, and
+ * matrix interpolation here would cost more than it is worth.
  */
 export function attachMatrixAt(rig, frame, slot, out) {
   const f = Math.min(rig.frameCount - 1, Math.max(0, Math.round(frame)))

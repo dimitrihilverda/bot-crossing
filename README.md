@@ -132,7 +132,7 @@ thread can only ever be doing one thing. First match wins:
 
 | Signal | What the astronaut does | Badge |
 | --- | --- | --- |
-| Errored | Slumps, red eyes, fault light stutters | `!` |
+| Errored | Slumps, red eyes, hi-vis bands stutter | `!` |
 | Running now | Hammers away at its building, sparks fly | `⚒` |
 | PR merged | Jumps, confetti, heart eyes | `✓` |
 | Unread | **Stops and waits on you** | `?` |
@@ -167,9 +167,9 @@ across 78,000 agent-frames**. A typical path costs 6 µs (most are a clear strai
 skip the search); the worst frame when a poll invalidates every route at once is 0.6 ms.
 
 They also push each other apart, so a busy plot is a crowd rather than a pile. That spacing
-is measured against the widest thing an astronaut wears — the helmet, at 0.95 units — because
-holding a crowd at less than that is a crowd standing *inside* itself, which is what the first
-version did at 0.72. Arrival is derived from the same number and is deliberately larger: an
+is measured against the widest thing an astronaut used to wear — the helmet, at 0.95 units —
+because holding a crowd at less than that is a crowd standing *inside* itself, which is what the
+first version did at 0.72. Arrival is derived from the same number and is deliberately larger: an
 astronaut that had to get closer than its neighbours would let it could never finish arriving,
 and would shoulder at the crowd for as long as its thread existed.
 
@@ -450,11 +450,26 @@ happens in the vertex shader, upstream of three's own instancing, so the skinned
 goes through `instanceMatrix` and the crew stays one draw whether there are six of them or six
 hundred.
 
-Everything the crew *wears* stays procedural and stays the colony's own: helmet, visor,
-screen-face, backpack, antenna and lamp. Those are pinned to bones the cheap way — the bake also
-writes the head and chest world transforms into a small array on the CPU, so placing a helmet is
-one matrix read rather than a skeleton evaluation, and a helmet can never be a frame out of step
-with the head under it.
+**There is no headgear at all.** The mannequin's own head rides back on instead: all 959
+vertices of `Mannequin_Medium_Head` are weighted to a single bone, so it does not deform and is
+placed rigidly, the same cheap way anything worn is. It carries one of **six skin tones** and one
+of **four hairstyles** — bald, a short cap, a bob, and a cap with a knot — each chosen by a
+stable hash of the thread's own id. **Neither ever means anything.** They never change with
+status; they exist only to make a crew of six read as six people rather than six copies of one,
+the way a plot's own accent colour tells you which repo you are looking at rather than what it
+is doing. If a colour here looks like it might be telling you something, it isn't — don't go
+hunting for a meaning that was never put there.
+
+The screen-face survives and still carries the eye colour, one of the signals a thread's status
+is readable from at colony distance. In place of a backpack and an antenna, the torso wears
+**hi-vis bands**: an unlit strip round the chest that carries the status trim colour, stays as
+bright at midnight as at noon, and pulses for an errored thread so it catches the eye across a
+colony the way an `!` badge cannot at that distance.
+
+All of it is pinned to bones the cheap way — the bake also writes the head and chest world
+transforms into a small array on the CPU, so placing the head, a hairstyle or a band is one
+matrix read rather than a skeleton evaluation, and a worn part can never be a frame out of step
+with the bone under it.
 
 Behaviour maps onto clips directly, and locomotion wins over status — an idler pottering across
 its plot walks rather than hammering while it slides:
@@ -524,7 +539,7 @@ The knobs that actually matter, and why:
 What keeps it cheap at rest:
 
 - The crew's animated bodies are a single instanced, GPU-skinned draw, and each worn part —
-  helmet, visor, face, pack, antenna, lamp — is one `InstancedMesh` across the whole crew. The
+  head, face, hair, hi-vis bands — is one `InstancedMesh` across the whole crew. The
   sixty-fifth astronaut costs a matrix write and one float, not a draw call. Per-agent suit
   colour, eye colour and facial expression ride along as instanced attributes.
   Measured on a live colony: **66 astronauts and 66 buildings in 105 draw calls**.
@@ -549,9 +564,10 @@ crawl. Everything in both is drawn from paths, so the only cost of more texels i
 
 ## The faces
 
-Each visor is a little rounded screen — the patch is a rectangle in UV space, so its rounded
-silhouette is cut in the fragment shader with a rounded-box SDF, which gives soft corners a
-rectangular patch can never have and lets the white helmet show through where the screen ends. All sixteen expressions are drawn once into a single 4×4
+Each face is a little rounded screen sitting on the head — the patch is a rectangle in UV
+space, so its rounded silhouette is cut in the fragment shader with a rounded-box SDF, which
+gives soft corners a rectangular patch can never have and lets the skin show through where the
+screen ends. All sixteen expressions are drawn once into a single 4×4
 canvas atlas as a white-on-black **mask** — never as finished artwork — and the colour arrives
 per-astronaut at draw time, so one 512px texture gives every agent its own eye colour without
 a second byte of memory. The shader reads the mask out of the red channel, blends between the
@@ -717,7 +733,8 @@ The status badges above each astronaut's head are
 [Material Design Icons](https://pictogrammers.com/library/mdi/), bundled via `@mdi/js` and
 licensed [Apache-2.0](https://github.com/Templarian/MaterialDesign/blob/master/LICENSE).
 
-Everything else you see — the shaders, the terrain, the sky, the ship, the crew's helmets and
-faces, the plot decks and their kerbs — is drawn by this project and is MIT along with the code.
+Everything else you see — the shaders, the terrain, the sky, the ship, the crew's heads, hair
+and faces, the plot decks and their kerbs — is drawn by this project and is MIT along with the
+code.
 
 Not affiliated with Anthropic, OpenAI, Google, or any of the other harness vendors listed above.

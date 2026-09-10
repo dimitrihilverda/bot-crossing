@@ -26,7 +26,7 @@ realism.
 | Bot Crossing | Moving-In Crossing | In your threads |
 | --- | --- | --- |
 | Hex zone | A plot with a house on it | One repo |
-| Astronaut | A crew member — no headgear, its own hairstyle and skin tone, hi-vis bands (Stage 3) | One session |
+| Astronaut | A crew member — no headgear, its own hairstyle and skin tone, hi-vis bands | One session |
 | Building nears completion | House fills up with furniture | Transcript size (log scale) |
 | Scaffolding | A delivery car parked at the kerb | Somebody is at that site now |
 | The ship, centre of the colony | The depot | — |
@@ -157,7 +157,7 @@ working here right now" marker, using the same `_isActive` predicate `Scaffolds`
   the thread it belongs to has something to say, and for the whole of every drive home from a
   plot whose crew member is standing on it.
 
-### Stage 3 — the crew stop being astronauts
+### Stage 3 — the crew stop being astronauts — **Implemented**
 
 Stages 1 and 2 left the figures wearing a spacesuit. Their trim colours, their props and
 their animation clips were re-themed; the silhouette never was. Stage 1's plan asked only
@@ -233,6 +233,38 @@ Note for whoever verifies either of these: **the Browser pane does not drive
 `requestAnimationFrame`** — measured at 0 frames in 3 seconds with the document visible — so
 the scene sits frozen there and sampled animated state is worthless. Drive frames by hand
 from the console, or use a real browser.
+
+**What changed from the plan.**
+
+- **The bloom risk was real, and a flat multiplier could never have fixed it.** `engine.js`
+  runs `UnrealBloomPass` against REC709 luminance (`0.2126R + 0.7152G + 0.0722B`), and that
+  weighting is brutally uneven across the trims: safety red carries about a fifth of the weight
+  hi-vis green does. So *any* single scalar pushed past 1.0 makes a calm amber band bloom
+  before an errored red one does — 1.75× brighter at red's own peak, whatever the multiplier —
+  which would have made the bloom say "celebrating" louder than "errored", upside down from the
+  precedence the whole colony is ordered by. What shipped instead is a lower overall glow
+  (`BAND_GLOW = 2.6`, deliberately kept under threshold for every trim) plus a second gain on a
+  reflective upper ring (`BAND_SPARK = 3.4`, a property of the geometry rather than of the
+  status). The result is not "the errored band is the one that blooms" — five of the eight
+  statuses sit steadily above the threshold on that upper ring the whole time. It is that
+  `blocked` is the only status whose band *crosses* the threshold, pulsing on and off every
+  0.625s against a colony of steadily-lit ones, and that crossing is what reads as a beacon at
+  a zoom where the band itself is a few pixels tall. See `AGENT_LOOK`'s `BAND_GLOW`/`BAND_SPARK`
+  comments in `src/agents/astronauts.js` for the measured numbers.
+- **A hairstyle salt that looked independent of the skin-tone hash was not.** The obvious
+  approach — `hashString('hair:' + id) % 4` alongside `hashString(id) % 6` for skin tone — turns
+  out to inherit its lowest bit from FNV-1a's own unmixed low bit, and both moduli are even, so
+  the two indices' parity agreed 100% of the time over 2000 sampled ids: only 12 of the 24
+  possible (tone, style) pairs could ever appear, and a dark-skinned figure was always bald or
+  long-haired, never short-haired or bunned. The fix is a `lowbias32` avalanche finalizer
+  applied to the salted hash before the modulus (`src/agents/hair.js`), after which the two
+  hashes agree on parity only 50.5% of the time — chance — and all 24 combinations show up.
+  Worth remembering for the next id-derived attribute: salting alone does not make two hashes
+  of the same string independent when the underlying hash does not mix its low bits.
+- **A stale name had already leaked from `crew.js` into this spec.** The placement function
+  this whole stage hangs off is `attachMatrixAt(rig, frame, slot, out)`; an earlier draft of
+  this document and `crew.js`'s own header comment both called it `boneMatrixAt()`, which never
+  existed. Both are corrected as of this stage.
 
 ## Assets
 

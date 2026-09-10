@@ -15,9 +15,9 @@ import { bandPulse } from './band-pulse.js'
  * `InstancedMesh`, because it carries the colony's own identity and its own shader.
  *
  * Worn parts are pinned to bones the cheap way. The baked animation lives in an ordinary
- * array as well as in the texture the shader samples, so placing a helmet is one matrix
- * read out of that array — no skeleton is evaluated on the CPU, and the helmet can never
- * be a frame out of step with the head it sits on.
+ * array as well as in the texture the shader samples, so placing the head or a hairstyle is
+ * one matrix read out of that array — no skeleton is evaluated on the CPU, and a worn part
+ * can never be a frame out of step with the bone it sits on.
  *
  * Per-agent variation that would normally need a separate material rides along as instanced
  * attributes instead: suit colour and eye colour through `instanceColor`, the face's atlas
@@ -147,14 +147,14 @@ const DOORWAY_CLEAR = 5.5
 /** How close counts as "reached this waypoint". A shade over one nav cell. */
 const WAYPOINT_REACHED = 0.55
 /**
- * How far apart astronauts hold each other, measured against the widest thing they wear:
- * the helmet is 0.95 across, so anything under that is a spacing at which they are visibly
- * inside one another. The old 0.72 was exactly that — separation *was* running and holding
- * them at 0.71, which is a quarter of a helmet of overlap. This leaves real air: a
- * crowd pressed in from every side settles a little tighter than the radius asks for.
+ * How far apart astronauts hold each other, measured against the widest thing they used to
+ * wear: the helmet was 0.95 across, so anything under that is a spacing at which they are
+ * visibly inside one another. The old 0.72 was exactly that — separation *was* running and
+ * holding them at 0.71, which is a quarter of a helmet-width of overlap. This leaves real air:
+ * a crowd pressed in from every side settles a little tighter than the radius asks for.
  */
 const SEPARATION = 1.15
-/** Touching distance: a shade over the helmet, which is the widest thing they wear. */
+/** Touching distance: a shade over the helmet-width these figures were sized against. */
 const CONTACT = 1
 /**
  * How close an idler has to get to the spot it wandered at before it calls that arriving,
@@ -181,7 +181,7 @@ const PATH_BUDGET = 6
  * The mannequin is authored 2.2 units tall. The colony wants a "little guy" silhouette at
  * the isometric rest distance, and the buildings are sized against one — so the whole rig
  * is scaled once, here, and every worn part below is measured in the *scaled* character's
- * own units so the helmet does not have to be re-tuned when this moves.
+ * own units so a worn part does not have to be re-tuned when this moves.
  */
 const CREW_SCALE = 0.56
 
@@ -402,9 +402,9 @@ export class Astronauts {
    * Hand over the baked crew rig and build the body mesh.
    *
    * Split out from the constructor because the rig is a fetch: the colony is built before
-   * boot has finished loading, and until this lands the crew is helmets and backpacks with
-   * nothing between them — which is fine, because no agent exists until the first roster
-   * arrives, and that comes after.
+   * boot has finished loading, and until this lands the crew is an empty shell with nothing
+   * to place on it — which is fine, because no agent exists until the first roster arrives,
+   * and that comes after.
    */
   setRig(rig) {
     if (!rig || this.rig === rig) return
@@ -471,12 +471,12 @@ export class Astronauts {
     this._applyShadowFlags()
 
     // Bones anything worn hangs off. Read back per frame from the same baked table the
-    // shader samples, so a helmet is never a frame out of step with the head under it.
+    // shader samples, so a worn part is never a frame out of step with the bone under it.
     this.headSlot = rig.attachSlot.get('head') ?? 0
     this.chestSlot = rig.attachSlot.get('chest') ?? 0
     this.handSlot = rig.attachSlot.get('hand.r') ?? 0
 
-    // Where the helmet sits above the ground at rest, in world units. The picker aims here
+    // Where the head sits above the ground at rest, in world units. The picker aims here
     // rather than at the feet, so a click lands on the part of an astronaut you are looking
     // at — and reading it off the rig means it follows CREW_SCALE without a second constant.
     const restHeadY = rig.attach[(this.headSlot + 0) * 16 + 13]
@@ -562,7 +562,7 @@ export class Astronauts {
           `float mask = texture2D( map, vMapUv ).r;
            // The mask is drawn from paths, so its edges are already antialiased — taking
            // alpha straight from it is what gives the features soft edges against the
-           // helmet without a single extra sample.
+           // skin without a single extra sample.
            diffuseColor.rgb = vColor.rgb * uGlow;
            diffuseColor.a = mask;`
         )
@@ -1082,7 +1082,7 @@ export class Astronauts {
           const d = Math.sqrt(d2)
           // Two regimes, because one is not enough. The gentle term ramps up as they close
           // so a crowd settles instead of oscillating — but in a press, half a dozen gentle
-          // pushes from every side cancel, and the equilibrium lands *inside* helmet width.
+          // pushes from every side cancel, and the equilibrium lands *inside* touching distance.
           // So there is a second, much firmer term that only exists at touching distance,
           // where being apart stops being cosmetic. Widening the gentle radius does not fix
           // that; it makes it worse, by adding more pushes to cancel.
@@ -1380,7 +1380,7 @@ export class Astronauts {
       // fires on `index !== i`, and every agent behind this one shifts down a slot and
       // overwrites the colours in the slot this one vacated. Keep the stale index and the
       // agent reclaims that same `i` on its way back with the gate reading "unchanged", so
-      // it is drawn in whatever suit, helmet, trim and eye its neighbour left there — until
+      // it is drawn in whatever suit, skin tone, trim and eye its neighbour left there — until
       // some unrelated status change happens to set `colorDirty`. `-1` is the same sentinel
       // a capacity rebuild uses, and nothing else reads `index`.
       if (agent.riding) {
@@ -1568,7 +1568,7 @@ export class Astronauts {
       // a point at its middle.
       //
       // The geometry has to be recomputed the way `indicators.js` draws it rather than
-      // guessed at. That shader anchors the quad just above the helmet and then lifts it by
+      // guessed at. That shader anchors the quad just above the head and then lifts it by
       // half its own height *in view space*, where the height itself grows with distance so
       // the badge holds a constant pixel size. A fixed world-space offset cannot follow that:
       // it is right at one zoom and most of a metre low at another, which is why this used to
@@ -1855,7 +1855,7 @@ function roundedBox(w, h, d, r) {
 /**
  * A patch of sphere centred on +Z — the direction the astronaut faces. Three's own
  * parametrisation puts phi=0 at -X, so the patch is offset by a quarter turn to land
- * the cap on the front of the helmet rather than its cheek.
+ * the cap on the front of the head rather than its cheek.
  */
 function sphereCap(radius, phiSpread, thetaSpread, wSeg = 18, hSeg = 12) {
   return new THREE.SphereGeometry(
