@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { SKIN_TONES, skinToneIndexFor } from '../src/agents/skin.js'
 import { HAIR_STYLES, hairStyleIndexFor, BALD } from '../src/agents/hair.js'
+import { bandPulse } from '../src/agents/band-pulse.js'
 
 const SRC = readFileSync('src/agents/astronauts.js', 'utf8')
 
@@ -171,6 +172,43 @@ test('hairstyle and skin tone are independent', () => {
   }
   assert.equal(pairs.size, SKIN_TONES.length * HAIR_STYLES.length, `only ${pairs.size} of 24 combinations`)
   assert.ok(agree > 70 && agree < 130, `parities agreed ${agree}/200 times`)
+})
+
+test('a calm band holds steady', () => {
+  const a = bandPulse(0, false)
+  const b = bandPulse(1.7, false)
+  const c = bandPulse(9.3, false)
+  assert.equal(a, b)
+  assert.equal(b, c)
+  assert.ok(a > 0, 'a calm band is not invisible')
+})
+
+test('an errored band actually moves', () => {
+  const samples = []
+  for (let t = 0; t < 2; t += 0.05) samples.push(bandPulse(t, true))
+  const min = Math.min(...samples)
+  const max = Math.max(...samples)
+  assert.ok(max - min > 0.3, `pulse only spans ${(max - min).toFixed(3)} — invisible at distance`)
+})
+
+test('the pulse never goes dark and never blows out', () => {
+  for (let t = 0; t < 10; t += 0.017) {
+    for (const errored of [true, false]) {
+      const v = bandPulse(t, errored)
+      assert.ok(v >= 0 && v <= 1, `bandPulse(${t}, ${errored}) = ${v}`)
+    }
+  }
+})
+
+test('an errored band is never fully off, so the figure never disappears', () => {
+  let min = Infinity
+  for (let t = 0; t < 10; t += 0.017) min = Math.min(min, bandPulse(t, true))
+  assert.ok(min > 0.15, `dips to ${min.toFixed(3)} — reads as a flicker, not a beacon`)
+})
+
+test('the bands are built and written', () => {
+  assert.match(SRC, /parts\.bands\s*=/, 'parts.bands is not built')
+  assert.match(SRC, /setPart\([^)]*\bbands\b/, 'the bands are not written per frame')
 })
 
 test('hair.js cannot reach anything that knows a status', () => {
