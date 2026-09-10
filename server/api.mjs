@@ -77,7 +77,7 @@ function emptyNetwork() {
   } catch {
     name = os.hostname()
   }
-  return { colonyName: name || 'colony', share: false, neighbors: [], shared: [] }
+  return { colonyName: name || 'colony', share: false, neighbors: [], shared: [], allowedReaders: [] }
 }
 
 /**
@@ -86,6 +86,10 @@ function emptyNetwork() {
  * `shared` is the opt-in allowlist: the ids of sessions, and the names of repos, that this
  * colony hands out to visitors. Empty means nothing is shared even when `share` is on, which
  * is the safe default — a session is never exposed until it is named here.
+ *
+ * `allowedReaders` is a second, one-way allowlist: IPs let in to the guest API without being
+ * a neighbour this colony visits back. A neighbour implies mutual visiting; a hub screen that
+ * only ever reads is not a colony and should not have to pretend to be one.
  */
 function cleanNetwork(raw) {
   const base = emptyNetwork()
@@ -95,6 +99,7 @@ function cleanNetwork(raw) {
     share: net.share === true,
     neighbors: asArray(net.neighbors).map(cleanNeighbor).filter(Boolean),
     shared: [...new Set(asArray(net.shared).map(String).filter(Boolean))].slice(0, 2000),
+    allowedReaders: [...new Set(asArray(net.allowedReaders).map(String).filter(Boolean))].slice(0, 200),
   }
 }
 
@@ -405,9 +410,14 @@ const discovery = new Discovery()
 const guest = new GuestServer({
   instanceId: INSTANCE_ID,
   getName: () => currentNetwork.colonyName,
-  // Only the colleagues this colony has added may read it — mutual add, so sharing is never
-  // readable by the whole LAN. Read fresh per request so adding someone takes effect at once.
-  getAllowedHosts: () => (currentNetwork.neighbors || []).map((n) => n.host),
+  // Only the colleagues this colony has added, plus any explicitly allowed readers, may read
+  // it — mutual add is not required for the latter, so an always-on hub can be let in without
+  // this colony having to visit it back. Read fresh per request so adding someone (either
+  // list) takes effect at once.
+  getAllowedHosts: () => [
+    ...(currentNetwork.neighbors || []).map((n) => n.host),
+    ...(currentNetwork.allowedReaders || []),
+  ],
   // Guests see only what the owner opted to share: the same scan, archived flags applied,
   // then filtered to the allowlist — by session id or by repo name — before anything leaves.
   // An empty allowlist shares nothing, which is the whole point of opt-in.
