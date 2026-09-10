@@ -16,6 +16,12 @@ colonies now; the same layout should still read at a handful.
 - **The hub device:** an Intel **NUC6i3SYK** (i3-6100U / HD 520) driving the office screen. It
   runs the existing Bot Crossing app (the merged `main` build) in a new **hub mode**, fullscreen,
   in a kiosk browser. The NUC6CAY (Celeron) is too weak for smooth WebGL and stays a reserve.
+- **OS: a lean Linux** (recommended over Windows for a 24/7 wall display) — e.g. Debian/Ubuntu
+  minimal or a kiosk distro (DietPi) — with **Node 22** and **Chromium in kiosk mode**
+  (`chromium --kiosk --app=http://localhost:5274/?hub=1`), started by a systemd unit at boot.
+  The server and page are platform-neutral; the one Windows-only module (`server/lib/windows.mjs`,
+  terminal fronting) is never reached by the read-only hub. Intel HD 520 has good open-source
+  WebGL drivers. Windows remains possible if preferred, but Linux is leaner and more reliable here.
 - **Tailscale:** the NUC joins the tailnet with a stable `100.x` IP. That IP is how teammates
   let it read them, and how it reaches them — same transport that already works between Dimitri
   and Chantal.
@@ -78,6 +84,33 @@ Drawn over the game, four parts:
 The 3D colony map stays as the backdrop so the screen is still alive and fun; the HUD is the
 layer you actually read.
 
+## Detection & naming (foundation — must land first)
+
+A team wall is only trustworthy if it shows what is *actually* running, by a name a human
+recognises. Two gaps in the current Claude Code adapter, both confirmed on disk, break that and
+are fixed as part of Fase 1 because the NEEDS YOU board rests on them:
+
+1. **Fresh-transcript liveness.** Today "is this working right now?" leans on the CLI's
+   live-process registry (`~/.claude/sessions/<pid>.json`). A **desktop-app / Agent-SDK session**
+   (the Claude Code tab) does not reliably write that file, so a genuinely busy session — and any
+   sibling session in another project — reads as *idle* or vanishes, even mid-work. Fix: in
+   `server/harnesses/claude-code.mjs`, treat a transcript **modified within ~45s** as active
+   (`running`) even when no live-process file exists, and awaiting-reply / unread logic keys off
+   the same freshness. A live-process file still counts; this is an additional signal, not a
+   replacement, so the CLI path is unchanged.
+
+2. **Folder-less sessions get their own named house.** A session started with **no project
+   folder** runs in a scratch workspace, and the adapter names its zone after the workspace
+   directory — a cryptic `scratch-2026-09-09-…` hash — and lumps every folder-less session into
+   that one zone. On the map the live session is then a nameless house in a nameless district.
+   Fix: a session whose cwd is a scratch workspace becomes **its own zone, labelled by the
+   session's own title** (custom > ai > summary > first prompt), so each folder-less session
+   reads as a recognisable house rather than dissolving into a hash. Sessions that *do* have a
+   real project folder keep grouping by repo, unchanged.
+
+Both fixes ship on `main` (they improve every install, not just the hub) and the hub inherits
+them. They are unit-tested against fixtures so no live session is needed to prove them.
+
 ## Data flow
 
 - The hub polls its own `/api/threads` (unchanged) every ~10-15s → the merged, colony-tagged
@@ -102,11 +135,21 @@ layer you actually read.
 - A hub launcher for the NUC (kiosk fullscreen, autostart) — the same shape as the existing
   Windows autostart, pointed at `?hub=1`.
 
+## Look approved
+
+The triage layout was validated with a mockup before build: the NEEDS YOU board on the right
+(longest-waiting first, colony chip + repo + wait time), the colony game dimmed as the backdrop,
+a red new-attention popup over it, and a per-colony working/waiting/blocked strip beneath. Dark,
+single committed theme for a wall display. That mockup is the visual target for the hub HUD.
+
 ## Testing
 
-- Unit: the triage selector (which threads count, wait-time sort, the new-since-last diff),
-  and the `allowedReaders` origin check (a reader IP is allowed without being a neighbour;
-  a stranger is still refused).
+- Unit: the triage selector (which threads count, wait-time sort, the new-since-last diff);
+  the `allowedReaders` origin check (a reader IP is allowed without being a neighbour; a stranger
+  is still refused); the two foundation fixes — fresh-transcript liveness (a transcript touched
+  <45s ago reads as `running` with no pid file; an old one does not) and folder-less naming (a
+  scratch-workspace session becomes its own zone named by its title; a real-folder session still
+  groups by repo).
 - Local multi-colony run: two fake colonies + a hub instance on one machine; confirm the NEEDS
   YOU board fills, a newly-waiting thread pops and dings, and mute silences it.
 
