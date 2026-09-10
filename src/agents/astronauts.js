@@ -90,9 +90,16 @@ const AGENT_LOOK = {
  * errored band's own peak only reaches 0.668 and never blooms at all — the bloom then says
  * "working" louder than it says "errored", which is upside down from the precedence the whole
  * colony is ordered by. At 2.6 the brightest calm band there is, tape amber, tops out at 0.76
- * and nothing on the vest itself clears the threshold. That leaves the glow to `BAND_SPARK`,
- * which is the only thing on a crew member that is allowed to bloom, and only when it is
- * meant to.
+ * and nothing on the vest's plain lower ring ever clears the threshold.
+ *
+ * The reflective upper ring (`BAND_SPARK` below) is a different story, and not a rare one: at
+ * the calm pulse it already sits over 0.92 for five of the eight trims — celebrating 2.58,
+ * working 2.23, idle 1.91, spawning 1.63, leaving 0.96 — so most of a colony is quietly
+ * blooming, steadily, most of the time. Only waiting (0.87) and sleeping (0.57) stay under.
+ * `blocked` is not the one trim that blooms; it is the one trim whose pulse carries the ring
+ * *across* the threshold and back, every 0.625s, instead of sitting on one side of it. That
+ * crossing — a bloom that switches on and off against a colony of steadily-lit ones — is the
+ * beacon, not the bloom itself. See `BAND_SPARK` for the peak/trough numbers.
  *
  * Still well past 1.0 in the dominant channel — amber lands at (1.80, 0.93, 0.12) — which is
  * what an unlit material needs to read at midnight, and what the HDR target exists to carry.
@@ -312,8 +319,9 @@ export class Astronauts {
     const suit = (roughness, extra = {}) =>
       new THREE.MeshStandardMaterial({ color: 0xffffff, roughness, metalness: 0.04, ...extra })
 
-    // Everything worn is measured off the helmet radius, so the suit stays in proportion if
-    // the rig is ever scaled again — even though the helmet itself is gone for now.
+    // Only the hammer is still measured off the helmet radius, so it stays in proportion if
+    // the rig is ever scaled again — the cabinet and box are sized in their own units, and the
+    // face, hair and hi-vis bands below are all measured off `P.headR` instead (see `HEAD_R`).
     const R = P.helmetR
 
     // The hi-vis bands. They do three jobs at once: they are the largest surface the status
