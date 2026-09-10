@@ -4,13 +4,12 @@ import { buildFaceAtlas, FACE, FACE_LOOPS, FRAME_COLS, FRAME_ROWS } from './face
 import { attachMatrixAt, decorateSkinned, frameFor } from './crew.js'
 
 /**
- * Every astronaut in the colony, drawn in seven draw calls.
+ * Every astronaut in the colony, drawn in a handful of draw calls.
  *
  * The body is one instanced, GPU-skinned mesh playing KayKit's hand-animated clips (see
  * `crew.js`) — every torso, arm and leg in the colony in a single draw, whether there are
- * six threads or three hundred. Everything the crew *wears* stays procedural and stays in
- * its own `InstancedMesh`: helmet, visor, screen-face, backpack, antenna and lamp, because
- * those carry the colony's own identity and its own shaders.
+ * six threads or three hundred. The screen-face stays procedural and stays in its own
+ * `InstancedMesh`, because it carries the colony's own identity and its own shader.
  *
  * Worn parts are pinned to bones the cheap way. The baked animation lives in an ordinary
  * array as well as in the texture the shader samples, so placing a helmet is one matrix
@@ -118,17 +117,6 @@ const CREW_SCALE = 0.56
 const P = {
   helmetR: 0.48,
   headUp: 0.46, // the head bone sits at the neck; the helmet centres above it
-  packZ: -0.3,
-  packUp: 0.06,
-  // The antenna stands on the crown of the helmet rather than out of its side, so it reads
-  // at the distance the colony is normally looked at instead of turning into a loose speck.
-  antX: 0.16,
-  antY: 0.88,
-  antZ: -0.05,
-  tipX: 0.2,
-  tipY: 1.14,
-  lightZ: 0.26,
-  lightY: 0.05,
   // The hammer, in the right hand's own frame. The hand bone's own +Y runs back down the
   // forearm, so the shaft is turned through half a circle to stand the head up out of the
   // fist rather than hang it through the floor.
@@ -208,39 +196,13 @@ export class Astronauts {
     this.capacity = capacity
     const parts = (this.parts = {})
 
-    // The suit is painted fabric-over-hardshell: fairly rough, not metallic, but glossy
-    // enough on the helmet to catch a highlight off the environment map.
+    // The suit is painted fabric-over-hardshell: fairly rough, not metallic.
     const suit = (roughness, extra = {}) =>
       new THREE.MeshStandardMaterial({ color: 0xffffff, roughness, metalness: 0.04, ...extra })
 
-    // Everything worn is measured off the helmet, so the suit stays in proportion if the
-    // rig is ever scaled again.
+    // Everything worn is measured off the helmet radius, so the suit stays in proportion if
+    // the rig is ever scaled again — even though the helmet itself is gone for now.
     const R = P.helmetR
-
-    // Helmet shell.
-    const helmetGeo = new THREE.SphereGeometry(R, 16, 11)
-    parts.helmet = this._mesh(helmetGeo, suit(0.26, { metalness: 0.03, envMapIntensity: 1.35 }), capacity, false)
-
-    // Visor: a dark screen wrapped onto the helmet. The patch itself is a rectangle in UV
-    // space, so its rounded silhouette is cut in the fragment shader instead — a squircle
-    // SDF, which gives soft corners a rectangular patch can never have, and lets the white
-    // helmet show through where the screen ends.
-    const visorGeo = sphereCap(R * 1.032, 2.45, Math.PI * 0.62, 20, 14)
-    parts.visor = this._mesh(visorGeo, this._visorMaterial(), capacity, false)
-
-    // Backpack + a life-support cylinder on each side.
-    const packGeo = roundedBox(R * 0.89, R * 0.98, R * 0.55, R * 0.19)
-    parts.pack = this._mesh(packGeo, suit(0.66), capacity, true)
-
-    const antGeo = new THREE.CylinderGeometry(R * 0.042, R * 0.053, R * 0.57, 4)
-    antGeo.translate(0, R * 0.285, 0)
-    parts.antenna = this._mesh(antGeo, suit(0.24, { metalness: 0.95 }), capacity, false)
-
-    // The blinking bits: antenna tip and chest lamp. Unlit and pushed past 1.0 so they
-    // are the things the bloom pass picks out at night.
-    const glowMat = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: true })
-    parts.tip = this._mesh(new THREE.SphereGeometry(R * 0.125, 6, 4), glowMat, capacity, false)
-    parts.lamp = this._mesh(new THREE.SphereGeometry(R * 0.16, 6, 5), glowMat.clone(), capacity, false)
 
     // The hammer, held in the right hand while a thread is running. Wood and steel rather
     // than suit white, so it reads as a tool at the distance the colony is watched from.
@@ -254,10 +216,10 @@ export class Astronauts {
     parts.cabinet = this._mesh(cabinetGeometry(), suit(0.72, { vertexColors: true }), capacity, true)
     parts.box = this._mesh(movingBoxGeometry(), suit(0.85, { vertexColors: true }), capacity, true)
 
-    // Face: the features only, drawn straight onto the visor beneath. Built as a sphere cap
-    // a hair larger than the visor, so it lies exactly on the curved surface instead of
-    // clipping through it — a flat plane at this radius sinks inside the sphere and the
-    // features disappear.
+    // Face: the features only. Built as a sphere cap at a hair over the helmet radius, so
+    // it sits on the same curved surface a helmet would occupy instead of floating flat in
+    // front of it — a flat plane at this radius sinks inside that curve and the features
+    // disappear.
     const faceGeo = sphereCap(P.helmetR * 1.047, 1.72, 0.98, 16, 10)
     parts.face = this._mesh(faceGeo, this._faceMaterial(), capacity, false)
     this._attachFrameAttribute(parts.face, capacity)
@@ -362,52 +324,12 @@ export class Astronauts {
   }
 
   /**
-   * The visor. A rounded-rectangle SDF in the patch's own UV space decides what is screen and
-   * what is helmet, and a thin band just inside the edge is lifted to read as a bezel.
-   */
-  _visorMaterial() {
-    const mat = new THREE.MeshStandardMaterial({ color: 0x08090e, roughness: 0.3, metalness: 0.16 })
-    mat.onBeforeCompile = (shader) => {
-      shader.vertexShader = shader.vertexShader
-        .replace('#include <common>', `#include <common>\n varying vec2 vVisorUv;`)
-        .replace('#include <begin_vertex>', `#include <begin_vertex>\n vVisorUv = uv;`)
-
-      shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', `#include <common>\n varying vec2 vVisorUv;`)
-        .replace(
-          '#include <clipping_planes_fragment>',
-          `#include <clipping_planes_fragment>
-           // Rounded-box SDF: |max(q,0)| + min(max(q.x,q.y),0) - r, the standard 2D form.
-           vec2 p = ( vVisorUv - 0.5 ) * 2.0;
-           // "half" is a reserved word in GLSL ES; a variable named that will not compile.
-           vec2 halfSize = vec2( 0.86, 0.80 );
-           float radius = 0.52;
-           vec2 q = abs( p ) - halfSize + radius;
-           float sd = length( max( q, 0.0 ) ) + min( max( q.x, q.y ), 0.0 ) - radius;
-           if ( sd > 0.0 ) discard;
-           float bezel = smoothstep( -0.14, -0.01, sd );`
-        )
-        .replace(
-          '#include <emissivemap_fragment>',
-          `#include <emissivemap_fragment>
-           // A cool rim right at the cut, so the screen reads as set into a bezel.
-           totalEmissiveRadiance += vec3( 0.16, 0.22, 0.34 ) * bezel;`
-        )
-    }
-    return mat
-  }
-
-  /**
    * The face material. The atlas is a mask, so the shader ignores the sampled colour
    * entirely: the red channel becomes *alpha* and the instance's own colour becomes the
    * glow, which is how every astronaut gets a different eye colour from one shared texture.
    *
-   * The dark panel behind the features is the *visor*, which is a rounded shape cut by an
-   * SDF. This cap used to paint its own dark background as well, and because the cap is a
-   * rectangle that second background showed as a rectangle sitting on the rounded one —
-   * two panels, the corners of the upper one clipping out of the lower. Carrying alpha in
-   * the mask instead means the only thing this draws is the features themselves, so the
-   * visor's own silhouette is the only edge there is.
+   * Carrying alpha in the mask means the only thing this draws is the features themselves,
+   * so nothing but the features has an edge — there is no panel behind them any more.
    *
    * `depthWrite` is off because this is transparent now: with it on, the cap would write
    * depth across its whole rectangle and punch a hole in anything drawn behind it later.
@@ -469,8 +391,7 @@ export class Astronauts {
   _applyShadowFlags() {
     const on = this.settings.shadowSize > 0
     for (const [name, mesh] of Object.entries(this.parts)) {
-      const wants = name !== 'face' && name !== 'tip' && name !== 'lamp' && name !== 'visor'
-      mesh.castShadow = on && wants
+      mesh.castShadow = on && name !== 'face'
     }
     // The body is the shadow that matters — it is the whole silhouette.
     if (this.crew) this.crew.castShadow = on
@@ -1208,7 +1129,7 @@ export class Astronauts {
   // ── writing the instance buffers ────────────────────────────────────────────────────
 
   _writeMatrices(elapsed, anim) {
-    const { helmet, visor, pack, antenna, tip, lamp, face, hammer, cabinet, box } = this.parts
+    const { face, hammer, cabinet, box } = this.parts
     const rig = this.rig
     const crew = this.crew
     const root = this._m
@@ -1275,21 +1196,12 @@ export class Astronauts {
         crewFrames[i] = agent.frame
       }
 
-      // Everything worn hangs off a bone at the frame the body is actually on, so a helmet
-      // cannot drift off a head that is looking down or lying on the ground.
+      // Everything worn hangs off a bone at the frame the body is actually on, so a worn
+      // part cannot drift off a head that is looking down or lying on the ground.
       if (rig) {
         attachMatrixAt(rig, agent.frame, this.headSlot, bone)
         worn.multiplyMatrices(root, bone)
-        setPart(child, worn, helmet, i, 0, P.headUp, 0, 0, 0, 0)
-        setPart(child, worn, visor, i, 0, P.headUp, 0, 0, 0, 0)
         setPart(child, worn, face, i, 0, P.headUp, 0, 0, 0, 0)
-        setPart(child, worn, antenna, i, P.antX, P.antY, P.antZ, 0.06, 0, -0.12)
-        setPart(child, worn, tip, i, P.tipX, P.tipY, P.antZ, 0, 0, 0)
-
-        attachMatrixAt(rig, agent.frame, this.chestSlot, bone)
-        worn.multiplyMatrices(root, bone)
-        setPart(child, worn, pack, i, 0, P.packUp, P.packZ, 0, 0, 0)
-        setPart(child, worn, lamp, i, 0, P.lightY, P.lightZ, 0, 0, 0)
 
         // The hammer only exists while a thread is running, so it gets its own instance
         // counter — an unused slot in the middle of an instanced mesh still draws.
@@ -1318,19 +1230,9 @@ export class Astronauts {
       if (agent.index !== i || agent.colorDirty) {
         agent.colorDirty = false
         crew?.setColorAt(i, c.setHex(agent.suit))
-        helmet.setColorAt(i, c.setHex(agent.suit))
-        pack.setColorAt(i, agent.trim)
         face.setColorAt(i, agent.eye)
         staticDirty = true
       }
-
-      // Antenna tip and chest lamp pulse; a blocked agent's lamp stutters like a fault light.
-      const pulse =
-        agent.status === 'blocked'
-          ? (Math.sin(elapsed * 9) > 0.2 ? 1 : 0.05)
-          : 0.55 + 0.45 * Math.sin(elapsed * 2.6 + agent.phase)
-      tip.setColorAt(i, c.copy(agent.eye).multiplyScalar(0.6 + pulse * 1.1))
-      lamp.setColorAt(i, c.copy(agent.trim).multiplyScalar(0.7 + pulse * 1.6))
 
       // Atlas frame for the face.
       const f = agent.faceFrame
@@ -1342,15 +1244,13 @@ export class Astronauts {
     }
 
     const n = i
-    // The glowing parts pulse every frame; the rest only re-upload when something moved slot.
-    const animated = new Set(['tip', 'lamp'])
     // Everything worn is drawn once per crew member; the tool and the props only as often as
     // the state that owns them came up this frame.
     const props = { hammer: hands, cabinet: cabinets, box: boxes }
     for (const [name, mesh] of Object.entries(this.parts)) {
       mesh.count = props[name] ?? n
       mesh.instanceMatrix.needsUpdate = true
-      if (mesh.instanceColor && (staticDirty || animated.has(name))) mesh.instanceColor.needsUpdate = true
+      if (mesh.instanceColor && staticDirty) mesh.instanceColor.needsUpdate = true
     }
     if (crew) {
       crew.count = n
