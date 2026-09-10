@@ -213,11 +213,23 @@ precedent of `drive-path.js` and `growth.js`:
   earlier than 4 s and no later than 12 s after arriving; the
   density function returns exactly 0 for an all-sleeping colony, never exceeds 8, and is
   monotonic in the active-thread count.
-- Workwear: for every `SUIT_TONES` entry and every one of the eight `AGENT_LOOK` trim
-  colours, the Euclidean distance in linear RGB is **at least 0.25**, and every workwear
-  entry has a relative luminance **below 0.30** so no body tone can be mistaken for the
-  old white or for a lit trim. Both asserted, not eyeballed. The threshold is stated here
-  so a reviewer can check the constant against this line rather than infer it.
+- Workwear: for every `SUIT_TONES` entry against every one of the eight `AGENT_LOOK`
+  trim colours, **sRGB distance ≥ 0.15** and **trim luminance ÷ body luminance ≥ 1.15**.
+  Both asserted, not eyeballed, and both thresholds are stated here so a reviewer checks
+  the constants against this line rather than inferring them.
+
+  An earlier draft of this spec demanded a distance of 0.25 **in linear RGB**, which is
+  unachievable and was corrected before any code was written. Linear RGB compresses dark
+  colours severely, and two trim colours are themselves dark (`sleeping` 0x4c5468,
+  `waiting` 0x46689e), so every plausible workwear tone measured between 0.02 and 0.10
+  from `sleeping` — an order of magnitude short. The luminance-ratio rule replaces it
+  because it is the property that actually matters: the band has to be *brighter* than the
+  cloth it sits on.
+
+  This is also what was wrong before. Every trim colour measures between 0.09 and 0.41 in
+  luminance while the five white bodies measure 0.77 to 0.91, so today the hi-vis band is a
+  **dark smudge on a white suit**. Under the new tones the darkest trim is still 1.18× the
+  brightest body, so trim reads as trim for all eight statuses.
 
 **Animated behaviour is verified by driving frames by hand**, not through the browser pane.
 That pane does not tick `requestAnimationFrame` in this project — measured at 0 frames in
