@@ -203,15 +203,23 @@ blink as well as the glow. Whatever implements this must keep an errored crew me
 pulsing, not merely coloured red; the pulse is what catches the eye across a colony, and it
 is the one thing an `!` badge cannot do on its own at that distance.
 
-**Two things could sink this, and both are checked before anything is drawn.**
+**The head turned out to be easy, and the reason is worth writing down.**
 
-*The head may not be separable.* The crew is drawn as one `InstancedMesh` over a merged body
-geometry, with one skeleton baked into a float texture that every instance samples —
-`crew.js` says so in its own header. Pulling the head out means a **second** instanced
-skinned mesh sampling that same bone texture, and whether that works is not obvious from
-reading. So it is the first task, before a single hairstyle exists. If it cannot be done,
-the fallback is a skin tone applied to the whole body, which puts skin on the sleeves too:
-worse looking, but it works, and it is a fallback rather than a redesign.
+This section first said pulling the head out was the stage's biggest risk — a second
+instanced skinned mesh sampling the crew's shared bone texture, with a fallback of putting
+skin on the sleeves. That was wrong, and measuring it took one query: **all 959 vertices of
+`Mannequin_Medium_Head` are weighted to exactly one bone, `head`.** The head does not
+deform. So it does not need skinning at all — it rides the head bone rigidly, which is
+precisely the mechanism `boneMatrixAt()` already exists for and precisely how the helmet was
+placed. Swapping helmet geometry for head geometry, plus an `instanceColor` for skin tone,
+is the whole of it.
+
+The same follows for hair: a hairstyle is a **drop-in replacement for the helmet**, on the
+same bone, through the same placement code. Several styles means several instanced meshes
+bucketed by which style an agent drew — the pattern the delivery cars already use to bucket
+by accent.
+
+One risk therefore remains, not two.
 
 *The bands may not bloom.* `engine.js` keeps the bloom threshold high on purpose — its own
 comment says a high threshold "keeps this an accent rather than a haze: only the eyes". Two
