@@ -41,10 +41,13 @@ mkdir -p build "$PAYLOAD"
 ISO="${UBUNTU_ISO:-}"
 if [ -z "$ISO" ]; then
   ISO="build/ubuntu-24.04-live-server-amd64.iso"
-  if [ ! -f "$ISO" ]; then
-    echo "downloading Ubuntu Server 24.04 LTS ISO…"
-    curl -fL --retry 3 -o "$ISO" \
-      "https://releases.ubuntu.com/24.04/ubuntu-24.04-live-server-amd64.iso"
+  if [ ! -s "$ISO" ]; then
+    echo "finding the current Ubuntu Server 24.04 LTS ISO…"
+    base="https://releases.ubuntu.com/24.04"
+    fn="$(curl -fsSL "$base/" | grep -oE 'ubuntu-24\.04(\.[0-9]+)?-live-server-amd64\.iso' | sort -uV | tail -1)"
+    [ -n "$fn" ] || { echo "could not find a live-server ISO at $base/" >&2; exit 1; }
+    echo "downloading $fn …"
+    curl -fL --retry 3 -o "$ISO" "$base/$fn"
   fi
 fi
 [ -f "$ISO" ] || { echo "source ISO not found: $ISO" >&2; exit 1; }
@@ -102,35 +105,44 @@ autoinstall:
     - curtin in-target --target=/target -- systemctl enable bch-firstboot.service
 YAML
 
-# ── 4. extract the ISO, inject payload + seed, make GRUB auto-run the install ──────────────
-echo "extracting ISO…"
-xorriso -osirrox on -indev "$ISO" -extract / "$WORK" >/dev/null 2>&1
-chmod -R u+w "$WORK"
-cp -r "$PAYLOAD" "$WORK/bch"          # -> /bch on the ISO (payload + /bch/nocloud, /bch/offline)
+# ── 4. edit GRUB to auto-run the install (only the two cfg files, not the whole ISO) ──────
+echo "editing GRUB to auto-run the install…"
+mkdir -p "$WORK"
+xorriso -osirrox on -indev "$ISO" -extract /boot/grub/grub.cfg "$WORK/grub.cfg" >/dev/null 2>&1
+xorriso -osirrox on -indev "$ISO" -extract /boot/grub/loopback.cfg "$WORK/loopback.cfg" >/dev/null 2>&1 || true
+[ -s "$WORK/grub.cfg" ] || { echo "FATAL: could not read /boot/grub/grub.cfg from the ISO" >&2; exit 1; }
 
-# Point every boot entry at our seed and cut the timeout so it starts on its own.
-add_autoinstall() {
-  local f="$1"
-  [ -f "$f" ] || return 0
-  # append the autoinstall + nocloud datasource to each kernel line that boots the installer
-  sed -i 's#\(vmlinuz[^\n]*\)---#\1 autoinstall ds=nocloud\\;s=/cdrom/bch/nocloud/ ---#' "$f" 2>/dev/null || true
-  sed -i -E 's#^(\s*linux\s+/casper/vmlinuz[^#]*)$#\1 autoinstall ds=nocloud\\;s=/cdrom/bch/nocloud/#' "$f" 2>/dev/null || true
-  sed -i -E 's/^(set timeout=).*/\11/' "$f" 2>/dev/null || true
-  sed -i -E 's/^(timeout\s+).*/\11/' "$f" 2>/dev/null || true
+edit_grub() {
+  local f="$1"; [ -f "$f" ] || return 0
+  # Add our NoCloud datasource to the installer's kernel line. The ';' is escaped for GRUB. It is
+  # inserted before the ' ---' that separates installer args from kernel args when that marker is
+  # present, else appended to the vmlinuz line.
+  if grep -q ' ---' "$f"; then
+    sed -i 's# ---# autoinstall ds=nocloud\\;s=/cdrom/bch/nocloud/ ---#g' "$f"
+  else
+    sed -i -E '/\/casper\/vmlinuz/ s#$# autoinstall ds=nocloud\\;s=/cdrom/bch/nocloud/#' "$f"
+  fi
+  # Start on its own instead of waiting on the menu.
+  sed -i -E 's/^(set timeout=).*/\11/' "$f"
+  sed -i -E 's/^([[:space:]]*timeout[[:space:]]+)[0-9]+/\11/' "$f"
 }
-add_autoinstall "$WORK/boot/grub/grub.cfg"
-add_autoinstall "$WORK/boot/grub/loopback.cfg"
+edit_grub "$WORK/grub.cfg"
+edit_grub "$WORK/loopback.cfg"
 
-# ── 5. repackage, reusing the source ISO's own El Torito / EFI boot layout ─────────────────
-echo "repackaging ISO (reusing the source boot layout)…"
-BOOTOPTS="$(xorriso -indev "$ISO" -report_el_torito as_mkisofs 2>/dev/null || true)"
-if [ -z "$BOOTOPTS" ]; then
-  echo "FATAL: could not read the source ISO's boot layout via xorriso -report_el_torito." >&2
-  echo "Your xorriso may be too old — install a current one, or use the CIDATA fallback (README)." >&2
-  exit 1
-fi
-# shellcheck disable=SC2086
-xorriso -as mkisofs -V "BCH_HUB" -o "$OUT" $BOOTOPTS "$WORK"
+# ── 5. write the new ISO by REPLAYING the source's own boot images, overlaying our files ───
+# This preserves the original BIOS (El Torito) + EFI boot exactly — and, crucially, the volume
+# id casper searches for by label — instead of trying to reconstruct the boot options. We only
+# overlay: our /bch payload, and the edited grub configs.
+echo "writing ISO (replaying original boot, overlaying payload)…"
+rm -f "$OUT"
+MAPS=(-map "$(cd "$(dirname "$PAYLOAD")" && pwd)/$(basename "$PAYLOAD")" /bch
+      -map "$(pwd)/$WORK/grub.cfg" /boot/grub/grub.cfg)
+[ -f "$WORK/loopback.cfg" ] && MAPS+=(-map "$(pwd)/$WORK/loopback.cfg" /boot/grub/loopback.cfg)
+xorriso -indev "$ISO" -outdev "$OUT" \
+  -boot_image any replay \
+  -overwrite on \
+  "${MAPS[@]}" \
+  -commit
 
 echo
 echo "built: $OUT"
