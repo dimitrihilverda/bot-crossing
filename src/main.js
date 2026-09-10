@@ -5,6 +5,7 @@ import { Engine } from './core/engine.js'
 import { CameraRig } from './core/camera.js'
 import { Colony, STATUS_LABEL, STATUS_ORDER, statusFor, transcriptProgress } from './game/colony.js'
 import { Hud } from './ui/hud.js'
+import { Hub } from './ui/hub.js'
 import { PLANETS } from './world/planet.js'
 import { loadKit } from './world/kit.js'
 import { crewRig, loadCrew } from './agents/crew.js'
@@ -31,6 +32,17 @@ import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-project
 
 const POLL_MS = 15000
 const app = document.getElementById('app')
+
+/**
+ * The office-wall view: `?hub=1` merges every teammate's colony (the same shared-colonies
+ * machinery that already tags and folds in a visited neighbour's threads) and drops a
+ * read-only triage HUD over the unmodified game. See
+ * `docs/superpowers/specs/2026-09-10-team-hub-design.md`. Nothing below this line changes
+ * for the ordinary, non-hub app: the flag is read once, and every hub-only effect is gated
+ * behind it.
+ */
+const HUB = new URLSearchParams(location.search).get('hub') === '1'
+if (HUB) document.body.classList.add('hub')
 
 app.insertAdjacentHTML(
   'beforeend',
@@ -88,6 +100,9 @@ function patchNetwork(patch) {
   setTimeout(poll, 600)
 }
 let threads = []
+/** The merged `/api/threads` response's own `.colonies` from the last poll — hub mode's only
+ *  use for it, so it stays a plain module-level cache rather than a field on `state`. */
+let lastColonies = []
 /** Last legend built for the bottom bar, kept so the open zone's chip can light up between polls. */
 let legendProjects = []
 /** The zone layout as last written to the colony file, so an unchanged map is not re-saved. */
@@ -399,11 +414,43 @@ const actions = {
   },
 }
 
+if (HUB) {
+  // The hub reads every colony it can see, including ones it merely visits — it must never
+  // be able to write to any of them. Every action that mutates local state, the saved colony
+  // file, or another machine (opening a thread, starting one, revealing a folder), or that
+  // reshapes what a repo exposes to the network, becomes a no-op. Read-only actions (the
+  // getters the settings panel and legend use) are untouched — they still answer honestly,
+  // there is simply nothing in hub mode that renders them.
+  for (const key of [
+    'openThread',
+    'archiveThread',
+    'newConversation',
+    'markViewed',
+    'hideProject',
+    'unhideProject',
+    'revealProject',
+    'copyProjectPath',
+    'setShare',
+    'setColonyName',
+    'addNeighbor',
+    'removeNeighbor',
+    'addAllowedReader',
+    'removeAllowedReader',
+    'toggleShareRepo',
+    'toggleShareSession',
+  ]) {
+    actions[key] = () => {}
+  }
+}
+
 const hud = new Hud(app, settings, actions)
 // The sidebar is permanent, so the card beside an astronaut has a wall to stay clear of.
 const sideWidth = () => (window.innerWidth <= 820 ? 0 : 334)
 hud.setSideWidth(sideWidth())
 window.addEventListener('resize', () => hud.setSideWidth(sideWidth()))
+
+// The triage HUD, mounted only in hub mode — see `applyThreads` for the data it is fed.
+const hub = HUB ? new Hub(app) : null
 
 // ── selection ─────────────────────────────────────────────────────────────────────────
 
@@ -790,6 +837,11 @@ function applyThreads(list) {
     state.plots = layout
     queueSave()
   }
+
+  // The hub HUD is a read of the exact same merged, colony-tagged list the game itself just
+  // rendered — `threads` above, not the raw `list` argument, so a viewed/unread rewrite at
+  // the top of this function is reflected on the board too.
+  if (HUB) hub.update(threads, lastColonies)
 }
 
 let polling = false
@@ -798,6 +850,7 @@ async function poll() {
   polling = true
   try {
     const res = await fetchThreads()
+    lastColonies = res.colonies || []
     applyThreads(res.threads || [])
     hud.removeBoot()
   } catch (err) {

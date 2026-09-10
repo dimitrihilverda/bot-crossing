@@ -1,0 +1,45 @@
+/* Hub mode — the read-only wall-display HUD drawn over the (otherwise unmodified) game.
+   A single committed dark theme, same as the approved mockup: this only ever runs on an
+   office screen nobody themes to their own taste, so every colour is painted explicitly
+   rather than following the app's own light/dark handling.
+
+   Fonts: the mockup calls for Barlow Condensed / Barlow / JetBrains Mono via Google Fonts,
+   but this app never adds a font network dependency — `styles.css` leans on the system
+   stack throughout, so the hub does the same (see the triage HUD styles that follow). */
+
+body.hub .side,
+body.hub .settings,
+body.hub .rail,
+body.hub .thread-pop,
+body.hub .toasts,
+body.hub .fps,
+body.hub .hint-pill,
+body.hub .help {
+  /* Hub mode is one screen: its own HUD. The normal chrome — sidebar, settings, the camera
+     rail, the selection card, the normal toast/fps/hint layer, first-run help — all read as
+     controls for a session nobody at the wall owns, so none of it is shown here. */
+  display: none;
+}
+
+.hub-hud {
+  --hub-bg: #0e1014;
+  --hub-teal: #2fd4c4;
+  --hub-wait: #e7b24c;
+  --hub-block: #e35b48;
+  --hub-work: #54c98a;
+  --hub-font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --hub-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: none;
+  pointer-events: none;
+  font-family: var(--hub-font);
+  color: #f1efe9;
+  -webkit-font-smoothing: antialiased;
+}
+
+body.hub .hub-hud {
+  display: block;
+}
