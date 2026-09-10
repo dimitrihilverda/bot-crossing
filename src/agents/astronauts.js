@@ -3,6 +3,7 @@ import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 import { buildFaceAtlas, FACE, FACE_LOOPS, FRAME_COLS, FRAME_ROWS } from './faces.js'
 import { attachMatrixAt, decorateSkinned, frameFor } from './crew.js'
 import { skinToneFor } from './skin.js'
+import { HAIR_STYLES, hairStyleIndexFor } from './hair.js'
 
 /**
  * Every astronaut in the colony, drawn in a handful of draw calls.
@@ -27,6 +28,17 @@ import { skinToneFor } from './skin.js'
  */
 
 const SUIT_TONES = [0xf3f1ec, 0xe8e4dc, 0xf7f4ee, 0xdfe4e8, 0xf1e9df]
+
+/**
+ * One hair colour for every style. Deliberately not per-agent: at the size a crew member
+ * renders, the silhouette is what tells two of them apart and the shade of a dark head of
+ * hair is not, so a second per-agent colour would be spend without a picture to show for it.
+ * Dark enough to read as hair against every one of the six skin tones.
+ */
+const HAIR_TONE = 0x2b2320
+
+/** The part name a style's instanced mesh is registered under, so `parts` stays one flat map. */
+const hairPartName = (styleIndex) => `hair_${HAIR_STYLES[styleIndex].name}`
 
 /**
  * Trim + eye colour per behaviour. Eyes are pushed past 1.0 so the bloom pass catches them.
@@ -236,6 +248,29 @@ export class Astronauts {
     const faceGeo = sphereCap(P.headR * 1.047, 1.72, 0.98, 16, 10)
     parts.face = this._mesh(faceGeo, this._faceMaterial(), capacity, false)
     this._attachFrameAttribute(parts.face, capacity)
+
+    // Hair, one instanced mesh per non-bald style. They cannot share a mesh the way the
+    // hammer's shaft and head share one: those are merged into a single geometry, and these
+    // are four *different* geometries only one of which any given crew member wears.
+    //
+    // Sized against `P.headR`, the head's own radius, and not against `R` above — `helmetR`
+    // is the radius of the helmet these figures no longer wear, and the head under it is
+    // about 15% bigger, so a scalp measured off the helmet is a scalp inside the skull. That
+    // is the mistake the face cap made and `hair.js` carries the measurements that fix it.
+    //
+    // Each style keeps its own material rather than sharing one, so the `dispose` and
+    // capacity-rebuild loops over `Object.values(this.parts)` free exactly one material per
+    // mesh and never the same one three times.
+    this.hairMeshes = HAIR_STYLES.map((style, s) => {
+      const geo = style.geometry(P.headR)
+      if (!geo) return null // bald builds no geometry, so there is no mesh to draw it with
+      const hair = new THREE.MeshStandardMaterial({ color: HAIR_TONE, roughness: 0.86, metalness: 0 })
+      const mesh = this._mesh(geo, hair, capacity, true)
+      parts[hairPartName(s)] = mesh
+      return mesh
+    })
+    /** One counter per style, reset and refilled every frame. See `_writeMatrices`. */
+    this._hairCounts = new Uint32Array(HAIR_STYLES.length)
 
     for (const mesh of Object.values(parts)) {
       mesh.frustumCulled = false // one bounding volume for every agent everywhere is useless
@@ -556,6 +591,12 @@ export class Astronauts {
       faceTimer: 0,
       faceIndex: 0,
       suit: SUIT_TONES[(hash(entry.id) >>> 3) % SUIT_TONES.length],
+      // Which hairstyle this thread wears. Resolved once, here, because it is a pure function
+      // of the id and can never change — and because hashing a string per agent per frame is
+      // work the frame loop does not need. Never derived from status: hair says who a crew
+      // member is, the way its skin tone does, and it is the only thing on the figure that a
+      // status change cannot move.
+      hair: hairStyleIndexFor(entry.id),
       eye: new THREE.Color(1, 1, 1),
       trim: new THREE.Color(0xffffff),
       hop: 0,
@@ -1187,6 +1228,8 @@ export class Astronauts {
     const one = this._one
     const frames = this.frameAttr.array
     const crewFrames = this.crewFrameAttr?.array
+    const hairMeshes = this.hairMeshes
+    const hairCounts = this._hairCounts
 
     let i = 0
     // One counter per prop, for the same reason the hammer has one: an unused slot in the
@@ -1195,6 +1238,9 @@ export class Astronauts {
     let hands = 0
     let cabinets = 0
     let boxes = 0
+    // And one per hairstyle, for exactly that reason: each style's mesh is packed only with
+    // the crew members wearing it, so none of them can use the crew's own index either.
+    hairCounts.fill(0)
     let staticDirty = false
     for (const agent of this.agents) {
       // Never write past the end of the instance buffers. Going over is not a rendering
@@ -1252,6 +1298,14 @@ export class Astronauts {
         setPart(child, worn, head, i, 0, P.headUp, 0, 0, 0, 0)
         setPart(child, worn, face, i, 0, P.headUp, 0, 0, 0, 0)
 
+        // Hair, written with that same matrix and that same offset — so it rides the head
+        // bone rather than trailing it, and a crew member walking, looking down or asleep on
+        // the floor keeps its hair on its head. `agent.hair` indexes `HAIR_STYLES`, and a
+        // bald crew member's slot is `null`: it writes nothing at all rather than a hidden
+        // instance, which is why there is a counter per style instead of one shared index.
+        const hair = hairMeshes[agent.hair]
+        if (hair) setPart(child, worn, hair, hairCounts[agent.hair]++, 0, P.headUp, 0, 0, 0, 0)
+
         // The hammer only exists while a thread is running, so it gets its own instance
         // counter — an unused slot in the middle of an instanced mesh still draws.
         if (agent.clipKey === 'work') {
@@ -1305,6 +1359,14 @@ export class Astronauts {
     // Everything worn is drawn once per crew member; the tool and the props only as often as
     // the state that owns them came up this frame.
     const props = { hammer: hands, cabinet: cabinets, box: boxes }
+    // Every hairstyle's own count, the zeroes included. A style nobody is wearing this frame
+    // has to be *told* it is empty: `count` is sticky, so a mesh left on last frame's value
+    // goes on drawing hair at stale matrices — a head of hair hovering where a crew member
+    // used to stand, which is the ghost the delivery cars used to leave parked on a plot.
+    // `props[name] ?? n` below reads a zero as a zero, which is the whole reason it is `??`.
+    for (let s = 0; s < hairMeshes.length; s++) {
+      if (hairMeshes[s]) props[hairPartName(s)] = hairCounts[s]
+    }
     for (const [name, mesh] of Object.entries(this.parts)) {
       mesh.count = props[name] ?? n
       mesh.instanceMatrix.needsUpdate = true
