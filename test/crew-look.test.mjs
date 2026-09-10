@@ -92,9 +92,15 @@ test('there are three or four styles and one of them is bald', () => {
   assert.ok(HAIR_STYLES.some((s) => s.name === BALD), `no style named ${BALD}`)
 })
 
+// The head's own radius (astronauts.js P.headR), not P.helmetR (0.48) — the radius of the
+// helmet these figures no longer wear. Using 0.48 here would read as endorsing the wrong
+// number, in the one file whose job is guarding against exactly that mistake (task 2's face
+// cap shipped sized against helmetR and sat inside the skull at every one of its vertices).
+const HEAD_R = 0.554
+
 test('bald builds nothing, every other style builds geometry', () => {
   for (const style of HAIR_STYLES) {
-    const geo = style.geometry(0.48)
+    const geo = style.geometry(HEAD_R)
     if (style.name === BALD) {
       assert.equal(geo, null, 'bald should build no geometry')
       continue
@@ -105,9 +111,19 @@ test('bald builds nothing, every other style builds geometry', () => {
     // Read the extent off the box directly rather than through a Vector3, so this test does
     // not need a three.js import of its own.
     const height = geo.boundingBox.max.y - geo.boundingBox.min.y
-    assert.ok(height > 0 && height < 0.48 * 3, `${style.name} is ${height} tall against R 0.48`)
+    assert.ok(height > 0 && height < HEAD_R * 3, `${style.name} is ${height} tall against R ${HEAD_R}`)
     geo.dispose()
   }
+})
+
+test('hair is sized against the head, not the helmet the crew stopped wearing', () => {
+  // Source-level guard, the same idiom this file already uses for GONE/parts.head/head.setColorAt
+  // above: `geometry(HEAD_R)` alone only proves the *shape* is fine at whatever radius is passed
+  // in — it says nothing about what the real call site in astronauts.js actually sizes hair
+  // against at runtime. Task 2 shipped exactly this defect once (face cap built against
+  // helmetR, 187/187 vertices inside the skull), so the call site itself needs its own check.
+  assert.match(SRC, /style\.geometry\(P\.headR\)/, 'hair is not sized against the head radius')
+  assert.doesNotMatch(SRC, /geometry\(P\.helmetR\)/, 'something is sized against the helmet radius')
 })
 
 test('a thread always gets the same hairstyle', () => {
@@ -125,12 +141,36 @@ test('every hair index is inside the table', () => {
 test('hairstyle and skin tone are independent', () => {
   // Both hash the same id. If they used the same modulus in the same way, tone and style
   // would move together and the crew would come in matched pairs instead of looking varied.
+  //
+  // This id set is fixed (thread-0 .. thread-199) and both hashes are pure, so both halves
+  // below are deterministic — no flakiness in asserting them exactly rather than by threshold.
+  //
+  // A threshold of `pairs.size > SKIN_TONES.length` (i.e. > 6) does NOT do that: the defective
+  // hash the brief originally suggested (`hashString('hair:' + id) % 4`, no finalizer) reaches
+  // exactly 12 of the 24 possible pairs, and 12 > 6, so that assertion passes on the exact bug
+  // it exists to catch — every dark-skinned figure bald or long-haired, never short or bunned.
+  // The 12 pairs come from a shared, unmixed low bit: both `% 6` and `% 4` are even moduli, so
+  // both indices inherit the same parity and move together in lockstep on it.
+  //
+  // So assert the count exactly (24 = 6 tones x 4 styles, all reachable) and add a direct
+  // parity-independence bound the defective hash fails. Measured: shipped hash 94/200 parity
+  // agreements (47%, chance), defective hash 200/200 (100%, lockstep) — 70..130 sits safely
+  // between the two and is generous around the 50% chance expectation.
+  //
+  // Deliberately brittle: if SKIN_TONES or HAIR_STYLES ever changes length, `pairs.size` must
+  // be re-derived by hand rather than loosened back to a threshold — a threshold is exactly
+  // what let this defect through once already.
   const pairs = new Set()
+  let agree = 0
   for (let n = 0; n < 200; n++) {
     const id = `claude-code:thread-${n}`
-    pairs.add(`${skinToneIndexFor(id)}:${hairStyleIndexFor(id)}`)
+    const tone = skinToneIndexFor(id)
+    const style = hairStyleIndexFor(id)
+    pairs.add(`${tone}:${style}`)
+    if ((tone & 1) === (style & 1)) agree++
   }
-  assert.ok(pairs.size > SKIN_TONES.length, `only ${pairs.size} distinct combinations`)
+  assert.equal(pairs.size, SKIN_TONES.length * HAIR_STYLES.length, `only ${pairs.size} of 24 combinations`)
+  assert.ok(agree > 70 && agree < 130, `parities agreed ${agree}/200 times`)
 })
 
 test('hair.js cannot reach anything that knows a status', () => {
