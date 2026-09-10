@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { atlasTexture, hasPart } from './kit.js'
 import { Composer } from './buildings.js'
-import { DECK_TOP } from './plots.js'
+import { DECK_TOP, PLOT_CELL } from './plots.js'
 
 /**
  * The street surface: a carriageway down the middle of each street cell, and the kit's own
@@ -30,7 +30,7 @@ export const CARRIAGEWAY_WIDTH = 2.5
 export const roadTileScale = () => CARRIAGEWAY_WIDTH / ROAD_TILE_SIZE
 
 /** How many tiles are laid along one cell-to-cell hop. */
-const TILES_PER_HOP = Math.ceil((7.6 * Math.sqrt(3)) / CARRIAGEWAY_WIDTH)
+const TILES_PER_HOP = Math.ceil((PLOT_CELL * Math.sqrt(3)) / CARRIAGEWAY_WIDTH)
 
 /**
  * Where each patch of carriageway goes, and what kind it is.
@@ -39,19 +39,33 @@ const TILES_PER_HOP = Math.ceil((7.6 * Math.sqrt(3)) / CARRIAGEWAY_WIDTH)
  * a renderer. `radius` is the hex size, passed in rather than imported so a test can use 1
  * and read the arithmetic directly.
  *
+ * Two things a caller must say explicitly, because this function cannot guess them from
+ * `cells` alone:
+ *
+ * - `closed` — whether `cells` is a loop (the last cell connects back to the first, as
+ *   `streets.ring` does) or an open-ended run (a spur, which starts at a plot and ends on
+ *   the cell it joins). A closed run gets an extra hop laid from its last cell back to its
+ *   first, and its first and last cells are treated as interior — each has both an
+ *   incoming and an outgoing direction — so either can be a bend too.
+ * - `placed` — the dedup set. It defaults to a fresh `Set` per call, so a single run is
+ *   still deduplicated against itself exactly as before. Callers that lay more than one run
+ *   onto the same surface (the ring, then every spur) must pass one shared `Set` across all
+ *   of them, or a spur's chain — which ends *on* the ring cell it joins — lays a second,
+ *   exactly coincident patch on top of the ring's.
+ *
  * @param cells the street cells, in the order the road runs through them
  * @param radius hex size, centre to corner
+ * @param options.closed true for a closed loop (the ring); false (default) for an open run
+ * @param options.placed the cross-call dedup set; defaults to a fresh one for this call only
  * @returns one entry per patch: `{ x, z, kind }`, `kind` being `'straight'` or `'junction'`
  */
-export function carriagewayPoints(cells, radius) {
+export function carriagewayPoints(cells, radius, { closed = false, placed = new Set() } = {}) {
   const world = cells.map((c) => {
     const w = { x: radius * 1.5 * c.q, z: radius * Math.sqrt(3) * (c.r + c.q / 2) }
     return w
   })
-  if (world.length === 1) return [{ x: world[0].x, z: world[0].z, kind: 'junction' }]
 
   const out = []
-  const placed = new Set()
   const push = (x, z, kind) => {
     const k = `${x.toFixed(4)},${z.toFixed(4)}`
     if (placed.has(k)) return
@@ -59,24 +73,47 @@ export function carriagewayPoints(cells, radius) {
     out.push({ x, z, kind })
   }
 
-  for (let i = 1; i < world.length; i++) {
-    const a = world[i - 1]
-    const b = world[i]
+  if (world.length === 1) {
+    push(world[0].x, world[0].z, 'junction')
+    return out
+  }
+
+  // Hops between consecutive cells, plus — for a closed run — the extra hop that bridges
+  // the last cell back to the first, so a ring is actually a ring and not a horseshoe.
+  const hops = []
+  for (let i = 1; i < world.length; i++) hops.push([i - 1, i])
+  if (closed) hops.push([world.length - 1, 0])
+
+  for (const [ai, bi] of hops) {
+    const a = world[ai]
+    const b = world[bi]
     for (let t = 0; t < TILES_PER_HOP; t++) {
       const f = t / TILES_PER_HOP
       push(a.x + (b.x - a.x) * f, a.z + (b.z - a.z) * f, 'straight')
     }
   }
   // The last cell centre, which no hop's loop reaches because each stops short of its end.
-  const last = world[world.length - 1]
-  push(last.x, last.z, 'straight')
+  // A closed run doesn't need this: its closing hop's own t=0 tile already lands exactly
+  // there, as the start of the hop back to the first cell.
+  if (!closed) {
+    const last = world[world.length - 1]
+    push(last.x, last.z, 'straight')
+  }
 
   // Bends. A cell whose incoming and outgoing directions differ is a bend, and a bend gets
-  // a junction patch on its centre, replacing whatever straight was laid there.
-  for (let i = 1; i < world.length - 1; i++) {
-    const prev = cells[i - 1]
+  // a junction patch on its centre, replacing whatever straight was laid there. An open run's
+  // endpoints have no "other side" (a spur starts at a plot and ends on the cell it joins),
+  // so only its interior cells are checked. A closed run has no endpoints — every cell,
+  // including what would otherwise be index 0 and the last, sits between two neighbours —
+  // so every index is checked, wrapping around the loop.
+  const n = cells.length
+  const bendIndices = closed
+    ? Array.from({ length: n }, (_, i) => i)
+    : Array.from({ length: Math.max(0, n - 2) }, (_, i) => i + 1)
+  for (const i of bendIndices) {
+    const prev = cells[(i - 1 + n) % n]
     const here = cells[i]
-    const next = cells[i + 1]
+    const next = cells[(i + 1) % n]
     const inDir = { q: here.q - prev.q, r: here.r - prev.r }
     const outDir = { q: next.q - here.q, r: next.r - here.r }
     if (inDir.q === outDir.q && inDir.r === outDir.r) continue
@@ -118,8 +155,9 @@ export function createRoads({ streets, groundAt }) {
   group.userData.dispose = () => {}
   if (!streets || !hasPart(STRAIGHT_PART, 'city') || !hasPart(JUNCTION_PART, 'city')) return group
 
-  const runs = [streets.ring, ...streets.spurs.values()].filter((run) => run && run.length)
-  if (!runs.length) return group
+  const spurRuns = [...streets.spurs.values()].filter((run) => run && run.length)
+  const hasRing = streets.ring && streets.ring.length
+  if (!hasRing && !spurRuns.length) return group
 
   const scale = roadTileScale()
   const straights = new Composer({ kit: 'city' })
@@ -127,8 +165,17 @@ export function createRoads({ streets, groundAt }) {
   let straightCount = 0
   let junctionCount = 0
 
-  for (const run of runs) {
-    for (const patch of carriagewayPoints(run, 7.6)) {
+  // One dedup set shared across the ring and every spur: a spur's chain ends *on* the ring
+  // cell it joins, so without a shared set the ring's pass and the spur's pass would each
+  // lay an identical, exactly coincident patch there.
+  const placed = new Set()
+  // Computed once and reused below for the streetlights, so that second pass doesn't ask
+  // `carriagewayPoints` to lay patches onto an already-fully-`placed` set and get nothing back.
+  const ringPatches = hasRing ? carriagewayPoints(streets.ring, PLOT_CELL, { closed: true, placed }) : []
+  const runs = [ringPatches, ...spurRuns.map((run) => carriagewayPoints(run, PLOT_CELL, { placed }))]
+
+  for (const patches of runs) {
+    for (const patch of patches) {
       const composer = patch.kind === 'junction' ? junctions : straights
       const name = patch.kind === 'junction' ? JUNCTION_PART : STRAIGHT_PART
       composer.add(name, { s: scale, x: patch.x, y: DECK_TOP, z: patch.z })
@@ -141,13 +188,15 @@ export function createRoads({ streets, groundAt }) {
   if (straightCount) meshes.push(new THREE.Mesh(straights.finish(), roadMaterial()))
   if (junctionCount) meshes.push(new THREE.Mesh(junctions.finish(), roadMaterial()))
 
-  if (hasPart(LAMP_PART, 'city')) {
+  if (hasPart(LAMP_PART, 'city') && ringPatches.length) {
     const lamps = new Composer({ kit: 'city' })
     let lampCount = 0
     // One lamp every fourth patch along the ring, on the verge rather than the carriageway:
-    // half a carriageway plus a little, out from the centre line.
+    // half a carriageway plus a little, out from the centre line. Reuses `ringPatches` from
+    // above rather than calling `carriagewayPoints(streets.ring, ...)` again — with a shared
+    // `placed` set, a second call would find every one of the ring's coordinates already
+    // taken and return nothing.
     const offset = CARRIAGEWAY_WIDTH * 0.5 + 0.6
-    const ringPatches = carriagewayPoints(streets.ring, 7.6)
     for (let i = 0; i < ringPatches.length; i += 4) {
       const p = ringPatches[i]
       const y = groundAt ? Math.max(DECK_TOP, groundAt(p.x + offset, p.z)) : DECK_TOP
