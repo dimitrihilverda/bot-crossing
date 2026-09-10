@@ -141,8 +141,8 @@ working here right now" marker, using the same `_isActive` predicate `Scaffolds`
   skip and nothing more: the crew member walks its own navigation path throughout, so the car
   (3.2 u/s along a straight hex line) and the figure (2.1 u/s ± 14 % per crew member, around
   whatever the grid says is in the way, with an acceleration ramp and braking on arrival) are
-  two independent motions. The car parks first — about a third of the way ahead — and its crew
-  member comes back into view part-way down the street to walk the rest in on foot. That is
+  two independent motions. The car parks with its crew member still roughly a third of the
+  route short, and the figure comes back into view there to walk the rest in on foot. That is
   not a mistuned constant to be fixed by slowing the car down: because a crew member is
   released the moment it *stops walking*, a slower car would simply move the mismatch to the
   other side, with the figure standing on its plot before its own car pulled up. What the car
