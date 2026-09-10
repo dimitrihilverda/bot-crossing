@@ -564,15 +564,15 @@ crawl. Everything in both is drawn from paths, so the only cost of more texels i
 
 ## The faces
 
-Each face is a little rounded screen sitting on the head — the patch is a rectangle in UV
-space, so its rounded silhouette is cut in the fragment shader with a rounded-box SDF, which
-gives soft corners a rectangular patch can never have and lets the skin show through where the
-screen ends. All sixteen expressions are drawn once into a single 4×4
-canvas atlas as a white-on-black **mask** — never as finished artwork — and the colour arrives
-per-astronaut at draw time, so one 512px texture gives every agent its own eye colour without
-a second byte of memory. The shader reads the mask out of the red channel, blends between the
-dark screen and that astronaut's glow, and adds scanlines and a vignette so it reads as a
-screen rather than a decal.
+Each face is drawn straight onto the skin of the head, not onto a panel sitting in front of
+it — there is no shape cut for it at all, only the features themselves. All sixteen expressions
+are drawn once into a single 4×4 canvas atlas as a white-on-black **mask** — never as finished
+artwork — and the colour arrives per-crew-member at draw time, so one 512px texture gives every
+agent its own eye colour without a second byte of memory. The shader reads the mask's red
+channel straight into alpha and uses the crew member's own glow colour as the RGB, so only the
+eyes and mouth are drawn at all. Every shape in the atlas is filled as a path, so its edges are
+already antialiased; that antialiasing is the only source of in-between values, which is what
+gives the features soft edges against the skin without a single extra sample.
 
 They blink on their own clocks, so a crowd never blinks in unison.
 
