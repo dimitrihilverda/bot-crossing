@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 import { buildFaceAtlas, FACE, FACE_LOOPS, FRAME_COLS, FRAME_ROWS } from './faces.js'
 import { attachMatrixAt, decorateSkinned, frameFor } from './crew.js'
+import { skinToneFor } from './skin.js'
 
 /**
  * Every astronaut in the colony, drawn in a handful of draw calls.
@@ -116,7 +117,17 @@ const CREW_SCALE = 0.56
  */
 const P = {
   helmetR: 0.48,
-  headUp: 0.46, // the head bone sits at the neck; the helmet centres above it
+  headUp: 0.46, // the head bone sits at the neck; the head and the face centre above it
+  /**
+   * How far the mannequin's own head reaches from that centre, straight out into the face.
+   *
+   * Measured off `crew.glb` rather than guessed: over the patch of the face cap where the
+   * features are actually drawn, the head's surface is at most 0.554 from the face origin.
+   * This is what the face is painted on now — the old 0.48 was the *helmet's* radius, and
+   * the head under it is a good deal bigger than the helmet was, so a cap sized to the
+   * helmet sinks about 0.05 inside the brow and the features disappear into the skull.
+   */
+  headR: 0.554,
   // The hammer, in the right hand's own frame. The hand bone's own +Y runs back down the
   // forearm, so the shaft is turned through half a circle to stand the head up out of the
   // fist rather than hang it through the floor.
@@ -216,11 +227,13 @@ export class Astronauts {
     parts.cabinet = this._mesh(cabinetGeometry(), suit(0.72, { vertexColors: true }), capacity, true)
     parts.box = this._mesh(movingBoxGeometry(), suit(0.85, { vertexColors: true }), capacity, true)
 
-    // Face: the features only. Built as a sphere cap at a hair over the helmet radius, so
-    // it sits on the same curved surface a helmet would occupy instead of floating flat in
-    // front of it — a flat plane at this radius sinks inside that curve and the features
-    // disappear.
-    const faceGeo = sphereCap(P.helmetR * 1.047, 1.72, 0.98, 16, 10)
+    // Face: the features only. Built as a sphere cap at a hair over the head's own radius, so
+    // it sits on the curved surface of the head instead of floating flat in front of it — a
+    // flat plane at this radius sinks inside that curve and the features disappear. Now that
+    // there is a solid head behind it rather than a helmet, "a hair over" has to be measured
+    // against the head: at `headR * 1.047` the features clear the brow by 0.026 to 0.053,
+    // which is what keeps them on the front of the face rather than inside it.
+    const faceGeo = sphereCap(P.headR * 1.047, 1.72, 0.98, 16, 10)
     parts.face = this._mesh(faceGeo, this._faceMaterial(), capacity, false)
     this._attachFrameAttribute(parts.face, capacity)
 
@@ -286,6 +299,28 @@ export class Astronauts {
 
     this.crew = mesh
     this.group.add(mesh)
+
+    // The head. It comes with the rig rather than with the rest of the parts, so it is built
+    // here and not in `_buildMeshes` — and it is its own instanced mesh rather than part of
+    // the body for two reasons: it is rigid, so skinning it would be a weighted sum that can
+    // only ever return one bone's matrix, and it needs an `instanceColor` of its own to carry
+    // the skin tone. The body's is already spoken for by the work clothes.
+    //
+    // `rig.headGeometry` arrives in the head bone's own local frame, and the slot write in
+    // `_writeMatrices` places it at that bone *plus* `P.headUp` — so the geometry is shifted
+    // down by exactly that offset and the two cancel, putting the head back into the rest
+    // pose it had inside the body. Writing it at the face's offset rather than at the bone
+    // is deliberate: the head and the face are then placed by one identical matrix, and a
+    // face cannot drift off the head it is painted on however the neck is turned.
+    const headGeo = rig.headGeometry.clone()
+    headGeo.translate(0, -P.headUp, 0)
+    // Skin: rougher than the work clothes and not metallic at all. `vertexColors` stays off,
+    // so the only thing tinting it is the instance colour — which is the tone itself.
+    const skin = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7, metalness: 0 })
+    this.parts.head = this._mesh(headGeo, skin, this.capacity, true)
+    this.parts.head.frustumCulled = false
+    this.group.add(this.parts.head)
+
     this._applyShadowFlags()
 
     // Bones anything worn hangs off. Read back per frame from the same baked table the
@@ -302,6 +337,16 @@ export class Astronauts {
   }
 
   _disposeCrew() {
+    // The head belongs to the rig, not to `_buildMeshes`, so it is torn down with the rig
+    // rather than with the rest of the parts — and taking it off `this.parts` here is what
+    // stops the capacity rebuild, which disposes everything still on that object, from
+    // disposing it a second time.
+    if (this.parts.head) {
+      this.group.remove(this.parts.head)
+      this.parts.head.geometry.dispose()
+      this.parts.head.material.dispose()
+      delete this.parts.head
+    }
     if (!this.crew) return
     this.group.remove(this.crew)
     this.crew.geometry.dispose()
@@ -1129,7 +1174,7 @@ export class Astronauts {
   // ── writing the instance buffers ────────────────────────────────────────────────────
 
   _writeMatrices(elapsed, anim) {
-    const { face, hammer, cabinet, box } = this.parts
+    const { head, face, hammer, cabinet, box } = this.parts
     const rig = this.rig
     const crew = this.crew
     const root = this._m
@@ -1201,6 +1246,10 @@ export class Astronauts {
       if (rig) {
         attachMatrixAt(rig, agent.frame, this.headSlot, bone)
         worn.multiplyMatrices(root, bone)
+        // One matrix, two parts. The head is the body's own head put back where skinning
+        // would have left it; the face is drawn on the front of it. Sharing the write is
+        // what guarantees they stay together — see `setRig` for why the offset cancels.
+        setPart(child, worn, head, i, 0, P.headUp, 0, 0, 0, 0)
         setPart(child, worn, face, i, 0, P.headUp, 0, 0, 0, 0)
 
         // The hammer only exists while a thread is running, so it gets its own instance
@@ -1231,6 +1280,15 @@ export class Astronauts {
         agent.colorDirty = false
         crew?.setColorAt(i, c.setHex(agent.suit))
         face.setColorAt(i, agent.eye)
+        // Skin tone sits under the same gate for the same reason the others do: it is a
+        // property of *which slot this agent is in*, not of the frame. It is keyed off the
+        // thread id rather than off anything in `agent`, so it is the one colour here that
+        // survives a status change untouched — but it still has to be rewritten when the
+        // slot changes, because the agent that used to hold slot `i` left its own tone in it.
+        //
+        // Guarded the way the body is: the head arrives with the rig, so there is a moment
+        // at boot where an agent has a colour to write and nothing to write it on.
+        if (head) head.setColorAt(i, skinToneFor(agent.id))
         staticDirty = true
       }
 

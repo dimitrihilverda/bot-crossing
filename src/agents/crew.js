@@ -72,11 +72,20 @@ const CLIP = {
 
 const CREW_URL = `${import.meta.env.BASE_URL}assets/crew.glb`
 
+/** The mannequin's own head, kept out of the merged body and handed over on its own. */
+const HEAD_MESH = 'Mannequin_Medium_Head'
+
 /**
- * The mannequin's own head is left out of the body: the colony puts its own helmet, visor
- * and screen-face on the head bone instead, which is the whole of the astronaut's identity.
+ * Meshes the merged body leaves out.
+ *
+ * Only the head, and it is left out to be *placed* rather than to be thrown away. All 959 of
+ * its vertices are weighted 1.0 to the single `head` bone — measured against `crew.glb`, not
+ * assumed — so it does not deform, and skinning it with the body would be paying for a
+ * weighted sum that can only ever return one bone's matrix. Riding the head bone as an
+ * attachment is cheaper, and it is also the only way the head can carry a per-agent skin
+ * tone: the body's instance colour is already spoken for by the work clothes.
  */
-const DROP_MESHES = ['Mannequin_Medium_Head']
+const DROP_MESHES = [HEAD_MESH]
 
 let loading = null
 let rig = null
@@ -108,9 +117,72 @@ async function bake(dropMeshes = DROP_MESHES) {
   const boneIndex = new Map(bones.map((b, i) => [b.name, i]))
 
   const geometry = mergeBody(skinned, dropMeshes)
+  const headGeometry = extractHead(skinned, skeleton)
   const bake = bakeClips(root, skeleton, skinned[0], gltf.animations)
 
-  return { geometry, bones, boneIndex, ...bake }
+  return { geometry, headGeometry, bones, boneIndex, ...bake }
+}
+
+/**
+ * Three's loader sanitises node names on the way in — a dot is a path separator in an
+ * animation track, so `hand.r` arrives as `handr`. Matching loosely costs nothing and the
+ * alternative is a prop pinned to the world origin.
+ */
+const plain = (n) => n.replace(/[.\s_]/g, '').toLowerCase()
+
+function boneNamed(skeleton, name) {
+  const i = skeleton.bones.findIndex((b) => plain(b.name) === plain(name))
+  if (i < 0) throw new Error(`crew: crew.glb has no bone "${name}"`)
+  return i
+}
+
+/**
+ * Lift the head out of the skin and into the head bone's own local frame.
+ *
+ * `bakeClips` below calls `world * bindInverse * bone * bindMatrix` "the whole of three's
+ * skinning", and that is the product to undo here — with `bone` standing for
+ * `bone.matrixWorld * boneInverse`, which is what `Skeleton.update` leaves in
+ * `boneMatrices`. Because every head vertex is weighted 1.0 to one bone, the weighted sum
+ * collapses to that single product and the head can be moved out from under it exactly.
+ *
+ * Bake `boneInverse * world` into the vertices and the geometry lands in the bone's rest
+ * frame. Placing it back at `bone.matrixWorld` — which is what `attachMatrixAt` reads out of
+ * the side-table — then reproduces skinning term for term: at rest the two cancel and the
+ * head sits where it sat inside the body, and on any other frame it goes where the skin
+ * would have taken it. Measured on `crew.glb`: `bindMatrix` and `matrixWorld` are both
+ * identity there, so in practice this is the bone's rest translation of 1.2414 taken back
+ * out, but the full product is written down because a re-export could change that.
+ *
+ * The skin weights do not come along — nothing downstream skins this geometry — and neither
+ * do the UVs, since the pack's texture is a name badge and a smiley and the colony paints
+ * its own face on the front instead.
+ */
+function extractHead(skinned, skeleton) {
+  const mesh = skinned.find((m) => m.name === HEAD_MESH)
+  if (!mesh) throw new Error(`crew: crew.glb has no ${HEAD_MESH}`)
+
+  const src = mesh.geometry
+  const geo = new THREE.BufferGeometry()
+  for (const name of ['position', 'normal']) {
+    const a = src.getAttribute(name)
+    if (!a) throw new Error(`crew: ${HEAD_MESH} has no ${name}`)
+    const size = a.itemSize
+    const data = new Float32Array(a.count * size)
+    for (let i = 0; i < a.count; i++) {
+      for (let k = 0; k < size; k++) data[i * size + k] = a.getComponent(i, k)
+    }
+    geo.setAttribute(name, new THREE.BufferAttribute(data, size))
+  }
+  if (src.index) geo.setIndex(Array.from(src.index.array))
+
+  const bake = new THREE.Matrix4().multiplyMatrices(
+    skeleton.boneInverses[boneNamed(skeleton, 'head')],
+    mesh.matrixWorld
+  )
+  geo.applyMatrix4(bake)
+  geo.computeBoundingBox()
+  geo.computeBoundingSphere()
+  return geo
 }
 
 /**
@@ -185,10 +257,7 @@ function bakeClips(root, skeleton, mesh, animations) {
   // Side-table of world transforms for the attachment bones — what the helmet and backpack
   // read. The skinning matrices in `data` cannot answer "where is the head": they map bind
   // space to posed space, which is only the same thing when the bind matrices are identity.
-  // Three's loader sanitises node names on the way in — a dot is a path separator in an
-  // animation track, so `hand.r` arrives as `handr`. Matching loosely costs nothing and the
-  // alternative is a table of silent zeros and a prop pinned to the world origin.
-  const plain = (n) => n.replace(/[.\s_]/g, '').toLowerCase()
+  // Names are matched through `plain()` above, because three sanitises them on the way in.
   const attachBones = ATTACH.map((name) => skeleton.bones.findIndex((b) => plain(b.name) === plain(name)))
   const lost = ATTACH.filter((_, i) => attachBones[i] < 0)
   if (lost.length) throw new Error(`crew: no bone for attachment ${lost.join(', ')}`)
