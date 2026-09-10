@@ -71,7 +71,7 @@ const CLIP = {
   carry: { name: 'Holding_A', loop: true },
 }
 
-const CREW_URL = `${import.meta.env?.BASE_URL ?? '/'}assets/crew.glb`
+const CREW_URL = `${import.meta.env.BASE_URL}assets/crew.glb`
 
 /** The mannequin's own head, kept out of the merged body and handed over on its own. */
 const HEAD_MESH = 'Mannequin_Medium_Head'

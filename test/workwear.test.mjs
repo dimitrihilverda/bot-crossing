@@ -1,6 +1,15 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { SUIT_TONES, AGENT_LOOK } from '../src/agents/astronauts.js'
+import { readFileSync } from 'node:fs'
+import { SUIT_TONES } from '../src/agents/workwear.js'
+
+/**
+ * The eight trim colours, read out of the source rather than imported: `astronauts.js`
+ * needs a GL context and a loaded glb to import, which is why `crew-look.test.mjs` reads
+ * it as text too.
+ */
+const SRC = readFileSync('src/agents/astronauts.js', 'utf8')
+const TRIMS = [...SRC.matchAll(/trim:\s*(0x[0-9a-fA-F]{6})/g)].map((m) => Number(m[1]))
 
 /**
  * sRGB channel triple, 0..1. Distances are taken here rather than in linear RGB
@@ -22,17 +31,21 @@ const distance = (a, b) => {
 const MIN_DISTANCE = 0.15
 const MIN_LUMINANCE_RATIO = 1.15
 
+test('all eight trim colours were found in the source', () => {
+  assert.equal(TRIMS.length, 8)
+})
+
 test('there are five workwear tones', () => {
   assert.equal(SUIT_TONES.length, 5)
 })
 
 test('no workwear tone can be confused with a status trim colour', () => {
   for (const suit of SUIT_TONES) {
-    for (const [status, look] of Object.entries(AGENT_LOOK)) {
-      const d = distance(suit, look.trim)
+    for (const trim of TRIMS) {
+      const d = distance(suit, trim)
       assert.ok(
         d >= MIN_DISTANCE,
-        `suit 0x${suit.toString(16)} is ${d.toFixed(3)} from ${status}'s trim, under ${MIN_DISTANCE}`
+        `suit 0x${suit.toString(16)} is ${d.toFixed(3)} from trim 0x${trim.toString(16)}, under ${MIN_DISTANCE}`
       )
     }
   }
@@ -43,11 +56,11 @@ test('every trim colour is brighter than every workwear tone', () => {
   // stages 1 to 3: trims measure 0.09 to 0.41 in luminance and the old white bodies
   // measured 0.77 to 0.91, so the band was a dark smudge on a white suit.
   for (const suit of SUIT_TONES) {
-    for (const [status, look] of Object.entries(AGENT_LOOK)) {
-      const ratio = luminance(look.trim) / luminance(suit)
+    for (const trim of TRIMS) {
+      const ratio = luminance(trim) / luminance(suit)
       assert.ok(
         ratio >= MIN_LUMINANCE_RATIO,
-        `${status}'s trim is only ${ratio.toFixed(2)}x suit 0x${suit.toString(16)}, under ${MIN_LUMINANCE_RATIO}`
+        `trim 0x${trim.toString(16)} is only ${ratio.toFixed(2)}x suit 0x${suit.toString(16)}, under ${MIN_LUMINANCE_RATIO}`
       )
     }
   }
