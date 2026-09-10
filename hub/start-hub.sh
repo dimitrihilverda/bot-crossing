@@ -16,6 +16,12 @@
 #                         directory, i.e. wherever `hub/` was cloned.
 #   BOT_CROSSING_CHROMIUM Chromium binary. Default: `chromium`, falling back to
 #                         `chromium-browser` (the name Debian/Ubuntu package under).
+#   BOT_CROSSING_CHROME_PROFILE_DIR
+#                         Chromium `--user-data-dir` for the kiosk profile. Default
+#                         "$HOME/.config/bot-crossing-hub-chrome", created if missing. A
+#                         persistent (non-incognito) profile so the hub's mute state
+#                         (`botcrossing.hub.muted`) and render-quality preset
+#                         (`botcrossing.settings.v1`), both `localStorage`, survive restarts.
 #   BOT_CROSSING_PORT_WAIT_SECS
 #                         How long to wait for the server before giving up. Default 60.
 #
@@ -27,6 +33,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${BOT_CROSSING_REPO:-$(cd "$HERE/.." && pwd)}"
 PORT="${PORT:-5274}"
 WAIT_SECS="${BOT_CROSSING_PORT_WAIT_SECS:-60}"
+CHROME_PROFILE_DIR="${BOT_CROSSING_CHROME_PROFILE_DIR:-$HOME/.config/bot-crossing-hub-chrome}"
 URL="http://localhost:${PORT}/?hub=1"
 
 cd "$REPO"
@@ -87,10 +94,18 @@ if [ -z "$ready" ]; then
   exit 1
 fi
 
-echo "start-hub.sh: opening Chromium kiosk on ${URL}"
-"$CHROMIUM_BIN" --kiosk --app="$URL" --noerrdialogs --disable-infobars --incognito &
+mkdir -p "$CHROME_PROFILE_DIR"
+
+echo "start-hub.sh: opening Chromium kiosk on ${URL} (profile: ${CHROME_PROFILE_DIR})"
+"$CHROMIUM_BIN" --kiosk --app="$URL" --noerrdialogs --disable-infobars \
+  --user-data-dir="$CHROME_PROFILE_DIR" &
 CHROMIUM_PID=$!
 
-# Block here for as long as Chromium is up; its exit (crash, or `systemctl stop`'s TERM
-# reaching this script and the trap killing it) is this script's own exit.
-wait "$CHROMIUM_PID"
+# Block here until either child exits first. Chromium exiting (crash, or `systemctl stop`'s
+# TERM reaching this script and the trap killing everything) is the expected shutdown path.
+# But the server exiting first (e.g. an unhandled error in `serve.mjs` after the page already
+# loaded) matters just as much — without watching for it too, Chromium would sit there
+# showing a stale page forever with nothing wrong from systemd's point of view, and
+# Restart=always would never fire. `wait -n` on both PIDs ends the script the moment either
+# one goes down; the trap above then tears down whichever child is still alive.
+wait -n "$SERVER_PID" "$CHROMIUM_PID"

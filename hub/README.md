@@ -77,7 +77,7 @@ an always-on reader look like a dead neighbour whenever the wall display itself 
 polling them, which it never does).
 
 **Each teammate**, on their own machine: open **Settings → Shared colonies → Allow a
-screen/hub to read me**, and add the NUC's `100.x` Tailscale IP there.
+screen / hub to read me**, and add the NUC's `100.x` Tailscale IP there.
 
 **On the hub**, add every teammate as a neighbour so their threads flow into `/api/threads`
 and get merged into the board. Either through the UI (Settings → Shared colonies → add each
@@ -109,14 +109,13 @@ Default the hub's own view to the **Low** preset (Settings → the quality picke
 520 handles the 3D colony comfortably there. Try **Balanced** if it stays smooth; if not,
 drop back to Low.
 
-Caveat: `hub/start-hub.sh` launches Chromium with `--incognito`, so nothing saved to
-`localStorage` (which is where the quality preset lives — it is not part of
-`data/colony.json`) survives a restart of the kiosk. In practice this means the hub falls
-back to the app's own default (`Balanced`) every time systemd restarts it. If Balanced
-turns out not to be smooth enough and Low needs to stick, either re-pick it after every
-restart, or run Chromium with a persistent profile instead of `--incognito`
-(`--user-data-dir=/home/<user>/.config/bot-crossing-chromium` in place of `--incognito` in
-`start-hub.sh`) so the choice survives.
+`hub/start-hub.sh` runs Chromium against a persistent profile
+(`--user-data-dir`, default `~/.config/bot-crossing-hub-chrome`), not `--incognito`, so
+whatever you pick here — like the mute toggle on the hub's own alert sound — survives a
+restart of the kiosk (a crash, a reboot, `systemctl restart`) instead of resetting to the
+app's defaults every time. Both live in `localStorage`
+(`botcrossing.settings.v1` and `botcrossing.hub.muted` respectively), not
+`data/colony.json`, which is why the profile needs to persist for either to stick.
 
 ## 6. Enable the service
 
@@ -156,9 +155,16 @@ Chromium crash or a reboot brings the wall back on its own.
 - **"neither chromium nor chromium-browser":** install one of the two, or set
   `BOT_CROSSING_CHROMIUM` in the service's `Environment=` to the exact binary name/path.
 - **A teammate's colony never appears / stays offline:** confirm they added the hub's
-  `100.x` IP under *Allow a screen/hub to read me*, and that the hub's neighbour entry uses
+  `100.x` IP under *Allow a screen / hub to read me*, and that the hub's neighbour entry uses
   their `100.x` IP and port `5275`. `tailscale ping <their-100.x-ip>` proves the tailnet
   path works before blaming the app.
+- **Service stays inactive / never starts:** this unit is keyed off `graphical-session.target`
+  (`After=`/`PartOf=`/`WantedBy=`), which only activates under a systemd-aware display/login
+  manager (gdm, sddm, lightdm). A bare `startx`/`.xinitrc` auto-login does not activate it on
+  its own. Check `systemctl --user status graphical-session.target` — if it isn't `active`,
+  either switch the auto-login to a login manager, or have the session startup (`.xinitrc` or
+  equivalent) run `systemctl --user start graphical-session.target` itself before the unit is
+  expected to come up.
 - **Testing the merge/HUD without teammates or a NUC handy:** `hub/dev-two-colonies.mjs`
   spins up two fake colonies plus a hub on one machine, entirely on loopback.
 
