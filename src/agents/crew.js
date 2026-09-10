@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
+import { assertIdentity } from './head-bind.js'
 
 /**
  * Real skeletal animation for the whole crew, in one draw call.
@@ -140,18 +141,25 @@ function boneNamed(skeleton, name) {
  * Lift the head out of the skin and into the head bone's own local frame.
  *
  * `bakeClips` below calls `world * bindInverse * bone * bindMatrix` "the whole of three's
- * skinning", and that is the product to undo here — with `bone` standing for
- * `bone.matrixWorld * boneInverse`, which is what `Skeleton.update` leaves in
- * `boneMatrices`. Because every head vertex is weighted 1.0 to one bone, the weighted sum
- * collapses to that single product and the head can be moved out from under it exactly.
+ * skinning", with `bone` standing for `bone.matrixWorld * boneInverse`, which is what
+ * `Skeleton.update` leaves in `boneMatrices`. Because every head vertex is weighted 1.0 to
+ * one bone, the weighted sum collapses to that single product, and a rigid mesh riding one
+ * bone can be described by a single static matrix baked into its vertices instead of being
+ * skinned every frame.
  *
- * Bake `boneInverse * world` into the vertices and the geometry lands in the bone's rest
- * frame. Placing it back at `bone.matrixWorld` — which is what `attachMatrixAt` reads out of
- * the side-table — then reproduces skinning term for term: at rest the two cancel and the
- * head sits where it sat inside the body, and on any other frame it goes where the skin
- * would have taken it. Measured on `crew.glb`: `bindMatrix` and `matrixWorld` are both
- * identity there, so in practice this is the bone's rest translation of 1.2414 taken back
- * out, but the full product is written down because a re-export could change that.
+ * What is actually baked here is only `boneInverse * world` — there is no `bindMatrix` term
+ * anywhere below. That is *not* the general inverse of the product above: substituting it
+ * back in, the baked placement equals true skinning on every frame if and only if
+ * `world * bindInverse` is the identity, which happens exactly when this mesh's own
+ * `bindMatrix` equals its `matrixWorld`. On the committed `crew.glb` both of those matrices
+ * measure as the identity (checked below, not assumed), which makes the condition hold
+ * trivially and reduces the whole bake to "undo the head bone's rest translation of 1.2414".
+ * A re-export that gave this mesh a non-identity `bindMatrix` or moved it out from under the
+ * scene root (`matrixWorld` no longer identity) would break that equality, and every head in
+ * the colony would be placed at a silently wrong offset — no shader error, no failing test.
+ * The guard just below turns that into a loud failure at load instead: if it ever fires, the
+ * fix is not to weaken the guard but to restore the missing `bindMatrix` term in the bake
+ * (and drop this comment's "identity" claims down to whatever the new export actually is).
  *
  * The skin weights do not come along — nothing downstream skins this geometry — and neither
  * do the UVs, since the pack's texture is a name badge and a smiley and the colony paints
@@ -160,6 +168,8 @@ function boneNamed(skeleton, name) {
 function extractHead(skinned, skeleton) {
   const mesh = skinned.find((m) => m.name === HEAD_MESH)
   if (!mesh) throw new Error(`crew: crew.glb has no ${HEAD_MESH}`)
+  assertIdentity(`${HEAD_MESH}.bindMatrix`, mesh.bindMatrix)
+  assertIdentity(`${HEAD_MESH}.matrixWorld`, mesh.matrixWorld)
 
   const src = mesh.geometry
   const geo = new THREE.BufferGeometry()
