@@ -160,8 +160,9 @@ systemctl set-default graphical.target
 systemctl enable lightdm
 
 # Openbox has no panel or blanking of its own to fight, but make doubly sure a wall never sleeps
-# and the idle pointer is hidden.
-install -d -o "$BCH_USER" -g "$BCH_USER" "${USER_HOME}/.config/openbox"
+# and the idle pointer is hidden. Create ~/.config as the user FIRST — otherwise it is created
+# root-owned as a side effect, and step [8/8]'s ~/.config/systemd write then fails.
+install -d -o "$BCH_USER" -g "$BCH_USER" "${USER_HOME}/.config" "${USER_HOME}/.config/openbox"
 cat > "${USER_HOME}/.config/openbox/autostart" <<'OB'
 xset s off -dpms &
 xset s noblank &
