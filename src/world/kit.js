@@ -77,7 +77,7 @@ const KITS = {
   base: { file: 'spacebase.glb', parts: new Map(), solo: new Map(), atlas: null },
   /** Forest Nature Pack: trees, bushes, grass, and the boulders on every world. */
   forest: { file: 'forest.glb', parts: new Map(), solo: new Map(), atlas: null },
-  /** City Builder Bits: house shells, pavement, fences, and later the vans. */
+  /** City Builder Bits: house shells, pavement, fences, and the delivery car. */
   city: { file: 'city.glb', parts: new Map(), solo: new Map(), atlas: null },
   /** Furniture Bits: everything that goes inside a house. */
   furniture: { file: 'furniture.glb', parts: new Map(), solo: new Map(), atlas: null },

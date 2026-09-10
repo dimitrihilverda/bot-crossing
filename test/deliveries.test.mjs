@@ -3,12 +3,21 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { NodeIO } from '@gltf-transform/core'
 import * as THREE from 'three'
-import { CAR_PARTS, LOAD_PART, WHEEL_RADIUS, Deliveries, wheelSpin } from '../src/world/deliveries.js'
+import {
+  CAR_PARTS,
+  CAR_SPEED,
+  LOAD_PART,
+  WHEEL_RADIUS,
+  Deliveries,
+  wheelSpin,
+} from '../src/world/deliveries.js'
 import {
   kerbBack,
   driveStep,
   pathLength,
   pointAt,
+  ridesAlong,
+  RIDING_STATE,
   KERB_CLEARANCE,
   KERB_MIN_CLEARANCE,
 } from '../src/world/drive-path.js'
@@ -441,11 +450,40 @@ test('driven and the route agree: a full ramp ends the car at the kerb', () => {
   assert.ok(12 - at.x > HOUSE_FOOTPRINT, 'the car parked inside the house')
 })
 
-// ── the return trip: the house waits for its van, and the entry always leaves ──────────────
+test('the car outruns its crew member, which is what the README and the spec describe', () => {
+  // `riding` is a draw-time skip and nothing more: the crew member walks its own navigation
+  // path the whole time, so the car and the figure are two independent motions. Which of them
+  // arrives first is therefore a comparison of two constants in two different modules that no
+  // one file is responsible for — and the documents describe the answer, so the answer is
+  // pinned here.
+  //
+  // The car wins by construction. It is faster than the fastest crew member can be, it drives
+  // a straight hex line where the crew walks a grid path around whatever is in the way, and it
+  // has neither the acceleration ramp nor the braking inside 1.8 units that `_walk` gives a
+  // figure. So the car parks first and its crew member walks the last of the street on foot —
+  // which is what README.md and the Stage 2 section of the spec now say. Bring `CAR_SPEED`
+  // down into the walking band and that stops being true, so this fails and the documents get
+  // re-read rather than quietly going stale.
+  const src = readFileSync('src/agents/astronauts.js', 'utf8')
+  const walk = Number(src.match(/^const WALK_SPEED = ([0-9.]+)$/m)?.[1])
+  assert.ok(walk > 0, 'WALK_SPEED not found in astronauts.js')
+  // Per-agent jitter, so a crowd never moves in lockstep: `WALK_SPEED * (0.86 + rand * 0.28)`.
+  const jitter = src.match(/speed: WALK_SPEED \* \(([0-9.]+) \+ Math\.random\(\) \* ([0-9.]+)\)/)
+  assert.ok(jitter, 'the per-agent walk jitter is not where this test expects it')
+  const fastest = walk * (Number(jitter[1]) + Number(jitter[2]))
+
+  assert.ok(
+    CAR_SPEED > fastest,
+    `CAR_SPEED ${CAR_SPEED} is not above the fastest crew member at ${fastest.toFixed(3)} u/s, ` +
+      'so the car no longer reliably arrives first'
+  )
+})
+
+// ── the return trip: the house waits for its car, and the entry always leaves ──────────────
 //
 // The retire path has two failure modes and they pull in opposite directions. Take the entry
-// out too early and its van vanishes mid-street, because the entry is the only record of how
-// far along its route the van had got. Wait for something that never arrives and the entry
+// out too early and its car vanishes mid-street, because the entry is the only record of how
+// far along its route the car had got. Wait for something that never arrives and the entry
 // leaks forever — an invisible house holding its slot, its accent and its route — and *that*
 // one is invisible on screen too, so it has to be argued rather than watched.
 //
@@ -467,7 +505,7 @@ test('both values a retiring entry waits on arrive exactly, from any starting po
       let driven = length
       let progress = from
       let frames = 0
-      // The colony's own loop: the reveal is held at RETIRE_HOLD while the van is out, and
+      // The colony's own loop: the reveal is held at RETIRE_HOLD while the car is out, and
       // released to 0 on the frame it gets home.
       while (driven > 0 || progress > RETIRED_PROGRESS) {
         progress = stepProgress(progress, driven > 0 ? RETIRE_HOLD : 0, dt)
@@ -475,9 +513,9 @@ test('both values a retiring entry waits on arrive exactly, from any starting po
         assert.ok(driven >= 0, `driven reversed past the depot: ${driven}`)
         assert.ok(++frames < 20000, `never released: driven ${driven}, progress ${progress}`)
       }
-      assert.equal(driven, 0, 'the van has to land on the depot, not near it')
+      assert.equal(driven, 0, 'the car has to land on the depot, not near it')
       // Held above the release threshold for the whole drive, so the house is still standing
-      // at its address while the van is on the road.
+      // at its address while the car is on the road.
       assert.ok(RETIRE_HOLD > RETIRED_PROGRESS, 'the hold has to keep the house on screen')
     }
   }
@@ -486,7 +524,7 @@ test('both values a retiring entry waits on arrive exactly, from any starting po
 test('the hold keeps a retiring site inside the range the delivery still visits', () => {
   // The subtle half of the leak. `_updateDeliveries` skips a site that has not broken ground,
   // and a skipped site is one whose `driven` stops being stepped — so a reveal wound all the
-  // way down before the van got home would strand it. The hold sits above the delivery
+  // way down before the car got home would strand it. The hold sits above the delivery
   // threshold for exactly that reason, and below the first furniture reveal so the house
   // stands there emptied.
   const src = readFileSync('src/game/colony.js', 'utf8')
@@ -505,18 +543,18 @@ test('the hold keeps a retiring site inside the range the delivery still visits'
   assert.ok(hold < 0.05, `hold ${hold} must be below the first furniture reveal at 0.05`)
 })
 
-test('a retiring entry is not removed until its van is home', () => {
+test('a retiring entry is not removed until its car is home', () => {
   const src = readFileSync('src/game/colony.js', 'utf8')
   const remove = src.match(/_removeBuilding\(id, entry\) \{[\s\S]*?\n {2}\}/)
   assert.ok(remove, '_removeBuilding not found')
-  assert.match(remove[0], /entry\.driven/, 'the retire path does not consult the van at all')
+  assert.match(remove[0], /entry\.driven/, 'the retire path does not consult the car at all')
   // The disposal has to sit behind the guard, not before it.
   const guard = remove[0].indexOf('return')
   const disposal = remove[0].indexOf('buildings.delete')
-  assert.ok(guard > -1 && disposal > guard, 'the removal must be gated on the van being home')
+  assert.ok(guard > -1 && disposal > guard, 'the removal must be gated on the car being home')
 
   // And the guard has to be re-tried: gating the call itself on the progress threshold would
-  // deadlock, because the hold keeps progress above that threshold while the van is out.
+  // deadlock, because the hold keeps progress above that threshold while the car is out.
   assert.match(
     src,
     /if \(entry\.retiring\) this\._removeBuilding\(id, entry\)/,
@@ -524,29 +562,92 @@ test('a retiring entry is not removed until its van is home', () => {
   )
 })
 
-test('a retiring van is never sent back out, whatever its thread still says', () => {
+test('a retiring car is never sent back out, whatever its thread still says', () => {
   // `_isActive` reads `this.threads`, which a building can outlive — a repo folded away as
-  // dormant keeps its threads on the books. A retiring entry whose van was still being driven
+  // dormant keeps its threads on the books. A retiring entry whose car was still being driven
   // *out* would be waiting on an arrival that never comes.
   const src = readFileSync('src/game/colony.js', 'utf8')
   assert.match(
     src,
     /const wants = !entry\.retiring && this\._isActive\(id\)/,
-    'a retiring site must want its van home regardless of its thread'
+    'a retiring site must want its car home regardless of its thread'
   )
-  // And the ground-broken skip must not fire on a van that is already out, or `driven` freezes.
+  // And the ground-broken skip must not fire on a car that is already out, or `driven` freezes.
   assert.match(
     src,
     /if \(entry\.progress <= DELIVERY_PROGRESS && entry\.driven <= 0\) continue/,
-    'a van already on the road has to keep being stepped'
+    'a car already on the road has to keep being stepped'
   )
 })
 
-// ── the badge is never suppressed along with the figure ────────────────────────────────────
+// ── who may be hidden while a car is on the road ───────────────────────────────────────────
 //
-// The rule the review's Critical 1 turned on. `colony.js` cannot be imported here, so these
-// assert the shape of the decision rather than running it: the flag is set in exactly one
-// place, and that place consults the badge and not the direction of travel.
+// Both halves of the rule that decides it, and each half was once lost in a way no single
+// task review could see. The decision itself is `ridesAlong` in drive-path.js and is run for
+// real here; `colony.js` cannot be imported, so the tests after it assert the shape of the
+// call site instead — the flag is set in exactly one place, and that place puts both halves
+// of the rule to `ridesAlong` rather than deciding anything itself.
+
+test('a crew member standing still on its own plot is not hidden by its car driving home', () => {
+  // The regression the final whole-plan review caught, and it fires on the most ordinary
+  // delivery there is: a thread stops running, `_isActive` goes false, and its car drives home
+  // over three to eight seconds. That crew member is at `at-site`, standing on the plot the
+  // car is leaving — not travelling at all. Suppressing it undraws it (the packing loop in
+  // astronauts.js) *and* makes it unclickable (`pick`) for the whole drive, and then puts it
+  // back in the spot it never left.
+  //
+  // This fails on the rule as shipped, which was `return !badged`: `idle` and `sleeping` carry
+  // no badge, so nothing refused them.
+  assert.equal(ridesAlong('at-site', false), false, 'a quiet crew member was hidden')
+  assert.equal(ridesAlong('at-site', true), false, 'a badged crew member was hidden')
+})
+
+test('only a crew member that is actually travelling rides in its car', () => {
+  // Every other state the crew state machine runs, so a state added later cannot land in the
+  // suppressed half by default. `walking` is the only journey a car can stand in for:
+  // `spawning` and `leaving` are the depot's own business and carry their own badges, and
+  // `gone` is not drawn at all.
+  for (const state of ['spawning', 'at-site', 'leaving', 'gone']) {
+    assert.equal(ridesAlong(state, false), false, `a crew member in "${state}" was hidden`)
+  }
+  assert.equal(ridesAlong(RIDING_STATE, false), true, 'a travelling crew member never rides')
+})
+
+test('a badge is never hidden, whatever its car is doing', () => {
+  // The other half, from the review's Critical 1: a quiet thread parks its car and then drives
+  // it back *out* the moment it wants you, so the direction of travel is the wrong axis and
+  // the badge is the right one. It is subsumed by the travelling rule today — a walking crew
+  // member has no badge, because badges wait until a figure reaches its post — and it is kept
+  // as its own check so it cannot lapse silently if that ever changes.
+  for (const state of ['spawning', RIDING_STATE, 'at-site', 'leaving', 'gone']) {
+    assert.equal(ridesAlong(state, true), false, `a badged crew member in "${state}" was hidden`)
+  }
+})
+
+test('the state that rides is one the crew actually runs', () => {
+  // `RIDING_STATE` is a string compared against `agent.state`, so a rename in the state machine
+  // would not throw. It would just mean no crew member is ever aboard a car again, silently.
+  const src = readFileSync('src/agents/astronauts.js', 'utf8')
+  const states = new Set([...src.matchAll(/case '([a-z-]+)': \{/g)].map((m) => m[1]))
+  assert.ok(states.size >= 4, `only found ${[...states].join(', ')} in the state machine`)
+  assert.ok(
+    states.has(RIDING_STATE),
+    `astronauts.js runs no "${RIDING_STATE}" state (it runs ${[...states].join(', ')})`
+  )
+})
+
+test('the colony puts both halves of the rule to ridesAlong', () => {
+  // The call site is where the rule was lost the first time: the badge check went in and the
+  // travelling check quietly went out with it. Neither is colony.js's to decide any more.
+  const colony = readFileSync('src/game/colony.js', 'utf8')
+  const marker = colony.match(/_markRiding\(id\) \{[\s\S]*?\n {2}\}/)
+  assert.ok(marker, '_markRiding not found')
+  assert.match(
+    marker[0],
+    /ridesAlong\(\s*agent\.state\s*,/,
+    '_markRiding must put the crew member state to ridesAlong'
+  )
+})
 
 test('riding is only ever set behind a badge check', () => {
   const colony = readFileSync('src/game/colony.js', 'utf8')

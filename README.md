@@ -7,13 +7,15 @@ engine, unchanged; this fork only recolours what is on screen and settles it ont
 
 Every coding-agent thread on this machine is a little crew member. The moment its thread
 appears, a delivery car leaves the depot and drives the whole way to the plot for its repo,
-over the open ground, and parks at the kerb; the crew rides along, so a car can arrive with
-nobody visibly aboard. It moves a house in — its furniture appearing as the thread's
-transcript grows. When one needs you it stops and holds a `?` over its head — that badge
-stays on the crew member, never on the car, so a thread asking for you is never hidden by a
-drive in progress — click it and the thread opens back in whichever harness it came from.
-Archive the thread and the car drives all the way back to the depot; the house only
-disappears once it is home.
+over the open ground, and parks at the kerb; its crew member is off screen for that walk
+rather than drawn making it, so a car can arrive with nobody visibly aboard. The car is the
+quicker of the two — it is usually parked by the time its crew member comes back into view,
+part-way down the street, to walk the last of it in. It moves a house in — its furniture
+appearing as the thread's transcript grows. When one needs you it stops and holds a `?` over
+its head — that badge stays on the crew member, never on the car, so a thread asking for you
+is never hidden by a drive in progress — click it and the thread opens back in whichever
+harness it came from. Archive the thread and the car drives all the way back to the depot,
+past a crew member that stays standing on its plot; the house only disappears once it is home.
 
 It reads the harness's own files, on your own machine. Nothing is uploaded, there is no
 account, and **it never writes to a harness at all** — `data/colony.json`, where the map lives,
@@ -86,7 +88,7 @@ than have you work around it.
 | One astronaut + one building | One session |
 | How finished a building looks | How large its transcript is, on a log scale |
 | A delivery car parked at a house | Somebody is at that site right now |
-| A car on the road | A site opening up or closing down. A crew member with nothing to ask you rides along, so it is off screen until the car stops; one that wants you stays on its plot with its badge, wherever its car is |
+| A car on the road | A site opening up or closing down. A crew member is only ever off screen while it is walking somewhere and its car is making that journey for it, so one standing on its own plot stays in view while its car drives home, and one that wants you keeps its badge wherever its car is |
 | Walking out of the ship | A thread that just appeared |
 | Walking back into the ship | You archived it |
 

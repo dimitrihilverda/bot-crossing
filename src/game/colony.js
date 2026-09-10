@@ -17,7 +17,14 @@ import {
 } from '../world/plots.js'
 import { buildingUniforms } from '../world/buildings.js'
 import { createHouse } from '../world/houses.js'
-import { hexLine, pathLength, pointAt, kerbBack, driveStep } from '../world/drive-path.js'
+import {
+  hexLine,
+  pathLength,
+  pointAt,
+  kerbBack,
+  driveStep,
+  ridesAlong,
+} from '../world/drive-path.js'
 import { Deliveries, CAR_SPEED } from '../world/deliveries.js'
 import { Ship } from '../world/ship.js'
 import { Astronauts } from '../agents/astronauts.js'
@@ -67,17 +74,17 @@ const RETIRED_PROGRESS = 0.02
 /**
  * The reveal progress at which a site has broken ground and can take a delivery.
  *
- * Above `RETIRED_PROGRESS` on purpose: there has to be a house standing there for a van to
+ * Above `RETIRED_PROGRESS` on purpose: there has to be a house standing there for a car to
  * be driving to it.
  */
 const DELIVERY_PROGRESS = 0.03
 
 /**
- * Where a retiring site's reveal is parked while its van is still on the road.
+ * Where a retiring site's reveal is parked while its car is still on the road.
  *
  * Above both of the numbers above, and below the first furniture reveal threshold (0.05, see
  * `revealThresholds` in houses.js): the house stands there stripped of its contents for
- * exactly as long as the van takes to get home, and only then goes. That is the picture the
+ * exactly as long as the car takes to get home, and only then goes. That is the picture the
  * spec asks for — the load leaves before the address does.
  *
  * Holding it above `DELIVERY_PROGRESS` is not cosmetic. `_updateDeliveries` skips a site that
@@ -638,13 +645,13 @@ export class Colony {
    * street.
    *
    * Called every frame while an entry is retiring rather than once when it starts: the hold
-   * below has to be re-decided as the van makes its way home, and the removal has to be
+   * below has to be re-decided as the car makes its way home, and the removal has to be
    * re-tried on the frame it arrives.
    *
    * There are two ways a wait like this goes wrong, and both are guarded here.
    *
-   *  - **The van vanishes mid-street.** Removing the entry disposes the house *and* the only
-   *    record of how far its van had got, so a van still on the road simply stops being drawn
+   *  - **The car vanishes mid-street.** Removing the entry disposes the house *and* the only
+   *    record of how far its car had got, so a car still on the road simply stops being drawn
    *    from one frame to the next. Hence the wait for `driven` to be back at the depot.
    *  - **The entry never leaves.** A wait is only safe if the thing waited on is certain to
    *    arrive, and this is the one failure no test on screen would ever show: a leaked entry
@@ -653,14 +660,14 @@ export class Colony {
    *    than approaching it (drive-path.js); `stepProgress` does the same for the reveal
    *    (growth.js — that module exists because a damped value that only ever approached its
    *    target cost every house its last piece of furniture); and `_updateDeliveries` forces a
-   *    retiring entry's target to 0, so the van cannot be sent back out by a thread that
+   *    retiring entry's target to 0, so the car cannot be sent back out by a thread that
    *    still claims to be active.
    */
   _removeBuilding(id, entry) {
     entry.retiring = true
     // A house that vanishes mid-frame reads as a glitch; one that empties out reads as being
     // packed up. So the reveal winds down — but only as far as `RETIRE_HOLD`, an emptied
-    // house still standing at its address, for as long as its van is out.
+    // house still standing at its address, for as long as its car is out.
     const home = entry.driven <= 0
     entry.target = home ? 0 : RETIRE_HOLD
     if (!home || entry.progress > RETIRED_PROGRESS) return
@@ -911,9 +918,9 @@ export class Colony {
         entry.mesh.userData.setProgress(next)
       }
       // Every frame while retiring, not only once the house has emptied out: the wait for
-      // the van is decided inside `_removeBuilding`, and it has to be re-decided as the van
+      // the car is decided inside `_removeBuilding`, and it has to be re-decided as the car
       // moves. Gating this call on the progress threshold instead would deadlock — the hold
-      // keeps progress above that threshold for exactly as long as the van is out.
+      // keeps progress above that threshold for exactly as long as the car is out.
       if (entry.retiring) this._removeBuilding(id, entry)
     }
   }
@@ -1044,18 +1051,18 @@ export class Colony {
 
     const vehicles = []
     for (const [id, entry] of this.buildings) {
-      // Nothing to deliver to an address that has not broken ground yet — but a van that is
+      // Nothing to deliver to an address that has not broken ground yet — but a car that is
       // already out gets stepped whatever its house is doing. Skipping it would freeze
       // `driven` where it stands, and a `driven` that never reaches 0 is a retiring entry
       // that never comes off the books (see `_removeBuilding`). A retiring house is held
       // above this threshold for that very reason; this second test is the belt to that
-      // brace, and it also keeps a van on the road when a live house dips back under.
+      // brace, and it also keeps a car on the road when a live house dips back under.
       if (entry.progress <= DELIVERY_PROGRESS && entry.driven <= 0) continue
 
       const route = this._routeFor(entry)
-      // A retiring site's van comes home whatever its thread still says. `_isActive` reads
+      // A retiring site's car comes home whatever its thread still says. `_isActive` reads
       // `this.threads`, which a building can outlive — a repo folded away as dormant keeps
-      // its threads in there — and a retiring entry whose van was still being sent *out*
+      // its threads in there — and a retiring entry whose car was still being sent *out*
       // would be waiting on an arrival that never comes.
       const wants = !entry.retiring && this._isActive(id)
       const target = wants ? route.length : 0
@@ -1081,9 +1088,11 @@ export class Colony {
         accent: entry.accent,
       })
 
-      // Whoever the car is carrying is inside it, so it is not also standing on the plot.
-      // Both ways: a crew member rides home as well as out. Which direction the car is
-      // going is deliberately *not* part of this test — see `_markRiding` for what is.
+      // A car between the ends of its route is a car that may be carrying somebody. Which
+      // direction it is going is deliberately *not* part of this test — a car drives back
+      // out again the moment a quiet thread wants you, and a rule written around the
+      // outbound leg would blank that thread's badge for the whole trip. What decides
+      // whether anyone is actually aboard is `_markRiding`.
       if (entry.driven > 0 && entry.driven < route.length) this._markRiding(id)
     }
     this.deliveries.update(vehicles)
@@ -1155,21 +1164,27 @@ export class Colony {
    * keeps its status; the packing loop in `astronauts.js` steps over it and `_badgeFor` hands
    * back nothing.
    *
-   * **The one rule: never suppress a crew member whose status carries a badge.** The badge is
-   * what the application promises you can always find. Hide the figure and the badge goes
-   * with it (`_badgeFor`) and so does the click target (`astronauts.pick`), so a hidden crew
-   * member is a thread you cannot see and cannot open — and the single thread that is asking
-   * for you is the one that must never be either.
+   * **Two rules, both of which have to hold**, and `ridesAlong` in `drive-path.js` is where
+   * they are written down and tested — `colony.js` cannot be imported under `node --test`,
+   * and a rule whose failure mode is an invisible, unclickable crew member has to be
+   * asserted rather than eyeballed. In short:
    *
-   * Which way the car is driving is *not* the axis to decide this on, though it looks like
-   * it. `_isActive` is `running || unread || hasError`, so a thread that goes quiet sends its
-   * car home and parks it; when it next comes back as `unread` — `waiting`, the one `?` that
-   * wants you — or `hasError`, the car drives back *out*, and an outbound-only rule blanks
-   * that `?` for the three to eight seconds of the drive. The badge is the axis, and it holds
-   * on both legs.
+   *  - The crew member has to be **actually travelling** (`walking`). A thread that stops
+   *    running goes idle or dormant, `_isActive` goes false, and its car drives home from a
+   *    plot its crew member is standing still on — suppressing that one blanks a figure for
+   *    a drive it is not on. That is the most ordinary delivery in the application.
+   *  - Its status must carry **no badge**. The badge is what the application promises you can
+   *    always find; hide the figure and the badge goes with it (`_badgeFor`) and so does the
+   *    click target (`astronauts.pick`).
    *
-   * The cost is a car that sometimes drives with nobody visibly aboard. That is fine: it
-   * reads as a van running its own errand. A vanishing `?` does not.
+   * Which way the car is driving is *not* one of them, though it looks like it should be.
+   * `_isActive` is `running || unread || hasError`, so a quiet thread parks its car at the
+   * depot; when it next comes back as `unread` — `waiting`, the one `?` that wants you — the
+   * car drives back *out*, and an outbound-only rule blanks that `?` for the whole drive.
+   *
+   * The cost of the pair is a car that sometimes drives with nobody visibly aboard. That is
+   * fine, and the spec says so: it reads as a car running its own errand. A vanishing crew
+   * member does not.
    *
    * Only ever sets the flag. Clearing it is `_updateDeliveries`'s opening sweep, so an entry
    * that stops being visited cannot leave a crew member stranded off screen.
@@ -1177,7 +1192,7 @@ export class Colony {
   _markRiding(id) {
     const agent = this.astronauts.byId.get(id)
     if (!agent) return
-    if (this._statusBadgeFor(agent) !== BADGE.none) return
+    if (!ridesAlong(agent.state, this._statusBadgeFor(agent) !== BADGE.none)) return
     agent.riding = true
   }
 

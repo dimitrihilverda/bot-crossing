@@ -68,7 +68,17 @@ const LOAD_SEAT = 0.02
  */
 export const WHEEL_RADIUS = 0.1048
 
-/** World units per second. Tuned by eye in step 7; a colony crossing should take a few seconds. */
+/**
+ * World units per second. Tuned by eye in step 7; a colony crossing should take a few seconds.
+ *
+ * Deliberately above `WALK_SPEED` in astronauts.js, and the README and the spec both describe
+ * the consequence: a car outruns the crew member whose walk it stands in for, parks first, and
+ * the figure comes back into view part-way down the street to walk the rest in on foot.
+ * Bringing this down to walking pace does *not* buy an arrival together — a crew member is
+ * released the frame it stops walking, so a slower car would only move the mismatch to the
+ * other side, with the figure standing on its plot before its own car pulled up. A test pins
+ * the ordering, so those two documents cannot go stale behind a retune here.
+ */
 export const CAR_SPEED = 3.2
 
 /**

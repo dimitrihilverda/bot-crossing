@@ -1,9 +1,13 @@
 /**
- * The route a delivery takes, as pure arithmetic over plain numbers.
+ * The route a delivery takes, as pure arithmetic over plain numbers — plus the one rule
+ * about who is aboard, which is not arithmetic but is here for the same reason.
  *
  * Kept free of three.js and of colony state on purpose: this is the only part of the
  * delivery that can be tested under `node --test`, and it is the part where an off-by-one
  * would show up as a car cutting a corner through a house rather than as an error.
+ * `ridesAlong` sits here on that ground alone: `colony.js` cannot be imported outside a
+ * browser, and a rule whose failure mode is an invisible, unclickable crew member is one
+ * that has to be asserted rather than eyeballed.
  *
  * Hex lines are drawn in cube coordinates. Axial (q, r) cannot be interpolated directly —
  * rounding a fractional axial coordinate can land two cells away from its neighbour — so
@@ -191,4 +195,49 @@ export function driveStep(driven, target, step) {
   if (driven < target) return Math.min(target, driven + step)
   if (driven > target) return Math.max(target, driven - step)
   return driven
+}
+
+/**
+ * The one crew-member state that means it is actually travelling with its car.
+ *
+ * `astronauts.js` runs five states — `spawning`, `walking`, `at-site`, `leaving` and `gone`.
+ * `walking` is the only one where the figure is on its way from somewhere to somewhere else
+ * under its own steam, which is the only case where "it is in the car instead" is a true
+ * account of where it went. `spawning` is a figure rising out of the depot and `leaving` is
+ * one walking back into it: both are travelling too, but both also carry their own badge
+ * (`_statusBadgeFor` in colony.js), so `badged` refuses them anyway.
+ */
+export const RIDING_STATE = 'walking'
+
+/**
+ * Whether a crew member may be hidden this frame because it is riding in its car.
+ *
+ * Two rules, and the delivery has to satisfy both. The caller has already established that
+ * the car itself is between the ends of its route; this is everything else.
+ *
+ *  - **Only a crew member that is actually travelling.** `riding` is a draw-time skip: hide
+ *    the figure and the badge goes with it (`_badgeFor`) and so does the click target
+ *    (`astronauts.pick`). That is an honest trade for a figure whose journey the car is
+ *    standing in for, and a bad one for a figure that is not going anywhere. `_isActive` is
+ *    `running || unread || hasError`, so the most ordinary event in the whole application —
+ *    a thread stopping — sends a car home from a plot whose crew member is standing still on
+ *    it at `at-site`. Suppressing that one blanks a crew member for the three to eight
+ *    seconds of a drive it is not on, and then puts it back exactly where it never left.
+ *  - **Never a crew member whose status carries a badge.** The badge is the one thing the
+ *    whole application exists to make findable, so the figure that carries one is drawn
+ *    wherever its car happens to be. This is the stricter of the two and it is deliberately
+ *    kept as its own test rather than folded into the first: today every walking crew member
+ *    has `BADGE.none` (badges wait until a figure reaches its post), so the check cannot
+ *    fire — but the day badges start appearing over a walking figure, the rule that must not
+ *    quietly lapse is this one.
+ *
+ * The cost of the pair is a car that sometimes drives with nobody visibly aboard, which is
+ * what the spec already licenses: it reads as a delivery car running its own errand.
+ *
+ * @param state the crew member's own state, from the `astronauts.js` state machine
+ * @param badged whether its status carries a badge, ignoring whether it is drawn right now
+ */
+export function ridesAlong(state, badged) {
+  if (state !== RIDING_STATE) return false
+  return !badged
 }

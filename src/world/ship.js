@@ -95,7 +95,7 @@ export class Ship {
     this._buildDock() // sets doorLocal from where the dock actually ends
     this._buildLights()
 
-    this.traffic = 0 // the dock glows brighter while crew or a van are using it
+    this.traffic = 0 // the dock glows brighter while crew or a car are using it
 
     /**
      * The shell and the yard are both built from the model kits, and the kits are not
@@ -226,7 +226,7 @@ export class Ship {
     this.strips = new THREE.Mesh(merge(edgeParts), this.stripMaterial)
     this.group.add(this.strips)
 
-    // Crew and vans appear and vanish a step beyond the dock plate, at ground level.
+    // Crew and cars appear and vanish a step beyond the dock plate, at ground level.
     this.doorLocal = new THREE.Vector3(0, 0, farZ + 0.6)
   }
 
@@ -263,7 +263,7 @@ export class Ship {
     this.group.add(apron)
   }
 
-  /** World position of the foot of the dock — where crew and vans appear and vanish. */
+  /** World position of the foot of the dock — where crew and cars appear and vanish. */
   shipDoor(out = new THREE.Vector3()) {
     return out.copy(this.doorLocal).applyMatrix4(this.group.matrixWorld)
   }

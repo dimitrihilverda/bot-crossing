@@ -30,7 +30,7 @@ realism.
 | Building nears completion | House fills up with furniture | Transcript size (log scale) |
 | Scaffolding | A delivery car parked at the kerb | Somebody is at that site now |
 | The ship, centre of the colony | The depot | — |
-| Walking out of the ship | A car drives the whole way out from the depot, crew riding inside | A thread that just appeared |
+| Walking out of the ship | A car drives the whole way out from the depot; its crew member is off screen for the walk | A thread that just appeared |
 | Walking back into the ship | The car drives the whole way back to the depot | You archived it |
 
 ### Behaviour
@@ -67,13 +67,20 @@ height-following rather than pathfinding over gaps.
 **A crew member whose status carries a badge is never hidden — not "the badge never moves to
 the van".** Implementation sharpened this rule past what it reads like above: the car is not
 a thing the crew figure rides visibly the way a person rides a vehicle in a cutscene. Instead,
-while a car is in transit its crew member simply is not drawn — one figure per thread still
-does everything, the car is a prop it uses, not a second actor with its own state. But that
-only holds for a crew member with nothing to say. The one rule that actually governs it is
-narrower and stricter: a thread whose status carries a badge is drawn regardless of whether
-its car is on the road, because the badge is the one thing the whole application exists to
-make findable, and a moving, half-hidden target defeats that. So a car may legitimately drive
-with nobody visibly aboard.
+a crew member walking to or from its plot while its car is on the road simply is not drawn for
+that walk — one figure per thread still does everything, the car is a prop it uses, not a
+second actor with its own state. Two things bound that, and both are narrower than "hidden
+while its car drives":
+
+- **It has to be walking.** A crew member standing on its own plot is drawn, whatever its car
+  is doing — and that is the common case, because a thread that merely stops running sends its
+  car home from a plot its crew member has not left. Hiding a figure that is standing right
+  there buys nothing and costs the click target.
+- **It must carry no badge.** A thread whose status carries a badge is drawn regardless of
+  where its car is, because the badge is the one thing the whole application exists to make
+  findable, and a moving, half-hidden target defeats that.
+
+So a car may legitimately drive with nobody visibly aboard.
 
 ## Staging
 
@@ -126,17 +133,29 @@ working here right now" marker, using the same `_isActive` predicate `Scaffolds`
   the two states a crew member passes through on its way in and out. A "loading" or
   "unloading" animation would have been a seventh behaviour competing with those eight for
   the same figure, and the plan gave no rule for how it should lose to, say, an `!` that
-  starts mid-load. Rather than invent one, the crew member is simply not drawn while its car
-  is in transit — the car carries it, off screen, and reappears with it when the car parks.
+  starts mid-load. Rather than invent one, the crew member is simply not drawn for the walk
+  its car is making on its behalf, and comes back into view when it stops walking.
   `STATUS_ORDER` stays untouched and a thread still does exactly one thing.
+
+  **The two do not arrive together, and the car is the quicker.** `riding` is a draw-time
+  skip and nothing more: the crew member walks its own navigation path throughout, so the car
+  (3.2 u/s along a straight hex line) and the figure (2.1 u/s ± 14 % per crew member, around
+  whatever the grid says is in the way, with an acceleration ramp and braking on arrival) are
+  two independent motions. The car parks first — about a third of the way ahead — and its crew
+  member comes back into view part-way down the street to walk the rest in on foot. That is
+  not a mistuned constant to be fixed by slowing the car down: because a crew member is
+  released the moment it *stops walking*, a slower car would simply move the mismatch to the
+  other side, with the figure standing on its plot before its own car pulled up. What the car
+  stands in for is the walk, not the arrival.
 - **The badge rule is sharper than "never moves to the van."** That phrasing implied the
   badge and the van were both candidates for carrying it and the badge always won. What was
   actually built is narrower: a crew member whose status carries a badge is never hidden at
   all, full stop — not hidden while riding, not hidden for any other reason a future feature
   might introduce. The badge is the one thing the whole application exists to make findable,
   so the rule is about visibility of that crew member, not about where the badge itself can
-  live. One concrete effect: a car can be seen driving with nobody visibly aboard, whenever
-  the thread it belongs to has nothing to say.
+  live. One concrete effect: a car can be seen driving with nobody visibly aboard — whenever
+  the thread it belongs to has something to say, and for the whole of every drive home from a
+  plot whose crew member is standing on it.
 
 ## Assets
 

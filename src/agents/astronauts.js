@@ -53,7 +53,7 @@ const AGENT_LOOK = {
   idle: { trim: 0xa2937a, eye: [1.1, 1.4, 1.5] },
   // Navy work jacket, done for the day.
   sleeping: { trim: 0x4c5468, eye: [0.7, 0.8, 1.4] },
-  // Removal-van livery orange, for the crew member climbing out of one.
+  // Removal-firm orange, for the crew member climbing out of the delivery car.
   spawning: { trim: 0xd2703f, eye: [2.4, 1.4, 0.7] },
   // Oiled leather, on its way back to the depot.
   leaving: { trim: 0x7a6a58, eye: [1.0, 1.0, 1.05] },
