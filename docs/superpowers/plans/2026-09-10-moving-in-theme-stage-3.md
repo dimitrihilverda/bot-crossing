@@ -201,11 +201,16 @@ test('the tones spread across the table rather than clustering on one', () => {
   assert.equal(seen.size, SKIN_TONES.length, `only hit ${seen.size} of ${SKIN_TONES.length}`)
 })
 
-test('skin tone does not depend on status', () => {
-  // The table is indexed by id alone. A status argument would be the first step toward
-  // skin tone meaning something, which the spec forbids outright.
+test('skin.js cannot reach anything that knows a status', () => {
+  // Asserted structurally rather than by hunting for the word "status" in the file: a word
+  // hunt fires on the very comment that explains the contract, and a module that cannot
+  // import status cannot depend on it whatever its comments say. Only three and hashString.
   const src = readFileSync('src/agents/skin.js', 'utf8')
-  assert.doesNotMatch(src, /status|state|badge|AGENT_LOOK/i, 'skin.js reaches for status')
+  const imports = [...src.matchAll(/^import .*? from '([^']+)'/gm)].map((m) => m[1])
+  const allowed = new Set(['three', '../world/plots.js'])
+  for (const spec of imports) {
+    assert.ok(allowed.has(spec), `skin.js imports ${spec}, which is not on its allowlist`)
+  }
 })
 
 test('the head is built and written, and carries its own colour', () => {
@@ -373,9 +378,15 @@ test('hairstyle and skin tone are independent', () => {
   assert.ok(pairs.size > SKIN_TONES.length, `only ${pairs.size} distinct combinations`)
 })
 
-test('hairstyle does not depend on status', () => {
+test('hair.js cannot reach anything that knows a status', () => {
+  // Structural for the same reason skin.js's equivalent is: a module that cannot import
+  // status cannot depend on it, and a word hunt would fire on the comment explaining that.
   const src = readFileSync('src/agents/hair.js', 'utf8')
-  assert.doesNotMatch(src, /status|badge|AGENT_LOOK/i, 'hair.js reaches for status')
+  const imports = [...src.matchAll(/^import .*? from '([^']+)'/gm)].map((m) => m[1])
+  const allowed = new Set(['three', '../world/plots.js'])
+  for (const spec of imports) {
+    assert.ok(allowed.has(spec), `hair.js imports ${spec}, which is not on its allowlist`)
+  }
 })
 ```
 
