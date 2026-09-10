@@ -167,6 +167,11 @@ cat > "${USER_HOME}/.config/openbox/autostart" <<'OB'
 xset s off -dpms &
 xset s noblank &
 unclutter -idle 1 &
+# A bare openbox session does not activate graphical-session.target, so the hub's user unit is
+# never pulled in on its own — start it explicitly. Import the X env first so the kiosk browser
+# can reach the display.
+systemctl --user import-environment DISPLAY XAUTHORITY
+systemctl --user start bot-crossing-hub.service
 OB
 chown "$BCH_USER:$BCH_USER" "${USER_HOME}/.config/openbox/autostart"
 
