@@ -25,6 +25,8 @@ import {
   driveStep,
   ridesAlong,
 } from '../world/drive-path.js'
+import { planStreets } from '../world/streets.js'
+import { roadCells } from '../world/road-path.js'
 import { Deliveries, CAR_SPEED } from '../world/deliveries.js'
 import { Ship } from '../world/ship.js'
 import { Astronauts } from '../agents/astronauts.js'
@@ -61,6 +63,12 @@ const AGENT_RADIUS = 0.26
 const LIVE_GROWTH = 0.004
 /** How many zones' positions to remember, including repos with nothing running in them. */
 const LAYOUT_MEMORY = 80
+
+// The depot's own cell, for planning streets. `SHIP_CELL` itself is module-local to
+// `plots.js` and deliberately not exported; converting the depot's world position back to a
+// cell with `worldToHex` gives the same answer without opening another export. Computed once
+// at module scope rather than per call — the depot does not move.
+const SHIP_CELL_FOR_STREETS = worldToHex(shipPosition().x, shipPosition().z)
 
 /**
  * The reveal progress at which a house has already hidden itself.
@@ -438,15 +446,30 @@ export class Colony {
     // — never because a different repo gained or lost a thread. `plotCells` carries it
     // between polls, and the colony file carries it between sessions.
     const colonyOf = this.projectColony || new Map()
-    const layout = allocateCells(
-      projects.map(([name, list]) => {
-        const visiting = colonyOf.get(name)
-        // A visiting colony's repos anchor to that colony's district out past the home zones,
-        // so they cluster together and read as somebody else's settlement.
-        return { id: name, size: list.length, anchor: visiting ? colonyAnchor(visiting.colony) : null }
-      }),
-      this.plotCells
-    )
+    const projectList = projects.map(([name, list]) => {
+      const visiting = colonyOf.get(name)
+      // A visiting colony's repos anchor to that colony's district out past the home zones,
+      // so they cluster together and read as somebody else's settlement.
+      return { id: name, size: list.length, anchor: visiting ? colonyAnchor(visiting.colony) : null }
+    })
+    // Streets are planned from the layout, then fed back in so no plot sits on one. Two
+    // passes rather than one because the ring's radius depends on where the plots ended up:
+    // the first pass says how far the colony reaches, the second keeps the plots off the
+    // road it implies. A third pass would be chasing its own tail — the ring can only move
+    // outward between the two, never inward, so the second pass is stable.
+    const firstPass = allocateCells(projectList, this.plotCells)
+    // The cell keys of every visiting colony's district: `planStreets` keeps the road off
+    // them, the same way it keeps the road off the depot and off every home plot.
+    const anchored = new Set()
+    for (const p of projectList) {
+      if (!p.anchor) continue
+      for (const cell of firstPass.get(p.id) || []) anchored.add(`${cell.q},${cell.r}`)
+    }
+    this.streets = planStreets(firstPass, { ship: SHIP_CELL_FOR_STREETS, anchored })
+    // A route cached before the ring moved would drive the old road. Stamping the plan and
+    // comparing it is cheaper than diffing two cell sets on every house on every frame.
+    this._streetStamp = [...this.streets.all].sort().join('|')
+    const layout = allocateCells(projectList, this.plotCells, this.streets.all)
     // Remembered, not replaced: a project that has just lost its last thread keeps its
     // ground on the books, and the oldest entries fall off the end.
     for (const [name, cells] of layout) {
@@ -1115,7 +1138,8 @@ export class Colony {
       cached.plot === entry.plot &&
       cached.slot === entry.slot &&
       cached.x === p.x &&
-      cached.z === p.z
+      cached.z === p.z &&
+      cached.streets === this._streetStamp
     ) {
       return cached
     }
@@ -1123,7 +1147,10 @@ export class Colony {
     const depot = shipPosition()
     const start = worldToHex(depot.x, depot.z)
     const end = worldToHex(p.x, p.z)
-    const points = hexLine(start.q, start.r, end.q, end.r).map((c) => cellWorld(c.q, c.r))
+    // The cell sequence is the only thing the streets change. Everything below — the kerb
+    // pull-back, the cache key, the route object — is stage 2's, verified by hand over 600
+    // frames, and is deliberately left alone.
+    const points = roadCells(start, end, this.streets?.all).map((c) => cellWorld(c.q, c.r))
 
     // The last cell centre is not the address: parking on it leaves the car a half-cell short
     // of the house it was sent to, or sitting in a neighbour's garden. The house's own centre
@@ -1150,7 +1177,7 @@ export class Colony {
     }
     points[points.length - 1] = kerb
 
-    const route = { plot: entry.plot, slot: entry.slot, x: p.x, z: p.z, points, length: pathLength(points) }
+    const route = { plot: entry.plot, slot: entry.slot, x: p.x, z: p.z, streets: this._streetStamp, points, length: pathLength(points) }
     entry.route = route
     return route
   }
