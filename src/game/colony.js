@@ -34,7 +34,7 @@ import { Particles } from '../agents/particles.js'
 import { Navigation } from '../agents/navigation.js'
 import { liveThreadsForColony } from './hidden-projects.js'
 import { stepProgress } from './growth.js'
-import { statusFor, STALE_MS } from './status.js'
+import { statusFor } from './status.js'
 
 export { statusFor }
 

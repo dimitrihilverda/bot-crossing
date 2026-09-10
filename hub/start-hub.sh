@@ -97,7 +97,13 @@ fi
 mkdir -p "$CHROME_PROFILE_DIR"
 
 echo "start-hub.sh: opening Chromium kiosk on ${URL} (profile: ${CHROME_PROFILE_DIR})"
+# --autoplay-policy: a wall display gets no user gesture, so without this Chromium leaves the
+#   hub's AudioContext suspended and the alert ping never sounds.
+# --disable-session-crashed-bubble / --no-first-run: Restart=always means Chromium will be
+#   killed and relaunched; neither the crash-restore bubble nor a first-run prompt should ever
+#   appear over the wall.
 "$CHROMIUM_BIN" --kiosk --app="$URL" --noerrdialogs --disable-infobars \
+  --autoplay-policy=no-user-gesture-required --disable-session-crashed-bubble --no-first-run \
   --user-data-dir="$CHROME_PROFILE_DIR" &
 CHROMIUM_PID=$!
 

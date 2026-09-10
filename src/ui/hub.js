@@ -141,7 +141,10 @@ export class Hub {
     const rows = triageRows(threads, now)
     this._renderBoard(rows)
     this._renderStrip(threads || [], colonies || [], now)
-    this._handleAttention(rows)
+    // Which colonies actually reported threads this poll — used to hold back the ping for a
+    // colony that only just appeared (see _handleAttention).
+    const present = new Set((threads || []).map((t) => t.colony || ''))
+    this._handleAttention(rows, present)
   }
 
   _renderBoard(rows) {
@@ -212,20 +215,31 @@ export class Hub {
       </div>`
   }
 
-  _handleAttention(rows) {
+  _handleAttention(rows, present) {
     if (!this._prev) {
       // First update ever: seed the baseline without popping. Otherwise every page load (or
       // reload) would replay the whole existing backlog as a wall of toasts and dings.
       this._prev = new Set(rows.map((r) => r.id))
+      this._prevColonies = present
       return
     }
     const fresh = newlyNeedsAttention(this._prev, rows)
-    if (fresh.length) {
-      const byId = new Map(rows.map((r) => [r.id, r]))
-      this._showToast(fresh.map((id) => byId.get(id)).filter(Boolean))
+    // A thread only earns a toast + ping if its colony was already reporting last poll. On a
+    // cold boot /api/threads serves neighbours from cache and refreshes them in the background,
+    // so a teammate's whole backlog lands a poll or two after start — and a colony coming back
+    // online mid-session is the same shape. Seed those silently instead of storming; only a
+    // genuinely new wait inside an already-known colony rings.
+    const byId = new Map(rows.map((r) => [r.id, r]))
+    const poppable = fresh.filter((id) => {
+      const r = byId.get(id)
+      return r && this._prevColonies && this._prevColonies.has(r.colony || '')
+    })
+    if (poppable.length) {
+      this._showToast(poppable.map((id) => byId.get(id)).filter(Boolean))
       if (!this.muted) this._ping()
     }
     this._prev = new Set(rows.map((r) => r.id))
+    this._prevColonies = present
   }
 
   _showToast(items) {

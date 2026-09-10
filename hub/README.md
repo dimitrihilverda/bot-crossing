@@ -76,8 +76,14 @@ without the hub needing to be added back as a "colony" on their own map (that wo
 an always-on reader look like a dead neighbour whenever the wall display itself isn't
 polling them, which it never does).
 
-**Each teammate**, on their own machine: open **Settings → Shared colonies → Allow a
-screen / hub to read me**, and add the NUC's `100.x` Tailscale IP there.
+**Each teammate**, on their own machine, does two things in **Settings → Shared colonies**:
+1. Turn **sharing on** and add the repos they want on the wall to their shared list — the
+   hub can only show sessions a teammate has actually opted to share (an empty share list
+   hands out nothing, even to an allowed reader). This is the same opt-in they'd use to let
+   a colleague visit their colony.
+2. Under **Allow a screen / hub to read me**, add the NUC's `100.x` Tailscale IP. This lets
+   the always-on hub read them *without* being added back as a neighbour — but it is an
+   allowlist entry on top of sharing, not a substitute for it.
 
 **On the hub**, add every teammate as a neighbour so their threads flow into `/api/threads`
 and get merged into the board. Either through the UI (Settings → Shared colonies → add each
@@ -158,6 +164,10 @@ Chromium crash or a reboot brings the wall back on its own.
   `100.x` IP under *Allow a screen / hub to read me*, and that the hub's neighbour entry uses
   their `100.x` IP and port `5275`. `tailscale ping <their-100.x-ip>` proves the tailnet
   path works before blaming the app.
+- **A teammate is allowed but still shows nothing:** "Allow a screen / hub to read me" only
+  grants access — it does not turn sharing on. Confirm that teammate has **sharing enabled**
+  and has added the repos they want visible to their shared list; an allowed reader still
+  sees only what has been opted in.
 - **Service stays inactive / never starts:** this unit is keyed off `graphical-session.target`
   (`After=`/`PartOf=`/`WantedBy=`), which only activates under a systemd-aware display/login
   manager (gdm, sddm, lightdm). A bare `startx`/`.xinitrc` auto-login does not activate it on
