@@ -104,6 +104,8 @@ let threads = []
  *  use for it, so it stays a plain module-level cache rather than a field on `state`. */
 let lastColonies = []
 let firstPollDone = false
+/** Last framed content signature — the hub re-fits the camera whenever the colonies on the map change. */
+let lastHubFrameSig = ''
 /** Last legend built for the bottom bar, kept so the open zone's chip can light up between polls. */
 let legendProjects = []
 /** The zone layout as last written to the colony file, so an unchanged map is not re-saved. */
@@ -839,6 +841,18 @@ function applyThreads(list) {
     queueSave()
   }
 
+  // The wall has no mouse or keyboard, so it must keep every colony in frame on its own — re-fit
+  // the camera to span all plots whenever the set/spread of colonies on the map changes. clamp
+  // is off because visiting colonies are anchored out past the normal WORLD_LIMIT.
+  if (HUB) {
+    const b = colony.contentBounds()
+    const sig = b ? `${b.center.x.toFixed(0)}|${b.center.z.toFixed(0)}|${b.radius.toFixed(0)}` : ''
+    if (b && sig !== lastHubFrameSig) {
+      lastHubFrameSig = sig
+      rig.focus(b.center, { distance: THREE.MathUtils.clamp(b.radius * 2.4 + 24, 40, 150), clamp: false })
+    }
+  }
+
   // The hub HUD is a read of the exact same merged, colony-tagged list the game itself just
   // rendered — `threads` above, not the raw `list` argument, so a viewed/unread rewrite at
   // the top of this function is reflected on the board too.
@@ -908,6 +922,13 @@ async function boot() {
   }
   colony.astronauts.setRig(crewRig())
   if (!kitError) colony.onAssetsReady()
+
+  if (HUB) {
+    // A wall display stays crisp — no tilt-shift blur, no bloom glow — whatever the stored profile
+    // or preset says. There is no keyboard at the wall to change it, so pin it here every boot.
+    settings.set('tiltShift', false)
+    settings.set('bloom', false)
+  }
 
   await poll()
   setInterval(poll, POLL_MS)

@@ -799,6 +799,28 @@ export class Colony {
     return out
   }
 
+  /** Centre + radius spanning every plot on the map, so the hub can frame all colonies at once. */
+  contentBounds() {
+    if (!this.plotOrder.length) return null
+    let minX = Infinity
+    let maxX = -Infinity
+    let minZ = Infinity
+    let maxZ = -Infinity
+    for (const plot of this.plotOrder) {
+      const c = plot.middle || plot.center
+      if (!c) continue
+      if (c.x < minX) minX = c.x
+      if (c.x > maxX) maxX = c.x
+      if (c.z < minZ) minZ = c.z
+      if (c.z > maxZ) maxZ = c.z
+    }
+    if (!Number.isFinite(minX)) return null
+    return {
+      center: new THREE.Vector3((minX + maxX) / 2, 0, (minZ + maxZ) / 2),
+      radius: Math.max(maxX - minX, maxZ - minZ) / 2 + 10,
+    }
+  }
+
   setHoveredPlot(plot) {
     this.hoveredPlot = plot || null
   }
