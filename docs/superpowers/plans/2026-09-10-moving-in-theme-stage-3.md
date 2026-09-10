@@ -132,7 +132,7 @@ Check `dispose()` and `onSettingsChanged` — if either names the removed meshes
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `node --test test/crew-look.test.mjs`
-Expected: PASS — 16 tests.
+Expected: PASS — 15 tests.
 
 - [ ] **Step 5: Run the suite and look at it**
 
@@ -141,7 +141,7 @@ npm test
 PORT=5280 npm run dev
 ```
 
-Expected: 134 tests passing, 0 failing. On screen: figures with no headgear and a face floating where the helmet's front used to be, no backpack, no antenna, nothing glowing at night. **That is the expected state at this point.** Confirm it is *that* and not something worse — no missing bodies, no console errors, and the hammer still in the right hand of a working thread.
+Expected: 133 tests passing, 0 failing. On screen: figures with no headgear and a face floating where the helmet's front used to be, no backpack, no antenna, nothing glowing at night. **That is the expected state at this point.** Confirm it is *that* and not something worse — no missing bodies, no console errors, and the hammer still in the right hand of a working thread.
 
 Stop the server and verify with `netstat -ano | grep 5280` that nothing is listening. Paste the empty output in your report.
 
@@ -301,7 +301,7 @@ npm test
 PORT=5280 npm run dev
 ```
 
-Expected: 140 tests passing, 0 failing. On screen: heads on bodies, several visibly different skin tones across the colony, the face still on the front of each head, and the same tone on the same thread after a reload. Reload once and confirm a given crew member's tone did not change.
+Expected: 139 tests passing, 0 failing. On screen: heads on bodies, several visibly different skin tones across the colony, the face still on the front of each head, and the same tone on the same thread after a reload. Reload once and confirm a given crew member's tone did not change.
 
 Stop the server; verify port 5280 is free and paste the output.
 
@@ -423,7 +423,7 @@ npm test
 PORT=5280 npm run dev
 ```
 
-Expected: 146 tests passing, 0 failing. On screen: visibly different hair across the colony, no hair floating off a head, and a given crew member keeping its style across a reload. Check a walking crew member specifically — hair rides the head bone, so it must move with the head rather than lag or swim.
+Expected: 145 tests passing, 0 failing. On screen: visibly different hair across the colony, no hair floating off a head, and a given crew member keeping its style across a reload. Check a walking crew member specifically — hair rides the head bone, so it must move with the head rather than lag or swim.
 
 Stop the server; verify port 5280 is free and paste the output.
 
@@ -566,7 +566,7 @@ npm test
 npm run build
 ```
 
-Expected: 151 tests passing, 0 failing; build succeeds.
+Expected: 150 tests passing, 0 failing; build succeeds.
 
 Stop the server; verify port 5280 is free and paste the output.
 
