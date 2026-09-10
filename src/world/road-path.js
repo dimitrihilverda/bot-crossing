@@ -11,10 +11,16 @@ import { hexLine } from './drive-path.js'
  * policy: high enough that a route will take a long way round rather than cut across three
  * gardens, low enough that a plot with no road still gets driven to.
  *
- * The fallback is documented behaviour, not a defect. "Roads steer everything" means roads
- * steer wherever roads exist; where they do not, the car drives over the deck exactly as it
- * did for every plot before this stage, which is behaviour that was verified by hand over
- * 600 frames and is deliberately left reachable.
+ * Where the streets don't reach a plot at all, the search still returns a shortest lattice
+ * path — the same length as `hexLine(from, to)`, since both are shortest paths on the same
+ * uniform-cost lattice — but not necessarily the same one of the several equally short paths,
+ * so the car's route can differ in shape from what it drove before this stage. The two are
+ * guaranteed identical only when the street set passed in is genuinely empty, which the fast
+ * path below returns directly without searching. That is a real window, not a hypothetical:
+ * `this.streets` is `undefined` until `planStreets` has run once, and every route built before
+ * then takes this path; after that, `this.streets.all` is essentially never empty again, so
+ * later routes normally go through the search instead. Either way "roads steer everything"
+ * still holds: roads steer wherever roads exist, and a plot no road reaches is still driven to.
  */
 
 /**
@@ -90,13 +96,24 @@ export function roadCells(from, to, streets) {
     }
   }
 
+  // Neither of the two `hexLine` returns below — this one and the one inside the walk-back
+  // loop — can fire under the current bound. `budget` always contains both `from` and `to`
+  // (it's their distance apart plus a fixed positive margin), and every edge costs 1 or
+  // `OFF_ROAD_COST`, never infinite or blocked, so the searched region is always a connected
+  // disk containing both endpoints and Dijkstra always reaches the goal. This is not the "no
+  // road connection" fallback — that one is the empty-street fast path above, which is the
+  // only fallback the test suite and fuzzing against this function have ever observed to fire.
+  // These two lines are kept anyway as a guard: if `DETOUR_MARGIN` or `OFF_ROAD_COST` is ever
+  // retuned in a way that breaks the guarantee above, the alternative is an empty or partial
+  // route — a car that never moves and a house that never disappears — and that is worse than
+  // carrying two lines of currently-unreachable code.
   if (!cameFrom.has(goalKey)) return hexLine(from.q, from.r, to.q, to.r)
 
   const out = [{ q: to.q, r: to.r }]
   let cursor = to
   while (key(cursor.q, cursor.r) !== startKey) {
     cursor = cameFrom.get(key(cursor.q, cursor.r))
-    if (!cursor) return hexLine(from.q, from.r, to.q, to.r)
+    if (!cursor) return hexLine(from.q, from.r, to.q, to.r) // same guard, same reasoning
     out.push({ q: cursor.q, r: cursor.r })
   }
   out.reverse()

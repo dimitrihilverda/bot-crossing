@@ -54,7 +54,10 @@ test('the route uses the road rather than cutting across', () => {
   assert.ok(used >= 3, `only ${used} street cells used out of a ${road.length}-cell route`)
 })
 
-test('an unreachable destination falls back to a straight line rather than failing', () => {
+test('a destination with no useful street nearby is still routed to', () => {
+  // Not a test of the hexLine fallback branches — those are unreachable by construction (the
+  // search budget always contains both endpoints, so Dijkstra always finds a path). This proves
+  // the search itself, not the fallback, gets the car there when the streets don't help.
   const streets = new Set(['9,0', '9,1'])
   const road = roadCells({ q: 0, r: 0 }, { q: 2, r: 0 }, streets)
   assertAdjacent(road)
