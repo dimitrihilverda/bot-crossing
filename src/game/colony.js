@@ -34,6 +34,9 @@ import { Particles } from '../agents/particles.js'
 import { Navigation } from '../agents/navigation.js'
 import { liveThreadsForColony } from './hidden-projects.js'
 import { stepProgress } from './growth.js'
+import { statusFor, STALE_MS } from './status.js'
+
+export { statusFor }
 
 /**
  * The colony: everything that turns a list of agent threads into a place.
@@ -54,7 +57,6 @@ import { stepProgress } from './growth.js'
  * you have running.
  */
 
-const STALE_MS = 3 * 24 * 60 * 60 * 1000
 /** How wide an astronaut is, for the purpose of not fitting through gaps it should not. */
 const AGENT_RADIUS = 0.26
 /** Progress a live thread adds per second, so a working site visibly grows while you watch. */
@@ -104,16 +106,6 @@ export const STATUS_LABEL = {
   sleeping: 'Dormant',
   spawning: 'Arriving',
   leaving: 'Heading home',
-}
-
-/** Thread → behaviour. First match wins, exactly like the board's auto-sort. */
-export function statusFor(thread, now = Date.now()) {
-  if (thread.hasError) return 'blocked'
-  if (thread.running) return 'working'
-  if (thread.prState === 'MERGED') return 'celebrating'
-  if (thread.unread) return 'waiting'
-  if (now - thread.lastActivityAt > STALE_MS) return 'sleeping'
-  return 'idle'
 }
 
 /**
