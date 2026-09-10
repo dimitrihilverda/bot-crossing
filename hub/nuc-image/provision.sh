@@ -48,7 +48,9 @@ export DEBIAN_FRONTEND=noninteractive
 
 echo "--- [1/8] base packages + minimal GUI ---"
 apt-get update
-apt-get install -y --no-install-recommends \
+# NOT --no-install-recommends: xserver-xorg's recommends are its video/input drivers, and
+# without them X finds no screen on real hardware and lightdm drops to a text login.
+apt-get install -y \
   curl ca-certificates git jq \
   xserver-xorg xinit x11-xserver-utils openbox lightdm unclutter
 

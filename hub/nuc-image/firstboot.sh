@@ -31,8 +31,13 @@ echo "=== bot-crossing firstboot @ $(date -Is) ==="
 # Account + repo were baked into the ISO; everything else comes from the phone (pending.json).
 # shellcheck source=/dev/null
 [ -f "${SETUP_DIR}/iso.env" ] && source "${SETUP_DIR}/iso.env"
+# Export every var provision.sh needs — it runs as a separate process and only inherits exported
+# vars, so sourcing iso.env here is not enough on its own.
 export BCH_USER="${BCH_USER:-hub}"
 export BCH_HOSTNAME="${BCH_HOSTNAME:-bot-crossing-hub}"
+export BCH_REPO_URL="${BCH_REPO_URL:-https://github.com/dimitrihilverda/bot-crossing.git}"
+export BCH_BRANCH="${BCH_BRANCH:-main}"
+export BCH_COLONY_NAME="${BCH_COLONY_NAME:-Hub}"
 
 set_phase() { echo "$1" > "${SETUP_DIR}/phase"; echo "--- phase: $1 ---"; }
 
