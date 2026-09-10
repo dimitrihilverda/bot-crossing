@@ -21,3 +21,7 @@ recordings
 
 # SDD scratch (ledgers, briefs, review packages)
 .superpowers
+
+# NUC installer: the operator's filled-in config (holds a Tailscale key) and the generated seed
+hub/nuc-image/config.env
+hub/nuc-image/build/
