@@ -175,6 +175,21 @@ function projectOf(cwd, originCwd) {
   return { projectPath, project: path.basename(projectPath) || projectPath || 'unknown', worktree }
 }
 
+/** A cwd that is a Claude scratch workspace (no project folder was chosen). */
+const SCRATCH_CWD = /scratch-workspaces[\\/]/i
+
+/**
+ * The zone a session belongs to. A real project folder groups by repo, exactly as before; a
+ * folder-less scratch session becomes its own zone named by its own title, so it reads as a
+ * recognisable house instead of dissolving into a shared `scratch-<hash>` district.
+ */
+export function zoneForSession({ cwd, originCwd, title }) {
+  if (cwd && SCRATCH_CWD.test(cwd)) {
+    return { project: (title && title.trim()) || 'Untitled session', projectPath: cwd, worktree: '' }
+  }
+  return projectOf(cwd, originCwd)
+}
+
 /**
  * Best-effort reverse of the encoding used for project folder names: `-Users-you-Some-Dir`
  * on macOS, `C--Users-you-Some-Dir` on Windows, where the drive's colon became a dash too.
@@ -371,8 +386,9 @@ async function scanThreads() {
     if (entry) claimed.add(cliSessionId)
 
     const cwd = s.cwd || s.originCwd || ''
-    const { projectPath, project, worktree } = projectOf(cwd, s.originCwd)
     const meta = entry ? await transcriptMeta(entry) : null
+    const title = s.title || meta?.customTitle || meta?.aiTitle || meta?.summary || meta?.firstPrompt || 'Untitled thread'
+    const { projectPath, project, worktree } = zoneForSession({ cwd, originCwd: s.originCwd, title })
 
     add({
       id: ID(cliSessionId || s.sessionId),
@@ -381,7 +397,7 @@ async function scanThreads() {
       desktopSessionIds: s.sessionId ? [s.sessionId] : [],
       titled: Boolean(s.title),
       bridgeSessionId: (s.bridgeSessionIds && s.bridgeSessionIds[0]) || '',
-      title: s.title || meta?.customTitle || meta?.aiTitle || meta?.summary || meta?.firstPrompt || 'Untitled thread',
+      title,
       preview: meta?.firstPrompt ? meta.firstPrompt.slice(0, 240) : '',
       project,
       projectPath,
@@ -421,7 +437,8 @@ async function scanThreads() {
     if (claimed.has(id)) continue
     const meta = await transcriptMeta(entry)
     const cwd = meta.cwd || decodeProjectDir(path.basename(entry.projectDir))
-    const { projectPath, project, worktree } = projectOf(cwd, '')
+    const title = meta.customTitle || meta.aiTitle || meta.summary || meta.firstPrompt || 'Untitled thread'
+    const { projectPath, project, worktree } = zoneForSession({ cwd, originCwd: '', title })
     add({
       id: ID(id),
       cliSessionId: id,
@@ -429,7 +446,7 @@ async function scanThreads() {
       desktopSessionIds: [],
       titled: Boolean(meta.customTitle || meta.aiTitle),
       bridgeSessionId: '',
-      title: meta.customTitle || meta.aiTitle || meta.summary || meta.firstPrompt || 'Untitled thread',
+      title,
       preview: meta.firstPrompt ? meta.firstPrompt.slice(0, 240) : '',
       project,
       projectPath,
