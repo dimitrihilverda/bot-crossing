@@ -123,8 +123,9 @@ export class Hub {
       writeMuted(this.muted)
       this._syncMuteButton()
       // The click is a user gesture — a kiosk page otherwise never gets one, and without it
-      // the browser's autoplay policy can leave the audio context suspended forever.
-      this._ensureAudio()
+      // the browser's autoplay policy can leave the audio context suspended forever. Only worth
+      // doing when turning sound on; muting needs no audio context.
+      if (!this.muted) this._ensureAudio()
     })
   }
 

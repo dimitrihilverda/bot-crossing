@@ -103,6 +103,7 @@ let threads = []
 /** The merged `/api/threads` response's own `.colonies` from the last poll — hub mode's only
  *  use for it, so it stays a plain module-level cache rather than a field on `state`. */
 let lastColonies = []
+let firstPollDone = false
 /** Last legend built for the bottom bar, kept so the open zone's chip can light up between polls. */
 let legendProjects = []
 /** The zone layout as last written to the colony file, so an unchanged map is not re-saved. */
@@ -841,7 +842,10 @@ function applyThreads(list) {
   // The hub HUD is a read of the exact same merged, colony-tagged list the game itself just
   // rendered — `threads` above, not the raw `list` argument, so a viewed/unread rewrite at
   // the top of this function is reflected on the board too.
-  if (HUB) hub.update(threads, lastColonies)
+  // Only after a real poll has delivered the backlog. A settings-driven applyThreads() during
+  // boot runs before the first fetch, and seeding the hub baseline off that empty list would
+  // make the first poll replay the whole backlog as fresh toasts. See poll().
+  if (HUB && firstPollDone) hub.update(threads, lastColonies)
 }
 
 let polling = false
@@ -851,6 +855,7 @@ async function poll() {
   try {
     const res = await fetchThreads()
     lastColonies = res.colonies || []
+    firstPollDone = true
     applyThreads(res.threads || [])
     hud.removeBoot()
   } catch (err) {
@@ -912,11 +917,15 @@ async function boot() {
     if (!document.hidden) poll()
   })
 
-  if (!localStorage.getItem('botcrossing.seen-help')) {
-    hud.toggleHelp(true)
-    localStorage.setItem('botcrossing.seen-help', '1')
-  } else {
-    hud.hint('Drag to move · click a crew member · H hides everything', 5200)
+  // The hub kiosk is read-only — no drag/click help, and it must not consume the origin's
+  // first-run flag for a later normal session.
+  if (!HUB) {
+    if (!localStorage.getItem('botcrossing.seen-help')) {
+      hud.toggleHelp(true)
+      localStorage.setItem('botcrossing.seen-help', '1')
+    } else {
+      hud.hint('Drag to move · click a crew member · H hides everything', 5200)
+    }
   }
 }
 
