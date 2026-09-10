@@ -3,8 +3,9 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 
 /**
- * The model kits — KayKit's *Space Base Bits* and *Forest Nature Pack* (both CC0), each
- * packed into one glb by `tools/build-kit.mjs` and loaded exactly once here.
+ * The model kits — KayKit's *Space Base Bits*, *Forest Nature Pack*, *City Builder Bits* and
+ * *Furniture Bits* (all CC0), each packed into one glb by `tools/build-kit.mjs` and loaded
+ * exactly once here.
  *
  * Their shared design is what makes them worth building on: every model in a pack UVs into
  * a single 1024px gradient atlas and therefore shares a single material, so a colony
@@ -18,8 +19,13 @@ import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
  * repaint one swatch — the gold trim band, cell 11 — into each repo's accent colour without
  * touching a texture or splitting the mesh.
  *
- * The two kits keep separate part registries because they have separate atlases: a geometry
- * can only carry one material, so a habitat and a fir tree can never merge into one mesh.
+ * Each kit keeps its own part registry because each kit has its own atlas: a geometry can
+ * only carry one material, so a part from one kit can never merge into the same mesh as a
+ * part from another. That is exactly why a house is two meshes (city shell, furniture) and
+ * the depot is two meshes (city shell, base-kit containers) rather than one each — every
+ * `Composer` in `buildings.js` is built from a single kit for this reason, and mixing kits
+ * within one `Composer` would merge two atlases into one material and sample the wrong
+ * colours with no error.
  */
 
 /** Columns and rows in the gradient atlas. */
@@ -44,13 +50,37 @@ export const CELL = {
   SOLAR_B: 29,
 }
 
+/**
+ * The cell worth naming in the city atlas. `ACCENT` is the swatch the shader repaints per
+ * repo; it was chosen with `tools/atlas-cells.mjs` (and a UV-to-part cross-check) as the
+ * warm terracotta swatch that every one of the kit's eight buildings UVs into — not the
+ * single highest-saturation cell in the atlas, but the one that actually reads as "this
+ * building's trim" on every building rather than on one model, a car, or a traffic light.
+ */
+export const CELL_CITY = {
+  ACCENT: 5,
+}
+
+/**
+ * The same, for the furniture atlas. `ACCENT` is the amber swatch used across pillows,
+ * rugs, book covers and decorated cabinet/shelf inlays — the kit's decorative-accessory
+ * colour, not the wood or fabric that makes up a piece's main body.
+ */
+export const CELL_FURNITURE = {
+  ACCENT: 8,
+}
+
 // Served straight out of `public/`, not bundled — a glb is opaque to Vite and there is
 // nothing to gain from hashing a file the loader fetches by hand anyway.
 const KITS = {
-  /** Space Base Bits: every building, and the colony's hard surfaces. */
+  /** Space Base Bits: the original colony's buildings, and its hard surfaces. */
   base: { file: 'spacebase.glb', parts: new Map(), solo: new Map(), atlas: null },
   /** Forest Nature Pack: trees, bushes, grass, and the boulders on every world. */
   forest: { file: 'forest.glb', parts: new Map(), solo: new Map(), atlas: null },
+  /** City Builder Bits: house shells, pavement, fences, and the delivery car. */
+  city: { file: 'city.glb', parts: new Map(), solo: new Map(), atlas: null },
+  /** Furniture Bits: everything that goes inside a house. */
+  furniture: { file: 'furniture.glb', parts: new Map(), solo: new Map(), atlas: null },
 }
 
 let loading = null

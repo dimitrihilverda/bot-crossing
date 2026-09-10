@@ -1,18 +1,30 @@
-# Bot Crossing — your agent threads, as a colony
+# Moving-In Crossing — your agent threads, moving in furniture
 
-**[botcrossing.com](https://botcrossing.com)**
+**A Moving-In re-theme of [Bot Crossing](https://github.com/Station-Sciences/bot-crossing)**,
+Jarren Rocks' agent-colony sim. Everything underneath — the map, the pathing, the harness
+adapters, and the shared-colonies feature a colleague added on top of it — is upstream's
+engine, unchanged; this fork only recolours what is on screen and settles it onto its own port.
 
-Every coding-agent thread on this machine is a little astronaut. They walk out of the ship, claim
-a plot for their repo, and build something. When one needs you it stops and holds a `?` over
-its head; click it and the thread opens back in whichever harness it came from.
+Every coding-agent thread on this machine is a little crew member. The moment its thread
+appears, a delivery car leaves the depot and drives the whole way to the plot for its repo,
+over the open ground, and parks at the kerb; its crew member is off screen for that walk
+rather than drawn making it, so a car can arrive with nobody visibly aboard. The car is the
+quicker of the two — it is usually parked by the time its crew member comes back into view,
+part-way down the street, to walk the last of it in. It moves a house in — its furniture
+appearing as the thread's transcript grows. When one needs you it stops and holds a `?` over
+its head — that badge stays on the crew member, never on the car, so a thread asking for you
+is never hidden by a drive in progress — click it and the thread opens back in whichever
+harness it came from. Archive the thread and the car drives all the way back to the depot,
+past a crew member that stays standing on its plot; the house only disappears once it is home.
 
 It reads the harness's own files, on your own machine. Nothing is uploaded, there is no
 account, and **it never writes to a harness at all** — `data/colony.json`, where the map lives,
 is the only file it writes anywhere.
 
-> **Status:** published as-is. I built this for myself and cannot promise to maintain it —
-> issues and PRs are welcome but may go unanswered, and forking is an entirely reasonable
-> thing to do. [CONTRIBUTING.md](CONTRIBUTING.md) sets out what to expect.
+> **Status:** an internal Moving-In fork, reworded and reskinned for our own use — the
+> underlying sim is still Bot Crossing's. For the original project, its own status, and its
+> contribution policy, see [Station-Sciences/bot-crossing](https://github.com/Station-Sciences/bot-crossing)
+> and its [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Run it
 
@@ -75,7 +87,8 @@ than have you work around it.
 | One hex zone | One repo. Bigger repos claim more tiles — one per seven threads, grown as a contiguous blob from the middle outward. A zone stays where it is: see below |
 | One astronaut + one building | One session |
 | How finished a building looks | How large its transcript is, on a log scale |
-| Scaffolding | Somebody is at that site right now |
+| A delivery car parked at a house | Somebody is at that site right now |
+| A car on the road | A site opening up or closing down. A crew member is only ever off screen while it is walking somewhere and its car is making that journey for it, so one standing on its own plot stays in view while its car drives home, and one that wants you keeps its badge wherever its car is |
 | Walking out of the ship | A thread that just appeared |
 | Walking back into the ship | You archived it |
 
@@ -201,10 +214,10 @@ browser makes without touching layout, so following a walking astronaut costs no
   counts a thread as read once it has been focused in its own app, so one you answered in a
   terminal waves for good. This records when you looked, and the thread starts asking again the
   moment it does something newer.
-- **Archive** retires the thread *here*: the astronaut walks back up the ramp and boards the
-  ship. Nothing is written to the harness — see [Keeping it local](#keeping-it-local). A thread
-  you archive in the harness's own app goes home on the next poll too, because the scan reads
-  that flag.
+- **Archive** retires the thread *here*: the astronaut walks back across the loading dock and
+  into the depot. Nothing is written to the harness — see
+  [Keeping it local](#keeping-it-local). A thread you archive in the harness's own app goes
+  home on the next poll too, because the scan reads that flag.
 - **Hide** takes a whole repo off the map without touching a single thread. It comes back from
   the list at the foot of the sidebar, onto the same ground it left.
 
@@ -309,9 +322,9 @@ It regenerates only when the sky has actually moved, and never more than a few t
 Measured cost: **0.16 ms/frame**. Off on Potato and Low; the intensity is a slider.
 
 Materials are properly PBR underneath it. Roughness and metalness are looked up per atlas
-cell, so a single merged building geometry holds painted panel, brushed metal and
-photovoltaic glass and each behaves correctly — the ten building recipes never had to learn
-about PBR.
+cell for the base kit's props, so a single merged geometry can hold painted panel, brushed
+metal and photovoltaic glass side by side and each still behaves correctly, with none of it
+coded per part.
 
 ### The sun is not overhead
 
@@ -329,33 +342,43 @@ so lit surfaces stay crisp instead of going hazy.
 
 ## Where the art comes from
 
-The colony is built out of two CC0 asset packs by **[Kay Lousberg](https://kaylousberg.com)**,
+The colony is built out of five CC0 asset packs by **[Kay Lousberg](https://kaylousberg.com)**,
 plus the project's own shaders on top of them.
 
 | Pack | Used for | Licence |
 | --- | --- | --- |
-| [KayKit : Space Base Bits](https://kaylousberg.itch.io/space-base-bits) | Every building, the landing pads, rovers, and the crates and drums stacked around each plot | CC0 |
-| [KayKit : Character Animations](https://kaylousberg.itch.io/kaykit-character-animations) | The crew's body and all fifteen animation clips they play | CC0 |
+| [KayKit : City Builder Bits](https://kaylousberg.itch.io/city-builder-bits) | House shells and the depot shell | CC0 |
+| [KayKit : Furniture Bits](https://kaylousberg.itch.io/furniture-bits) | Everything that fills a house as its thread's transcript grows | CC0 |
+| [KayKit : Space Base Bits](https://kaylousberg.itch.io/space-base-bits) | The crates, drums and floodlights stacked around each plot, and the containers stacked in the depot's yard | CC0 |
+| [KayKit : Character Animations](https://kaylousberg.itch.io/kaykit-character-animations) | The crew's body and all seventeen animation clips they play | CC0 |
 | [KayKit : Forest Nature Pack](https://kaylousberg.itch.io/kaykit-forest) | Terra's trees, bushes and grass, and the boulders on every world | CC0 |
 
-CC0 asks for nothing, but crediting Kay costs nothing either. If you rebuild the assets, both
-packs go in `assets-src/` (see below).
+CC0 asks for nothing, but crediting Kay costs nothing either. If you rebuild the assets, all
+five packs go in `assets-src/` (see below); `public/assets/CREDITS.md` is the definitive list
+of what each `.glb` is built from.
 
-Two things about Space Base Bits make the whole approach work. It is **modular** — a habitat is
-a base module with a roof module on it, a workshop is the garage variant with a rover parked
-outside — which is why ten building recipes fit on one screen. And all forty-four models share
-**one 1024px gradient atlas**, so a nine-part greenhouse still merges to a single geometry and a
-single draw call, exactly as the procedural generators it replaced did.
+One design choice, shared by every pack, is what makes the whole approach work: every model in
+a pack UVs into a single 1024px gradient atlas and therefore shares one material, so a house
+shell built out of several named parts — wall, roof, door and the rest — still merges to a
+single geometry and a single draw call, exactly as the procedural generators it replaced did.
+Because each pack has its own atlas, and a merged geometry can only carry one material, a house
+is **two meshes**, not one — the shell's parts from the city kit, its contents from the
+furniture kit — and the depot is built the same way, from the city kit and the base kit.
+`src/world/kit.js` is where that rule is written down.
 
 That atlas is an 8×4 grid of swatches, which turns out to be a useful thing to have. A *cell
 index* is a stable name for a material, so the building shader can:
 
-- **repaint one swatch into the repo's accent.** Kay's gold trim band is cell 11; the fragment
-  stage swaps its hue while keeping the swatch's own light-to-dark gradient, so every plot's
-  buildings wear that plot's colour with no extra material and no extra draw.
+- **repaint one swatch into the repo's accent.** Each kit names its own trim cell — Kay's gold
+  band is cell 11 in the base kit, a warm terracotta swatch in the city kit, an amber swatch in
+  the furniture kit — and the fragment stage swaps its hue while keeping the swatch's own
+  light-to-dark gradient, so every plot's house and its furniture wear that plot's colour with
+  no extra material and no extra draw.
 - **light that same swatch after dark**, which is what makes the window strips come on at night.
-- **give one flat texture real PBR.** Roughness and metalness are looked up per cell, so the
-  grey structural swatch behaves like painted metal and the photovoltaic swatch like glass.
+- **give one flat texture real PBR.** Roughness and metalness are looked up per cell for the
+  base kit, so its grey structural swatch behaves like painted metal and its photovoltaic
+  swatch like glass; the city and furniture kits use one flat roughness value each, since
+  neither pack has anything metal or reflective in it.
 
 The Forest pack does double duty. Its boulders are painted neutral grey, which means a
 per-instance tint takes exactly the same rock to lunar dust or Martian rust without touching
@@ -396,22 +419,22 @@ colour on the same texture.
 
 ### Rebuilding them
 
-`npm run assets` packs the raw packs into the two glbs the app loads. The built files are
+`npm run assets` packs the raw packs into the five glbs the app loads. The built files are
 checked in and the raw packs are not, so this is a no-op unless you have fetched them:
 
 ```bash
 mkdir -p assets-src && cd assets-src
-# download the FREE tier of both packs from the links above, then unzip in place
+# download the FREE tier of all five packs from the links above, then unzip in place
 ```
 
 `npm run assets` runs `tools/build-assets.mjs`, which drives `build-kit.mjs` once per model
 pack — merging a directory of single-model `.gltf` files into one document with one material
-and one texture — and then `build-crew.mjs`. That last one keeps the fifteen clips the colony actually plays out of
-KayKit's 161 and — the part that matters — **retargets every animation channel onto the
-mannequin's own bones**. Merging glTF documents brings each animation file's private copy of the
-rig along with it, so without that step the finished file has five skeletons named `hips` and
-the clips drive the four nobody is looking at. It loads without a single warning and renders the
-entire crew frozen in its bind pose.
+and one texture — and then `build-crew.mjs`. That last one keeps the seventeen clips the colony
+actually plays out of KayKit's 161 and — the part that matters — **retargets every animation
+channel onto the mannequin's own bones**. Merging glTF documents brings each animation file's
+private copy of the rig along with it, so without that step the finished file has five
+skeletons named `hips` and the clips drive the four nobody is looking at. It loads without a
+single warning and renders the entire crew frozen in its bind pose.
 
 ## Animating the crew
 

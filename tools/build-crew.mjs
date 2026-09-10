@@ -3,7 +3,7 @@
  * animations the colony actually plays.
  *
  * The Character Animations pack ships 161 clips across eight files and four megabytes.
- * Bot Crossing has eight behaviours. Everything not on the list below is disposed here rather
+ * The colony has eight behaviours. Everything not on the list below is disposed here rather
  * than downloaded and thrown away in the browser.
  *
  * Both packs are CC0 (Kay Lousberg, kaylousberg.com).
@@ -22,10 +22,15 @@ const OUT = 'public/assets/crew.glb'
  * name, so this list and `CLIPS` in `src/agents/crew.js` have to agree.
  */
 const WANTED = {
-  'Rig_Medium_General.glb': ['Idle_A', 'Idle_B', 'Interact', 'Hit_A', 'Spawn_Ground'],
+  'Rig_Medium_General.glb': ['Idle_A', 'Idle_B', 'Interact', 'Hit_A', 'Spawn_Ground', 'PickUp'],
   'Rig_Medium_MovementBasic.glb': ['Walking_A', 'Running_A', 'Jump_Full_Short'],
-  'Rig_Medium_Simulation.glb': ['Cheering', 'Waving', 'Sit_Floor_Down', 'Sit_Floor_Idle', 'Sit_Floor_StandUp'],
-  'Rig_Medium_Tools.glb': ['Hammering', 'Working_A'],
+  // A removal crew dozes off sitting *on* something, so the sit is the chair sit rather than
+  // the floor sit the colony used. KayKit authors it perched at seat height with the feet off
+  // the ground, which is why it only reads right with the moving box drawn underneath.
+  'Rig_Medium_Simulation.glb': ['Cheering', 'Waving', 'Sit_Chair_Down', 'Sit_Chair_Idle', 'Sit_Chair_StandUp'],
+  // Holding_A is the symmetric two-handed hold — both hands out front at the same height,
+  // which is the one of the three that reads as carrying a piece of furniture.
+  'Rig_Medium_Tools.glb': ['Hammering', 'Working_A', 'Holding_A'],
 }
 
 // The raw packs are not checked in — the built glb is. Re-running this without them is
