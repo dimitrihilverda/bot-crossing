@@ -210,8 +210,9 @@ instanced skinned mesh sampling the crew's shared bone texture, with a fallback 
 skin on the sleeves. That was wrong, and measuring it took one query: **all 959 vertices of
 `Mannequin_Medium_Head` are weighted to exactly one bone, `head`.** The head does not
 deform. So it does not need skinning at all — it rides the head bone rigidly, which is
-precisely the mechanism `boneMatrixAt()` already exists for and precisely how the helmet was
-placed. Swapping helmet geometry for head geometry, plus an `instanceColor` for skin tone,
+precisely the mechanism `attachMatrixAt(rig, frame, slot, out)` in `crew.js` already exists for,
+and precisely how the helmet was placed — off `rig.attachSlot.get('head')`, with its offset in
+the `P` table. Swapping helmet geometry for head geometry, plus an `instanceColor` for skin tone,
 is the whole of it.
 
 The same follows for hair: a hairstyle is a **drop-in replacement for the helmet**, on the
