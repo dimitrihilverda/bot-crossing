@@ -26,7 +26,7 @@ realism.
 | Bot Crossing | Moving-In Crossing | In your threads |
 | --- | --- | --- |
 | Hex zone | A plot with a house on it | One repo |
-| Astronaut | A crew member | One session |
+| Astronaut | A crew member — no headgear, its own hairstyle and skin tone, hi-vis bands (Stage 3) | One session |
 | Building nears completion | House fills up with furniture | Transcript size (log scale) |
 | Scaffolding | A delivery car parked at the kerb | Somebody is at that site now |
 | The ship, centre of the colony | The depot | — |
@@ -42,7 +42,7 @@ matters.
 
 | Signal | What the crew member does | Badge |
 | --- | --- | --- |
-| Errored | Slumps beside a toppled cabinet, orange beacon stutters | `!` |
+| Errored | Slumps beside a toppled cabinet, hi-vis bands stutter | `!` |
 | Running now | Screwing a piece together, shavings fly | `⚒` |
 | PR merged | Cheers, confetti | `✓` |
 | Unread | **Stops and waits on you** | `?` |
@@ -156,6 +156,74 @@ working here right now" marker, using the same `_isActive` predicate `Scaffolds`
   live. One concrete effect: a car can be seen driving with nobody visibly aboard — whenever
   the thread it belongs to has something to say, and for the whole of every drive home from a
   plot whose crew member is standing on it.
+
+### Stage 3 — the crew stop being astronauts
+
+Stages 1 and 2 left the figures wearing a spacesuit. Their trim colours, their props and
+their animation clips were re-themed; the silhouette never was. Stage 1's plan asked only
+for "trim colours that read as work clothing rather than spacesuits" and got exactly that,
+so nothing caught it — the reviews checked the work against the brief, and the brief did not
+mention the headgear. The mapping table above promises *Astronaut → A crew member*. This
+stage is that promise, unpaid since Stage 1.
+
+What they wear now is entirely procedural, in `_buildMeshes` in `src/agents/astronauts.js` —
+a `SphereGeometry` helmet, a `sphereCap` visor with a squircle SDF cut in the fragment
+shader, a `roundedBox` backpack, a cylinder antenna with a glowing tip, and a chest lamp. No
+asset pack is involved, so this is replacing shapes with shapes rather than hunting for a
+model.
+
+**What goes, and what arrives:**
+
+| Now | After |
+| --- | --- |
+| Helmet, visor | Gone. **No headgear at all** |
+| — | The **head**, taken off `DROP_MESHES` in `crew.js` and given its own instanced mesh so it can carry a **skin tone** |
+| — | **Three or four hairstyles** built from primitives — a short cap, something longer, a bun, and bald |
+| Screen-face | **Stays.** It becomes a face on a head rather than a screen on a visor, and it keeps carrying the eye colour |
+| Backpack, antenna, glowing tip, chest lamp | Gone |
+| — | **Hi-vis bands** on the torso, carrying the status trim colour, bright enough past 1.0 that the bloom pass catches them at night |
+| Hammer, toppled cabinet, moving box | Stay |
+
+**Skin tone and hairstyle must never mean anything.** Both are derived stably from the
+thread id, the way a plot's accent is derived from its repo name, and neither ever changes
+with status. They are how you tell one crew member from another, not how you tell what one
+is doing. A colony where skin tone tracked state would be both a bug and grotesque.
+
+**The three status carriers survive, and one of them moves.** Trim colour and eye colour are
+untouched in mechanism — the eyes were the reason the screen-face was kept rather than
+replaced by the mannequin's blank face. What moves is the night signal: it was two small
+unlit spheres pushed past 1.0, and it becomes the hi-vis bands. That is the one readability
+trade this stage makes, and it is made deliberately.
+
+The bands inherit one job from the parts they replace. The behaviour table's errored row
+used to read "orange beacon stutters", and that beacon **was** the antenna tip and the chest
+lamp. Deleting them without moving the stutter would have left the table promising something
+no longer in the code — so the row now reads "hi-vis bands stutter", and the bands carry the
+blink as well as the glow. Whatever implements this must keep an errored crew member visibly
+pulsing, not merely coloured red; the pulse is what catches the eye across a colony, and it
+is the one thing an `!` badge cannot do on its own at that distance.
+
+**Two things could sink this, and both are checked before anything is drawn.**
+
+*The head may not be separable.* The crew is drawn as one `InstancedMesh` over a merged body
+geometry, with one skeleton baked into a float texture that every instance samples —
+`crew.js` says so in its own header. Pulling the head out means a **second** instanced
+skinned mesh sampling that same bone texture, and whether that works is not obvious from
+reading. So it is the first task, before a single hairstyle exists. If it cannot be done,
+the fallback is a skin tone applied to the whole body, which puts skin on the sleeves too:
+worse looking, but it works, and it is a fallback rather than a redesign.
+
+*The bands may not bloom.* `engine.js` keeps the bloom threshold high on purpose — its own
+comment says a high threshold "keeps this an accent rather than a haze: only the eyes". Two
+small bright spheres clear that easily; a band is a different shape, and at the height a
+crew member occupies on screen it may be a few pixels. This is verified at night, at colony
+zoom, and not by assertion. The fallback is a wider band or a small bright detail on the
+vest — not a headlamp, since this stage removes headgear.
+
+Note for whoever verifies either of these: **the Browser pane does not drive
+`requestAnimationFrame`** — measured at 0 frames in 3 seconds with the document visible — so
+the scene sits frozen there and sampled animated state is worthless. Drive frames by hand
+from the console, or use a real browser.
 
 ## Assets
 
