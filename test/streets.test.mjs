@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { planStreets } from '../src/world/streets.js'
+import { allocateCells } from '../src/world/plots.js'
 
 const SHIP = { q: -2, r: 1 }
 const k = (c) => `${c.q},${c.r}`
@@ -96,4 +97,48 @@ test('planning is stable: the same layout gives the same streets', () => {
   const second = planStreets(layout, opts())
   assert.deepEqual([...first.all].sort(), [...second.all].sort())
   assert.deepEqual(first.ring, second.ring)
+})
+
+test('a colony whose plots are separated by street cells is still connected', () => {
+  // Two plots two cells apart, with the cell between them a street. Without street
+  // passability this layout is judged disconnected and re-seeded from the middle on
+  // every poll — the exact upheaval `allocateCells` exists to prevent.
+  const previous = new Map([
+    ['a', [{ q: -2, r: 0 }]],
+    ['b', [{ q: 2, r: 0 }]],
+  ])
+  const projects = [
+    { id: 'a', size: 1 },
+    { id: 'b', size: 1 },
+  ]
+  const streets = new Set(['-1,0', '0,0', '1,0'])
+  const out = allocateCells(projects, previous, streets)
+  assert.deepEqual(out.get('a'), [{ q: -2, r: 0 }], 'plot a moved')
+  assert.deepEqual(out.get('b'), [{ q: 2, r: 0 }], 'plot b moved')
+})
+
+test('a genuinely scattered colony is still re-seeded', () => {
+  // No street connects these, so the memory really does describe a broken map and
+  // starting over is correct. The guard must not become a rubber stamp.
+  const previous = new Map([
+    ['a', [{ q: -4, r: 0 }]],
+    ['b', [{ q: 4, r: 0 }]],
+  ])
+  const projects = [
+    { id: 'a', size: 1 },
+    { id: 'b', size: 1 },
+  ]
+  const out = allocateCells(projects, previous, new Set())
+  const moved =
+    JSON.stringify(out.get('a')) !== JSON.stringify([{ q: -4, r: 0 }]) ||
+    JSON.stringify(out.get('b')) !== JSON.stringify([{ q: 4, r: 0 }])
+  assert.ok(moved, 'a scattered colony was allowed to keep its broken layout')
+})
+
+test('street cells are never handed out as plot cells', () => {
+  const streets = new Set(['0,0', '1,0'])
+  const out = allocateCells([{ id: 'a', size: 1 }], new Map(), streets)
+  for (const cell of out.get('a')) {
+    assert.ok(!streets.has(`${cell.q},${cell.r}`), `plot took street cell ${cell.q},${cell.r}`)
+  }
 })
