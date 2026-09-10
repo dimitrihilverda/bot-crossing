@@ -7,8 +7,9 @@
    but this app never adds a font network dependency — `styles.css` leans on the system
    stack throughout, so the hub does the same: system sans-serif for body text, the same
    `ui-monospace, SFMono-Regular, Menlo, monospace` stack `styles.css` already uses for the
-   sidebar's path text, and a condensed *look* (tight letter-spacing, bold weight, uppercase)
-   standing in for the condensed *font*. */
+   sidebar's path text, and a condensed *look* (tight letter-spacing, bold weight, uppercase,
+   `font-stretch: condensed` where a font on the system actually offers one) standing in for
+   the condensed *font*. */
 
 body.hub .side,
 body.hub .settings,
@@ -20,7 +21,9 @@ body.hub .hint-pill,
 body.hub .help {
   /* Hub mode is one screen: its own HUD. The normal chrome — sidebar, settings, the camera
      rail, the selection card, the normal toast/fps/hint layer, first-run help — all read as
-     controls for a session nobody at the wall owns, so none of it is shown here. */
+     controls for a session nobody at the wall owns, so none of it is shown here. Nothing
+     above needs the `!important` the sidebar/settings hiding was described with — none of
+     these rules compete with a more specific selector. */
   display: none;
 }
 
@@ -130,6 +133,131 @@ body.hub .hub-hud {
   font-weight: 700;
   font-size: 22px;
   color: var(--hub-wait);
+}
+
+.hub-mute {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--hub-line-2);
+  border-radius: 10px;
+  padding: 7px 12px;
+  color: var(--hub-dim);
+  font: inherit;
+  font-size: 13px;
+  background: var(--hub-panel);
+  cursor: pointer;
+}
+
+.hub-mute:hover {
+  color: var(--hub-text);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.hub-mute svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.hub-mute .hub-mute-x {
+  display: none;
+}
+
+.hub-mute.is-muted .hub-mute-wave {
+  display: none;
+}
+
+.hub-mute.is-muted .hub-mute-x {
+  display: block;
+}
+
+/* ── new-attention toasts, floating over the backdrop ──────────────────────────── */
+
+.hub-toasts {
+  position: absolute;
+  left: 24px;
+  right: 484px;
+  top: 92px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.hub-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: 560px;
+  background: linear-gradient(180deg, #241a1a, #1c1414);
+  border: 1px solid rgba(227, 91, 72, 0.55);
+  border-left: 5px solid var(--hub-block);
+  border-radius: 14px;
+  padding: 15px 20px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55), 0 0 34px rgba(227, 91, 72, 0.28);
+  animation: hub-toast-in 260ms ease, hub-toast-pop 3.6s ease-in-out 260ms infinite;
+}
+
+.hub-toast.is-out {
+  animation: none;
+  opacity: 0;
+  transition: opacity 380ms ease;
+}
+
+@keyframes hub-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes hub-toast-pop {
+  0%,
+  100% {
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55), 0 0 34px rgba(227, 91, 72, 0.22);
+  }
+  50% {
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55), 0 0 44px rgba(227, 91, 72, 0.42);
+  }
+}
+
+.hub-toast-bang {
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: 10px;
+  background: rgba(227, 91, 72, 0.16);
+  color: var(--hub-block);
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 22px;
+}
+
+.hub-toast-who {
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--hub-block);
+  font-weight: 600;
+}
+
+.hub-toast-what {
+  font-size: 16px;
+  font-weight: 600;
+  margin-top: 1px;
+}
+
+.hub-toast-what b {
+  color: var(--hub-text);
 }
 
 /* ── triage column: the board + the colony strip ────────────────────────────────── */
@@ -448,6 +576,9 @@ body.hub .hub-hud {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .hub-toast {
+    animation: none;
+  }
   .hub-pip,
   .hub-on {
     box-shadow: none;
