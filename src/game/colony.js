@@ -27,6 +27,7 @@ import {
 } from '../world/drive-path.js'
 import { planStreets } from '../world/streets.js'
 import { roadCells } from '../world/road-path.js'
+import { createRoads } from '../world/road-mesh.js'
 import { Deliveries, CAR_SPEED } from '../world/deliveries.js'
 import { Ship } from '../world/ship.js'
 import { Astronauts } from '../agents/astronauts.js'
@@ -469,6 +470,12 @@ export class Colony {
     // A route cached before the ring moved would drive the old road. Stamping the plan and
     // comparing it is cheaper than diffing two cell sets on every house on every frame.
     this._streetStamp = [...this.streets.all].sort().join('|')
+    // Streets are rebuilt whole rather than diffed. The plan only changes when the layout
+    // does, which is a poll-rate event, and a whole street network is two draw calls.
+    this.roadGroup?.userData.dispose?.()
+    if (this.roadGroup) this.worldGroup.remove(this.roadGroup)
+    this.roadGroup = createRoads({ streets: this.streets, groundAt: (x, z) => this.groundAt(x, z) })
+    this.worldGroup.add(this.roadGroup)
     const layout = allocateCells(projectList, this.plotCells, this.streets.all)
     // Remembered, not replaced: a project that has just lost its last thread keeps its
     // ground on the books, and the oldest entries fall off the end.
@@ -1250,6 +1257,7 @@ export class Colony {
     this.indicators.dispose()
     this.particles.dispose()
     this.deliveries.dispose()
+    this.roadGroup?.userData.dispose?.()
     disposeTree(this.worldGroup)
     disposeTree(this.plotGroup)
     disposeTree(this.labelGroup)
