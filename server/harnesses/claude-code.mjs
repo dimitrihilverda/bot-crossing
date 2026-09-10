@@ -89,6 +89,19 @@ const HEAD_BYTES = 192 * 1024
 const ACTIVE_WINDOW_MS = 30 * 60 * 1000
 
 /**
+ * How recently a transcript must have been written to count a session as live when no CLI
+ * live-process file exists. Desktop-app / Agent-SDK sessions do not write that file, so their
+ * work would otherwise read as idle; a transcript touched this recently is the honest signal.
+ */
+const LIVE_TRANSCRIPT_MS = 45 * 1000
+
+/** A session is working now if it has a live pid, or its transcript was just written. */
+export function isSessionActive({ hasLiveProcess, transcriptMtime, now = Date.now() }) {
+  if (hasLiveProcess) return true
+  return typeof transcriptMtime === 'number' && now - transcriptMtime < LIVE_TRANSCRIPT_MS
+}
+
+/**
  * Every id this adapter hands out is prefixed. `server/harnesses/README.md` asks for ids unique
  * across harnesses, and while two UUIDs will not collide, the colony keys its archive list and
  * saved layout on this string — so it is worth being unambiguous rather than merely lucky.
@@ -470,9 +483,11 @@ async function scanThreads() {
     const seenAt = thread.recordActivityAt ?? thread.lastActivityAt
     thread.unread = thread.desktopSessionIds.length > 0 && seenAt > thread.lastFocusedAt
     const fresh = now - thread.lastActivityAt < ACTIVE_WINDOW_MS
+    // Live by pid, or by a just-written transcript (desktop/SDK sessions write no pid file).
+    const active = isSessionActive({ hasLiveProcess: thread.hasLiveProcess, transcriptMtime: thread.lastActivityAt, now })
     const waiting =
-      thread.hasLiveProcess && fresh && thread.transcriptFile ? await awaitingReply(thread.transcriptFile) : false
-    thread.running = thread.hasLiveProcess && fresh && !waiting
+      active && fresh && thread.transcriptFile ? await awaitingReply(thread.transcriptFile) : false
+    thread.running = active && fresh && !waiting
     // A thread that handed the turn back wants you, whether or not the desktop app has ever seen
     // it — the only way a terminal-only thread can ask for anything at all.
     if (waiting) thread.unread = true
