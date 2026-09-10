@@ -66,7 +66,7 @@ mkdir -p "$PAYLOAD/offline"
 if command -v apt-get >/dev/null 2>&1; then
   apt-get -y -o Dir::Cache::archives="$(cd "$PAYLOAD/offline" && pwd)" \
     install --download-only --no-install-recommends \
-    hostapd dnsmasq-base wpasupplicant iw rfkill >/dev/null 2>&1 \
+    hostapd dnsmasq wpasupplicant iw rfkill >/dev/null 2>&1 \
     || echo "WARN: could not pre-fetch all offline debs — run on Ubuntu 24.04 for a complete set"
   # apt drops partial/lock dirs in the cache; keep only the .debs
   find "$PAYLOAD/offline" -maxdepth 1 -type f ! -name '*.deb' -delete 2>/dev/null || true

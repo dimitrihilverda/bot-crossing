@@ -47,12 +47,23 @@ wifi_iface() {
   return 1
 }
 
-install_offline() {
-  # hostapd/dnsmasq/wpasupplicant aren't on a minimal server and there's no network yet, so they
-  # ride along on the ISO as .debs. Installing an already-present package is a harmless no-op.
-  if ls "${OFFLINE}"/*.deb >/dev/null 2>&1; then
-    echo "installing offline setup packages…"
-    dpkg -i "${OFFLINE}"/*.deb >/dev/null 2>&1 || apt-get -y -f install --no-download || true
+have_net() {
+  curl -fsS -m 5 https://archive.ubuntu.com/ >/dev/null 2>&1 || getent hosts archive.ubuntu.com >/dev/null 2>&1
+}
+
+ensure_ap_tools() {
+  # The hotspot needs hostapd + dnsmasq + wpasupplicant, which aren't on a minimal server. Prefer
+  # installing them online (an ethernet first boot has network already), and fall back to the
+  # .debs baked onto the ISO only when there is genuinely no network yet (the pure no-cable case).
+  command -v hostapd >/dev/null 2>&1 && command -v dnsmasq >/dev/null 2>&1 && return 0
+  if have_net; then
+    echo "installing AP tools online…"
+    apt-get update -y >/dev/null 2>&1 || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y hostapd dnsmasq wpasupplicant iw rfkill >/dev/null 2>&1 || true
+  fi
+  if ! command -v hostapd >/dev/null 2>&1 && ls "${OFFLINE}"/*.deb >/dev/null 2>&1; then
+    echo "installing AP tools from the offline bundle…"
+    dpkg -i "${OFFLINE}"/*.deb >/dev/null 2>&1 || apt-get -y -f install --no-download >/dev/null 2>&1 || true
   fi
 }
 
@@ -87,7 +98,7 @@ lower_ap() {
 # ── 1. collect settings from the phone, unless already provided ───────────────────────────
 if [ ! -f "${SETUP_DIR}/pending.json" ]; then
   set_phase collecting
-  install_offline
+  ensure_ap_tools
   IFACE="$(wifi_iface || true)"
   if [ -n "${IFACE:-}" ] && command -v hostapd >/dev/null 2>&1; then
     raise_ap "$IFACE"
