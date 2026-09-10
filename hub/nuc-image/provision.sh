@@ -26,12 +26,11 @@ if [ -f "$MARKER" ]; then
   echo "already provisioned (marker $MARKER present) — nothing to do"
   exit 0
 fi
-if [ ! -f "$CONFIG" ]; then
-  echo "FATAL: $CONFIG not found — the autoinstall seed did not land the config" >&2
-  exit 1
-fi
+# The pre-fill path (build-usb.sh) lands a config.env here. The headless path (firstboot.sh)
+# exports the same account/repo vars from iso.env instead and hands settings via pending.json.
+# Either is fine — the checks below catch anything actually missing.
 # shellcheck source=/dev/null
-source "$CONFIG"
+[ -f "$CONFIG" ] && source "$CONFIG"
 
 BCH_USER="${BCH_USER:?BCH_USER missing from config.env}"
 BCH_HOSTNAME="${BCH_HOSTNAME:-bot-crossing-hub}"
@@ -92,20 +91,39 @@ run_as_user "
 echo "--- [6/8] seed data/colony.json neighbours ---"
 cat > "${SETUP_DIR}/seed-colony.mjs" <<'SEED'
 import fs from 'node:fs'
-const raw = (process.env.NEIGHBORS_RAW || '').trim()
-const neighbors = raw
-  ? raw
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .map((pair) => {
-        const i = pair.indexOf('=')
-        const name = i >= 0 ? pair.slice(0, i).trim() : pair.trim()
-        const host = i >= 0 ? pair.slice(i + 1).trim() : ''
-        return { name, host, port: 5275 }
-      })
-      .filter((n) => n.host)
-  : []
+// Settings come from the phone portal (pending.json) when present, else from env (config.env).
+let name = process.env.COLONY_NAME || 'Hub'
+let neighbors = []
+const pending = process.env.PENDING
+if (pending && fs.existsSync(pending)) {
+  try {
+    const p = JSON.parse(fs.readFileSync(pending, 'utf8'))
+    if (p.colonyName) name = p.colonyName
+    if (Array.isArray(p.neighbors)) {
+      neighbors = p.neighbors
+        .filter((n) => n && n.host)
+        .map((n) => ({ name: n.name || String(n.host), host: String(n.host), port: n.port || 5275 }))
+    }
+  } catch {
+    /* malformed pending.json — fall through to the env form */
+  }
+}
+if (!neighbors.length) {
+  const raw = (process.env.NEIGHBORS_RAW || '').trim()
+  neighbors = raw
+    ? raw
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((pair) => {
+          const i = pair.indexOf('=')
+          const nm = i >= 0 ? pair.slice(0, i).trim() : pair.trim()
+          const host = i >= 0 ? pair.slice(i + 1).trim() : ''
+          return { name: nm || host, host, port: 5275 }
+        })
+        .filter((n) => n.host)
+    : []
+}
 const path = process.argv[2]
 let cur = {}
 try {
@@ -113,7 +131,6 @@ try {
 } catch {
   /* first write — an absent or empty file is fine */
 }
-const name = process.env.COLONY_NAME || 'Hub'
 cur.version = 2
 cur.network = {
   colonyName: name,
@@ -127,7 +144,7 @@ cur.network = {
 fs.writeFileSync(path, JSON.stringify(cur, null, 2))
 console.log('seeded ' + neighbors.length + ' neighbour(s) into ' + path)
 SEED
-run_as_user "cd \"\$HOME/bot-crossing\" && mkdir -p data && NEIGHBORS_RAW='${BCH_NEIGHBORS:-}' COLONY_NAME='${BCH_COLONY_NAME}' node '${SETUP_DIR}/seed-colony.mjs' data/colony.json"
+run_as_user "cd \"\$HOME/bot-crossing\" && mkdir -p data && PENDING='${SETUP_DIR}/pending.json' NEIGHBORS_RAW='${BCH_NEIGHBORS:-}' COLONY_NAME='${BCH_COLONY_NAME:-Hub}' node '${SETUP_DIR}/seed-colony.mjs' data/colony.json"
 
 echo "--- [7/8] autologin + no screen blanking ---"
 mkdir -p /etc/lightdm/lightdm.conf.d
@@ -159,7 +176,14 @@ run_as_user "
   ln -sf ../bot-crossing-hub.service ~/.config/systemd/user/graphical-session.target.wants/bot-crossing-hub.service
 "
 
-touch "$MARKER"
-echo "=== provision complete @ $(date -Is) — rebooting into the wall ==="
-sync
-systemctl reboot
+echo "=== provision complete @ $(date -Is) ==="
+if [ "${BCH_NO_REBOOT:-0}" = "1" ]; then
+  # Headless flow: firstboot.sh still has the Tailscale QR step to do, and owns the reboot + the
+  # completion marker. Leaving both to it keeps the marker meaning "the whole setup finished".
+  echo "BCH_NO_REBOOT=1 — leaving the reboot and completion marker to the caller (firstboot.sh)"
+else
+  touch "$MARKER"
+  echo "rebooting into the wall"
+  sync
+  systemctl reboot
+fi

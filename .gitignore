@@ -25,3 +25,9 @@ recordings
 # NUC installer: the operator's filled-in config (holds a Tailscale key) and the generated seed
 hub/nuc-image/config.env
 hub/nuc-image/build/
+
+# NUC installer: the ISO-build config (account password)
+hub/nuc-image/iso.env
+
+# Python bytecode from local testing
+__pycache__/
