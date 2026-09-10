@@ -60,7 +60,7 @@ const MAX_CELLS = 9
 /** The lattice cell the ship owns. Nothing else may be placed there. */
 const SHIP_CELL = { q: -2, r: 1 }
 
-const HEX_DIRS = [
+export const HEX_DIRS = [
   [1, 0],
   [1, -1],
   [0, -1],
@@ -75,7 +75,7 @@ const HEX_DIRS = [
  */
 const EDGE_TO_DIR = [0, 5, 4, 3, 2, 1]
 
-const key = (q, r) => `${q},${r}`
+export const key = (q, r) => `${q},${r}`
 const ORIGIN = { q: 0, r: 0 }
 
 /** Flat-top axial hex → world. */
@@ -114,7 +114,7 @@ function cubeRound(q, r) {
   return { q: rq, r: rr }
 }
 
-function hexRing(radius) {
+export function hexRing(radius) {
   if (radius === 0) return [{ q: 0, r: 0 }]
   const out = []
   let q = HEX_DIRS[4][0] * radius
@@ -146,7 +146,7 @@ export function colonyAnchor(name) {
 }
 
 /** Hex distance in axial coordinates: the cube distance, halved. */
-function hexDistance(a, b) {
+export function hexDistance(a, b) {
   return (Math.abs(a.q - b.q) + Math.abs(a.q + a.r - b.q - b.r) + Math.abs(a.r - b.r)) / 2
 }
 
