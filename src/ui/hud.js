@@ -295,6 +295,15 @@ export class Hud {
          <input class="net-host text-input" type="text" spellcheck="false" placeholder="hostname or IP">
          <input class="net-port text-input" type="text" spellcheck="false" inputmode="numeric" placeholder="5275">
          <button class="btn net-add-btn" type="button">Add</button>
+       </div>
+       <div class="net-block">
+         <div class="net-head">Allow a screen / hub to read me</div>
+         <p class="note">These addresses can read this colony without being added as a neighbour or visiting back — handy for a hallway screen or a shared team hub.</p>
+         <div class="net-list net-readers"></div>
+       </div>
+       <div class="net-add">
+         <input class="net-reader-host net-host text-input" type="text" spellcheck="false" placeholder="hostname or IP">
+         <button class="btn net-reader-add-btn net-add-btn" type="button">Add</button>
        </div>`
     )
     body.appendChild(g)
@@ -320,6 +329,17 @@ export class Hud {
     g.querySelector('.net-add-btn').addEventListener('click', add)
     port.addEventListener('keydown', (e) => e.key === 'Enter' && add())
     host.addEventListener('keydown', (e) => e.key === 'Enter' && add())
+
+    const readerHost = g.querySelector('.net-reader-host')
+    const addReader = () => {
+      const h = readerHost.value.trim()
+      if (!h) return
+      this.actions.addAllowedReader?.(h)
+      readerHost.value = ''
+      this._refreshNetwork()
+    }
+    g.querySelector('.net-reader-add-btn').addEventListener('click', addReader)
+    readerHost.addEventListener('keydown', (e) => e.key === 'Enter' && addReader())
     this._net = g
   }
 
@@ -426,6 +446,25 @@ export class Hud {
         this._refreshNetwork()
       })
       rlist.appendChild(row)
+    }
+
+    // Addresses allowed to read this colony without being a neighbour or visiting back.
+    const readers = cfg.allowedReaders || []
+    const readerList = g.querySelector('.net-readers')
+    readerList.innerHTML = readers.length
+      ? ''
+      : `<div class="net-empty">None yet. Add one below to let a screen or hub read this colony.</div>`
+    for (const ip of readers) {
+      const row = document.createElement('div')
+      row.className = 'net-item'
+      row.innerHTML =
+        `<span class="net-item-addr">${escapeHtml(ip)}</span>` +
+        `<button class="btn icon ghost net-remove" title="Stop allowing">${ICON.close}</button>`
+      row.querySelector('.net-remove').addEventListener('click', () => {
+        this.actions.removeAllowedReader?.(ip)
+        this._refreshNetwork()
+      })
+      readerList.appendChild(row)
     }
   }
 

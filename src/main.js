@@ -52,9 +52,10 @@ let state = { archived: [], archivedAt: {}, opened: [], plots: {}, seen: {}, hid
 
 /** The machine's own network block, always a well-formed object for the settings panel. */
 function network() {
-  if (!state.network || typeof state.network !== 'object') state.network = { colonyName: '', share: false, neighbors: [], shared: [] }
+  if (!state.network || typeof state.network !== 'object') state.network = { colonyName: '', share: false, neighbors: [], shared: [], allowedReaders: [] }
   if (!Array.isArray(state.network.neighbors)) state.network.neighbors = []
   if (!Array.isArray(state.network.shared)) state.network.shared = []
+  if (!Array.isArray(state.network.allowedReaders)) state.network.allowedReaders = []
   return state.network
 }
 
@@ -357,6 +358,17 @@ const actions = {
   },
   removeNeighbor: (host, port) => {
     patchNetwork({ neighbors: network().neighbors.filter((n) => !(n.host === host && n.port === port)) })
+  },
+  /** Let one address read this colony without adding it as a neighbour or visiting it back. */
+  addAllowedReader: (ip) => {
+    const host = String(ip || '').trim()
+    if (!host) return
+    const set = new Set(network().allowedReaders || [])
+    set.add(host)
+    patchNetwork({ allowedReaders: [...set] })
+  },
+  removeAllowedReader: (ip) => {
+    patchNetwork({ allowedReaders: (network().allowedReaders || []).filter((h) => h !== ip) })
   },
 
   /** Toggle whether one repo, with all its sessions present and future, is shared. */
