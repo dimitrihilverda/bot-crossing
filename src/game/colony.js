@@ -802,26 +802,20 @@ export class Colony {
     return out
   }
 
-  /** Centre + radius spanning every plot on the map, so the hub can frame all colonies at once. */
+  /**
+   * Centre + radius the hub frames the map by. Centred on the ORIGIN — the Hub's own colony
+   * sits there, so it stays the middle of the wall with the visiting colonies around it — and
+   * the radius reaches the farthest plot so everything stays in view.
+   */
   contentBounds() {
     if (!this.plotOrder.length) return null
-    let minX = Infinity
-    let maxX = -Infinity
-    let minZ = Infinity
-    let maxZ = -Infinity
+    let maxR = 0
     for (const plot of this.plotOrder) {
       const c = plot.middle || plot.center
       if (!c) continue
-      if (c.x < minX) minX = c.x
-      if (c.x > maxX) maxX = c.x
-      if (c.z < minZ) minZ = c.z
-      if (c.z > maxZ) maxZ = c.z
+      maxR = Math.max(maxR, Math.hypot(c.x, c.z))
     }
-    if (!Number.isFinite(minX)) return null
-    return {
-      center: new THREE.Vector3((minX + maxX) / 2, 0, (minZ + maxZ) / 2),
-      radius: Math.max(maxX - minX, maxZ - minZ) / 2 + 10,
-    }
+    return { center: new THREE.Vector3(0, 0, 0), radius: maxR + 10 }
   }
 
   setHoveredPlot(plot) {
