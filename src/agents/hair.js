@@ -135,8 +135,13 @@ export function hairStyleIndexFor(id) {
   return avalanche(hashString(`hair:${String(id)}`)) % HAIR_STYLES.length
 }
 
-/** `lowbias32` (Chris Wellons). A pure bit-mixer: no state, no allocation, same in and out. */
-function avalanche(h) {
+/**
+ * `lowbias32` (Chris Wellons). A pure bit-mixer: no state, no allocation, same in and out.
+ * Exported so `garment-sets.js` can salt-and-avalanche its own choice the same way, rather
+ * than reimplementing the finalizer — see the comment above `garmentSetIndexFor` there for
+ * why a second, independent hash needs it too.
+ */
+export function avalanche(h) {
   h ^= h >>> 16
   h = Math.imul(h, 0x7feb352d)
   h ^= h >>> 15

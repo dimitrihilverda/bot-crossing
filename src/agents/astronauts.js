@@ -2,8 +2,8 @@ import * as THREE from 'three'
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 import { buildFaceAtlas, FACE, FACE_LOOPS, FRAME_COLS, FRAME_ROWS } from './faces.js'
 import { attachMatrixAt, decorateSkinned, frameFor } from './crew.js'
-import { skinToneFor } from './skin.js'
 import { HAIR_STYLES, hairStyleIndexFor } from './hair.js'
+import { GARMENT_SETS, garmentSetIndexFor } from './garment-sets.js'
 import { bandPulse } from './band-pulse.js'
 import { SUIT_TONES } from './workwear.js'
 
@@ -425,62 +425,53 @@ export class Astronauts {
     this.rig = rig
     this._disposeCrew()
 
-    const geo = rig.geometry.clone()
-    const frames = new Float32Array(this.capacity)
-    this.crewFrameAttr = new THREE.InstancedBufferAttribute(frames, 1)
-    this.crewFrameAttr.setUsage(THREE.DynamicDrawUsage)
-    geo.setAttribute('aFrame', this.crewFrameAttr)
-
-    // One uniform block for the surface and the shadow pass, the same as the buildings do.
+    // One uniform block for the surface and the shadow pass, the same as the buildings do —
+    // and shared, by reference, across every set's material below. `Object.assign` in
+    // `decorateSkinned` copies the object references into each compiled shader's own uniform
+    // block, so `uBones`/`uFrameMax` stay one value updated in one place rather than N copies
+    // that could drift; that sharing is also what lets every set play from the one baked
+    // animation, since the bind pose is identical across sets (see `garment-sets.js`).
     this.crewUniforms = {
       uBones: { value: rig.boneTexture },
       uFrameMax: { value: rig.frameCount - 1 },
     }
 
-    const material = decorateSkinned(
-      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.68, metalness: 0.04 }),
-      this.crewUniforms
-    )
+    // One InstancedMesh per garment set rather than one for the whole crew: each set wears
+    // its own texture, and a texture is a material, and an InstancedMesh draws one material.
+    // Every agent is written into exactly one of these — see `garmentSetIndexFor` and the
+    // per-set counters in `_writeMatrices` — so the sum of their counts is the crew size.
+    this.crewMeshes = rig.sets.map((set) => {
+      const geo = set.geometry.clone()
+      const frames = new Float32Array(this.capacity)
+      const frameAttr = new THREE.InstancedBufferAttribute(frames, 1)
+      frameAttr.setUsage(THREE.DynamicDrawUsage)
+      geo.setAttribute('aFrame', frameAttr)
 
-    const mesh = new THREE.InstancedMesh(geo, material, this.capacity)
-    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
-    mesh.count = 0
-    mesh.receiveShadow = false
-    mesh.frustumCulled = false
-    const white = new THREE.Color(1, 1, 1)
-    for (let i = 0; i < this.capacity; i++) mesh.setColorAt(i, white)
-    mesh.instanceColor.setUsage(THREE.DynamicDrawUsage)
+      const material = decorateSkinned(
+        new THREE.MeshStandardMaterial({ map: set.texture, roughness: 0.68, metalness: 0.04 }),
+        this.crewUniforms
+      )
 
-    const depth = decorateSkinned(
-      new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking }),
-      this.crewUniforms,
-      { normals: false }
-    )
-    mesh.customDepthMaterial = depth
+      const mesh = new THREE.InstancedMesh(geo, material, this.capacity)
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+      mesh.count = 0
+      mesh.receiveShadow = false
+      mesh.frustumCulled = false
+      const white = new THREE.Color(1, 1, 1)
+      for (let i = 0; i < this.capacity; i++) mesh.setColorAt(i, white)
+      mesh.instanceColor.setUsage(THREE.DynamicDrawUsage)
 
-    this.crew = mesh
-    this.group.add(mesh)
+      mesh.customDepthMaterial = decorateSkinned(
+        new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking }),
+        this.crewUniforms,
+        { normals: false }
+      )
 
-    // The head. It comes with the rig rather than with the rest of the parts, so it is built
-    // here and not in `_buildMeshes` — and it is its own instanced mesh rather than part of
-    // the body for two reasons: it is rigid, so skinning it would be a weighted sum that can
-    // only ever return one bone's matrix, and it needs an `instanceColor` of its own to carry
-    // the skin tone. The body's is already spoken for by the work clothes.
-    //
-    // `rig.headGeometry` arrives in the head bone's own local frame, and the slot write in
-    // `_writeMatrices` places it at that bone *plus* `P.headUp` — so the geometry is shifted
-    // down by exactly that offset and the two cancel, putting the head back into the rest
-    // pose it had inside the body. Writing it at the face's offset rather than at the bone
-    // is deliberate: the head and the face are then placed by one identical matrix, and a
-    // face cannot drift off the head it is painted on however the neck is turned.
-    const headGeo = rig.headGeometry.clone()
-    headGeo.translate(0, -P.headUp, 0)
-    // Skin: rougher than the work clothes and not metallic at all. `vertexColors` stays off,
-    // so the only thing tinting it is the instance colour — which is the tone itself.
-    const skin = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7, metalness: 0 })
-    this.parts.head = this._mesh(headGeo, skin, this.capacity, true)
-    this.parts.head.frustumCulled = false
-    this.group.add(this.parts.head)
+      this.group.add(mesh)
+      return { id: set.id, mesh, frameAttr }
+    })
+    /** One counter per garment set, reset and refilled every frame. See `_writeMatrices`. */
+    this._setCounts = new Uint32Array(this.crewMeshes.length)
 
     this._applyShadowFlags()
 
@@ -498,22 +489,17 @@ export class Astronauts {
   }
 
   _disposeCrew() {
-    // The head belongs to the rig, not to `_buildMeshes`, so it is torn down with the rig
-    // rather than with the rest of the parts — and taking it off `this.parts` here is what
-    // stops the capacity rebuild, which disposes everything still on that object, from
-    // disposing it a second time.
-    if (this.parts.head) {
-      this.group.remove(this.parts.head)
-      this.parts.head.geometry.dispose()
-      this.parts.head.material.dispose()
-      delete this.parts.head
+    // One entry per garment set — see `setRig`. The head is not a separate part any more: it
+    // is part of each set's own merged, skinned geometry, so it is torn down along with it
+    // here and needs no disposal of its own.
+    if (!this.crewMeshes) return
+    for (const { mesh } of this.crewMeshes) {
+      this.group.remove(mesh)
+      mesh.geometry.dispose()
+      mesh.material.dispose()
+      mesh.customDepthMaterial?.dispose()
     }
-    if (!this.crew) return
-    this.group.remove(this.crew)
-    this.crew.geometry.dispose()
-    this.crew.material.dispose()
-    this.crew.customDepthMaterial?.dispose()
-    this.crew = null
+    this.crewMeshes = null
   }
 
   _mesh(geo, mat, count, castShadow) {
@@ -613,8 +599,8 @@ export class Astronauts {
       // antenna tip and the chest lamp did, for the same reason.
       mesh.castShadow = on && name !== 'face' && name !== 'bands'
     }
-    // The body is the shadow that matters — it is the whole silhouette.
-    if (this.crew) this.crew.castShadow = on
+    // The body is the shadow that matters — it is the whole silhouette. One flag per set.
+    if (this.crewMeshes) for (const { mesh } of this.crewMeshes) mesh.castShadow = on
   }
 
   /** The colony hands over the navigation grid once it has been built. */
@@ -647,6 +633,7 @@ export class Astronauts {
         this.setRig(rig)
         for (const agent of this.agents) {
           agent.index = -1
+          agent.setSlot = -1
           agent.colorDirty = true
         }
       }
@@ -737,6 +724,9 @@ export class Astronauts {
       // member is, the way its skin tone does, and it is the only thing on the figure that a
       // status change cannot move.
       hair: hairStyleIndexFor(entry.id),
+      // Which garment set this thread wears — the same one-time, id-only resolution as
+      // `hair` above, and the same reason: it is who a crew member is, not what it is doing.
+      garmentSet: garmentSetIndexFor(entry.id),
       eye: new THREE.Color(1, 1, 1),
       trim: new THREE.Color(0xffffff),
       hop: 0,
@@ -766,6 +756,9 @@ export class Astronauts {
       pathGoal: new THREE.Vector3(NaN, 0, NaN),
       colorDirty: true,
       index: -1,
+      /** Same sentinel and the same reason as `index`, but scoped to this agent's own
+       *  garment set's InstancedMesh — see the colour gates in `_writeMatrices`. */
+      setSlot: -1,
       walkAmp: 0,
       screen: new THREE.Vector3(), // filled by the picker each frame
     }
@@ -1355,9 +1348,9 @@ export class Astronauts {
   // ── writing the instance buffers ────────────────────────────────────────────────────
 
   _writeMatrices(elapsed, anim) {
-    const { head, face, bands, hammer, cabinet, box } = this.parts
+    const { face, bands, hammer, cabinet, box } = this.parts
     const rig = this.rig
-    const crew = this.crew
+    const crewMeshes = this.crewMeshes
     const root = this._m
     const child = this._m2
     const bone = this._m3
@@ -1367,7 +1360,6 @@ export class Astronauts {
     const v = this._v
     const one = this._one
     const frames = this.frameAttr.array
-    const crewFrames = this.crewFrameAttr?.array
     const hairMeshes = this.hairMeshes
     const hairCounts = this._hairCounts
 
@@ -1381,6 +1373,12 @@ export class Astronauts {
     // And one per hairstyle, for exactly that reason: each style's mesh is packed only with
     // the crew members wearing it, so none of them can use the crew's own index either.
     hairCounts.fill(0)
+    // And one per garment set: an agent is written into its own set's InstancedMesh and its
+    // slot in the other set's stays unused, so the two sets need their own slot spaces
+    // rather than sharing the packing index `i` below (see `agent.garmentSet`,
+    // `garmentSetIndexFor`).
+    const setCounts = this._setCounts
+    setCounts?.fill(0)
     let staticDirty = false
     for (const agent of this.agents) {
       // Never write past the end of the instance buffers. Going over is not a rendering
@@ -1400,15 +1398,17 @@ export class Astronauts {
       // draw-time skip and nothing more — the agent keeps its state, its status and its
       // place in the roster while it rides.
       //
-      // Giving up the index matters as much as skipping the write. The colour gate below
-      // fires on `index !== i`, and every agent behind this one shifts down a slot and
-      // overwrites the colours in the slot this one vacated. Keep the stale index and the
-      // agent reclaims that same `i` on its way back with the gate reading "unchanged", so
-      // it is drawn in whatever suit, skin tone, trim and eye its neighbour left there — until
-      // some unrelated status change happens to set `colorDirty`. `-1` is the same sentinel
-      // a capacity rebuild uses, and nothing else reads `index`.
+      // Giving up the index matters as much as skipping the write. The colour gates below
+      // fire on `index !== i` and `setSlot !== crewSlot`, and every agent behind this one
+      // shifts down a slot and overwrites the colours in the slot this one vacated. Left
+      // stale instead of reset, the agent would reclaim that same `i` and `crewSlot` on its
+      // way back with both gates reading "unchanged", so it would be drawn in whatever suit,
+      // trim and eye its neighbour left there — until some unrelated status change happens to
+      // set `colorDirty`. Resetting both to `-1` forces a rewrite instead. `-1` is the same
+      // sentinel a capacity rebuild uses, and nothing else reads either field.
       if (agent.riding) {
         agent.index = -1
+        agent.setSlot = -1
         continue
       }
       const s = agent.scale
@@ -1422,9 +1422,16 @@ export class Astronauts {
       root.compose(v, q, one.setScalar(s * CREW_SCALE))
       one.setScalar(1)
 
-      if (crew) {
-        crew.setMatrixAt(i, root)
-        crewFrames[i] = agent.frame
+      // Written into its own garment set's InstancedMesh — never `i`, which is the shared
+      // slot the one-per-crew-member parts below use. `agent.garmentSet` was resolved once
+      // at spawn (see `_spawnAgent`), the same as its hairstyle, so this is a lookup rather
+      // than a hash on the frame's hot path.
+      let crewSlot = -1
+      if (crewMeshes) {
+        const cm = crewMeshes[agent.garmentSet]
+        crewSlot = setCounts[agent.garmentSet]++
+        cm.mesh.setMatrixAt(crewSlot, root)
+        cm.frameAttr.array[crewSlot] = agent.frame
       }
 
       // Everything worn hangs off a bone at the frame the body is actually on, so a worn
@@ -1432,10 +1439,11 @@ export class Astronauts {
       if (rig) {
         attachMatrixAt(rig, agent.frame, this.headSlot, bone)
         worn.multiplyMatrices(root, bone)
-        // One matrix, two parts. The head is the body's own head put back where skinning
-        // would have left it; the face is drawn on the front of it. Sharing the write is
-        // what guarantees they stay together — see `setRig` for why the offset cancels.
-        setPart(child, worn, head, i, 0, P.headUp, 0, 0, 0, 0)
+        // The head is no longer a separate part: it is baked into each garment set's own
+        // merged, skinned geometry (see `crew.js`'s `mergeSet`) and rides the skeleton
+        // exactly rather than the attach-bone approximation a rigid part needed. Only the
+        // face — the procedural screen the status expressions animate — still rides here,
+        // at the same bone-plus-offset the head used to.
         setPart(child, worn, face, i, 0, P.headUp, 0, 0, 0, 0)
 
         // Hair, written with that same matrix and that same offset — so it rides the head
@@ -1479,20 +1487,23 @@ export class Astronauts {
 
       // Suit and trim only change when the status does, or when an agent leaving the roster
       // shuffles everyone's slot along — so they are written on those frames, not all of them.
+      //
+      // The suit lives in its own garment set's mesh now, at `crewSlot` rather than at `i` —
+      // a different slot space, so it needs its own dirty check rather than reusing the
+      // `agent.index !== i` one below, which only speaks to the shared per-crew-member slot
+      // `face` and `bands` use. `agent.setSlot` is that same check, scoped to the set: it is
+      // what catches a garment mesh's slot being reused by a different agent of the same set
+      // after somebody ahead of it in that set went home.
       const c = this._color
-      if (agent.index !== i || agent.colorDirty) {
-        agent.colorDirty = false
-        crew?.setColorAt(i, c.setHex(agent.suit))
+      const wasDirty = agent.colorDirty
+      agent.colorDirty = false
+      if (crewMeshes && (agent.setSlot !== crewSlot || wasDirty)) {
+        crewMeshes[agent.garmentSet].mesh.setColorAt(crewSlot, c.setHex(agent.suit))
+        staticDirty = true
+      }
+      agent.setSlot = crewSlot
+      if (agent.index !== i || wasDirty) {
         face.setColorAt(i, agent.eye)
-        // Skin tone sits under the same gate for the same reason the others do: it is a
-        // property of *which slot this agent is in*, not of the frame. It is keyed off the
-        // thread id rather than off anything in `agent`, so it is the one colour here that
-        // survives a status change untouched — but it still has to be rewritten when the
-        // slot changes, because the agent that used to hold slot `i` left its own tone in it.
-        //
-        // Guarded the way the body is: the head arrives with the rig, so there is a moment
-        // at boot where an agent has a colour to write and nothing to write it on.
-        if (head) head.setColorAt(i, skinToneFor(agent.id))
         staticDirty = true
       }
 
@@ -1546,11 +1557,14 @@ export class Astronauts {
       // same reason; there is one such part now, so it is one name.
       if (mesh.instanceColor && (staticDirty || name === 'bands')) mesh.instanceColor.needsUpdate = true
     }
-    if (crew) {
-      crew.count = n
-      crew.instanceMatrix.needsUpdate = true
-      this.crewFrameAttr.needsUpdate = true
-      if (staticDirty && crew.instanceColor) crew.instanceColor.needsUpdate = true
+    if (crewMeshes) {
+      for (let s = 0; s < crewMeshes.length; s++) {
+        const cm = crewMeshes[s]
+        cm.mesh.count = setCounts[s]
+        cm.mesh.instanceMatrix.needsUpdate = true
+        cm.frameAttr.needsUpdate = true
+        if (staticDirty && cm.mesh.instanceColor) cm.mesh.instanceColor.needsUpdate = true
+      }
     }
     this.frameAttr.needsUpdate = true
     this.visibleCount = n

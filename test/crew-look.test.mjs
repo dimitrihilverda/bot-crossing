@@ -82,10 +82,19 @@ test('skin.js cannot reach anything that knows a status', () => {
   }
 })
 
-test('the head is built and written, and carries its own colour', () => {
-  assert.match(SRC, /parts\.head\s*=/, 'parts.head is not built')
-  assert.match(SRC, /setPart\([^)]*\bhead\b/, 'the head is not written per frame')
-  assert.match(SRC, /head\.setColorAt/, 'the head never gets a skin tone')
+test('the head is no longer a separate part — it rides in each garment set\'s own mesh', () => {
+  // Task 2 folded the head into each garment set's own merged, skinned geometry (see
+  // `mergeSet` in crew.js): it is skinned exactly, the same as every other limb, rather than
+  // placed by the old attach-bone approximation a rigid standalone part needed. So there is
+  // no `parts.head` any more, and nothing here still reaches the `rig.headGeometry` that
+  // used to feed it — `crew.js` deleted that field along with `extractHead`.
+  assert.doesNotMatch(SRC, /parts\.head\s*=/, 'parts.head is still built')
+  assert.doesNotMatch(SRC, /rig\.headGeometry/, 'astronauts.js still reads the deleted rig.headGeometry')
+})
+
+test('setRig builds one InstancedMesh per garment set, each carrying its own texture', () => {
+  assert.match(SRC, /rig\.sets\.map/, 'setRig no longer builds one mesh per garment set')
+  assert.match(SRC, /map:\s*set\.texture/, 'a garment set mesh is not textured with its own set')
 })
 
 test('there are three or four styles and one of them is bald', () => {
