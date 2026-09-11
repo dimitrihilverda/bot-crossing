@@ -312,8 +312,15 @@ export class Colony {
    */
   setThreads(threads, archivedIds = new Set(), hiddenProjects = new Set(), knownIds = new Set()) {
     const now = Date.now()
-    // Lay the districts out at whatever spacing the config asks for, read fresh each pass.
-    setColonySpacing(this.settings.get('colonySpacing'))
+    // Lay the districts out at whatever spacing the config asks for, read fresh each pass. When it
+    // changes, wipe the remembered layout so the districts actually re-seed at the new ring —
+    // otherwise the drift guard holds them where they were and the slider looks dead.
+    const spacing = this.settings.get('colonySpacing')
+    setColonySpacing(spacing)
+    if (spacing !== this._lastSpacing) {
+      this._lastSpacing = spacing
+      this.plotCells.clear()
+    }
     const live = liveThreadsForColony(threads, archivedIds, hiddenProjects)
 
     // Group by repo, biggest project first so the busiest work lands nearest the middle.
