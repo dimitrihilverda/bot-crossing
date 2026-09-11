@@ -100,3 +100,39 @@ test('an open run behaves the same with no options passed as with the defaults s
   const seen = new Set(implicit.map((p) => `${p.x.toFixed(4)},${p.z.toFixed(4)}`))
   assert.equal(seen.size, implicit.length, 'the default (single-call) placed set did not dedup within its own run')
 })
+
+// ── D1: every patch carries a heading, so the tile drawn on it can be rotated to face it ──
+
+test('every patch carries a finite numeric heading, and a bend carries two different ones', () => {
+  const bend = [{ q: 0, r: 0 }, { q: 1, r: 0 }, { q: 1, r: 1 }]
+  const points = carriagewayPoints(bend, 1)
+  for (const p of points) {
+    assert.equal(typeof p.heading, 'number', `patch at (${p.x}, ${p.z}) has no numeric heading`)
+    assert.ok(Number.isFinite(p.heading), `heading ${p.heading} is not finite`)
+  }
+  // The bend turns from one hop's direction to a different one, so at least two distinct
+  // headings must appear among the patches (the two straight lead-ins plus the junction).
+  const headings = new Set(points.map((p) => p.heading.toFixed(6)))
+  assert.ok(headings.size >= 2, `a bend produced only ${headings.size} distinct heading(s)`)
+})
+
+test("a straight run's patches all share one heading", () => {
+  const straight = [{ q: 0, r: 0 }, { q: 1, r: 0 }, { q: 2, r: 0 }]
+  const points = carriagewayPoints(straight, 1)
+  assert.ok(points.length > 1, 'not enough patches to compare')
+  const headings = new Set(points.map((p) => p.heading.toFixed(6)))
+  assert.equal(headings.size, 1, `a straight run produced ${headings.size} distinct headings`)
+})
+
+test('a patch\'s heading is exactly atan2(dz, dx) over the hop it belongs to', () => {
+  // Cell (0,0) to cell (1,0) at radius 1: world (0, 0) to (1.5, sqrt(3)/2) — a hop this
+  // whole run repeats, so every patch (straight lead-in and the final cell-centre patch
+  // alike) should carry precisely this heading.
+  const cells = [{ q: 0, r: 0 }, { q: 1, r: 0 }, { q: 2, r: 0 }]
+  const points = carriagewayPoints(cells, 1)
+  const expected = Math.atan2(Math.sqrt(3) / 2, 1.5)
+  assert.ok(points.length > 1, 'not enough patches to compare')
+  for (const p of points) {
+    assert.ok(Math.abs(p.heading - expected) < 1e-9, `heading ${p.heading} !== atan2 value ${expected}`)
+  }
+})
