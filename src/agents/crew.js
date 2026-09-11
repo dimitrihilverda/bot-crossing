@@ -75,11 +75,11 @@ const CREW_URL = `${import.meta.env.BASE_URL}assets/crew.glb`
 
 /**
  * How far a world matrix's elements may drift from another mesh's before `bakeClips`
- * refuses to trust that they describe the same placement. Same reasoning as `head-bind.js`'s
- * `HEAD_BIND_EPS`: a glTF transform is authored and stored as float32, and three composing it
- * into a `Matrix4` on load can leave a few ULPs of noise even where the source was exactly
- * equal — single-precision epsilon near 1 is on the order of 1e-7. 1e-6 clears that noise
- * floor while still catching any transform that would actually move a vertex.
+ * refuses to trust that they describe the same placement: a glTF transform is authored and
+ * stored as float32, and three composing it into a `Matrix4` on load can leave a few ULPs of
+ * noise even where the source was exactly equal — single-precision epsilon near 1 is on the
+ * order of 1e-7. 1e-6 clears that noise floor while still catching any transform that would
+ * actually move a vertex.
  */
 const WORLD_MATRIX_EPS = 1e-6
 
