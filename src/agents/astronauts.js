@@ -350,13 +350,28 @@ export class Astronauts {
     parts.cabinet = this._mesh(cabinetGeometry(), suit(0.72, { vertexColors: true }), capacity, true)
     parts.box = this._mesh(movingBoxGeometry(), suit(0.85, { vertexColors: true }), capacity, true)
 
-    // Face: the features only. Built as a sphere cap at a hair over the head's own radius, so
-    // it sits on the curved surface of the head instead of floating flat in front of it — a
-    // flat plane at this radius sinks inside that curve and the features disappear. Now that
-    // there is a solid head behind it rather than a helmet, "a hair over" has to be measured
-    // against the head: at `headR * 1.047` the features clear the brow by 0.026 to 0.053,
-    // which is what keeps them on the front of the face rather than inside it.
-    const faceGeo = sphereCap(P.headR * 1.047, 1.72, 0.98, 16, 10)
+    // Face: the features only. Built as a sphere cap on the curved surface of the head
+    // instead of floating flat in front of it — a flat plane at this radius sinks inside
+    // that curve and the features disappear.
+    //
+    // Sized to `P.headR` exactly, not a hair over it. Stage 3's own ledger recorded two
+    // different measurements of the real head's surface under this cap: the DRAWN patch —
+    // where the eyes and mouth actually are — reaches out to 0.548, while the cap's whole
+    // footprint, corners included, reaches 0.581 at its farthest point. The old `* 1.047`
+    // (cap radius 0.580) was sized to that second, larger number, so the drawn features sat
+    // about 0.03 clear of the skull instead of on it — which is what read as the face
+    // floating off the head. `P.headR` (0.554) clears the drawn patch by about 0.006
+    // instead, which is what "a hair over" should have meant.
+    //
+    // The corners sink into the real head at this radius rather than clearing it — the
+    // worst one (0.581) by about 0.027, worse than the 0.0012 stage 3 already measured at
+    // the old 0.580 — but that is harmless rather than a new defect: nothing is drawn there.
+    // `buildFaceAtlas`'s `DRAW` table keeps every eye, mouth and other shape within roughly
+    // 0.14 to 0.86 of the unit box in both axes, with one exception — the sleep frame's
+    // `zzz` marks reach out to x ~ 0.98 — but even those stay within y ~ 0.15 to 0.38,
+    // nowhere near the y = 0 or y = 1 edge a corner needs both of. So the mask is zero alpha
+    // at every corner, and there is nothing visible to clip into the skull.
+    const faceGeo = sphereCap(P.headR, 1.72, 0.98, 16, 10)
     parts.face = this._mesh(faceGeo, this._faceMaterial(), capacity, false)
     this._attachFrameAttribute(parts.face, capacity)
 
@@ -534,7 +549,17 @@ export class Astronauts {
     })
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.uFrameScale = { value: new THREE.Vector2(1 / FRAME_COLS, 1 / FRAME_ROWS) }
-      shader.uniforms.uGlow = { value: 1.85 }
+      // Left at 1.0 rather than pushed past it: a value over 1 survives the HDR target into
+      // the bloom pass (see `BAND_GLOW` above for the mechanics), which is what the antenna
+      // tip and the chest lamp needed to read as a beacon before stage 3 removed them. The
+      // eyes don't carry that job any more. Stage 3's own arithmetic (`BAND_GLOW`,
+      // `BAND_SPARK`) already has the hi-vis bands' reflective ring over the 0.92 threshold
+      // for five of the eight statuses at the calm pulse, and `blocked` crossing it every
+      // 0.625s — so the bands carry night-time status on their own, and dropping the eyes'
+      // push into bloom costs no signal. The push only made the face-off-the-head defect
+      // (see the face cap above) easier to notice; without it the features stay crisp and
+      // readable at colony zoom instead of blown out.
+      shader.uniforms.uGlow = { value: 1.0 }
       this._faceUniforms = shader.uniforms
 
       shader.vertexShader = shader.vertexShader

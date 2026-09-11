@@ -221,3 +221,26 @@ test('hair.js cannot reach anything that knows a status', () => {
     assert.ok(allowed.has(spec), `hair.js imports ${spec}, which is not on its allowlist`)
   }
 })
+
+// ── D3/D4: the mid-stage defect fixes. astronauts.js needs a GL context and a loaded glb,
+// so — following this file's own precedent above — these are source-text guards rather than
+// constructed-scene checks: what matters is that the two constants a user actually saw as a
+// visual defect do not drift back to their old values.
+
+test('the face cap is sized to P.headR, not the old 1.047-over multiplier', () => {
+  // The old multiplier sized the cap to its own whole footprint (0.581) rather than to the
+  // patch where the eyes and mouth are actually drawn (0.548), so the features floated
+  // about 0.03 clear of the skull. `P.headR` alone clears the drawn patch by about 0.006.
+  assert.match(SRC, /sphereCap\(P\.headR,\s*1\.72,\s*0\.98,\s*16,\s*10\)/, 'the face cap call changed shape unexpectedly')
+  assert.doesNotMatch(SRC, /sphereCap\(P\.headR\s*\*\s*1\.047/, 'the face cap is still sized to the old whole-footprint multiplier')
+})
+
+test('the face does not glow past 1.0 any more', () => {
+  // 1.85 pushed the eyes and mouth over the HDR/bloom threshold, which is what made the
+  // face-off-the-head defect (fixed above) conspicuous. The eyes keep carrying status
+  // through colour (`face.setColorAt(i, agent.eye)`, unchanged) — only the brightness push
+  // past 1.0 is gone, now that the hi-vis bands carry night-time status on their own.
+  assert.match(SRC, /uGlow = \{ value: 1\.0 \}/, 'uGlow is not set to 1.0')
+  assert.doesNotMatch(SRC, /uGlow = \{ value: 1\.85 \}/, 'uGlow is still pushed past 1.0')
+  assert.match(SRC, /face\.setColorAt\(i, agent\.eye\)/, 'the eye no longer carries status through colour')
+})
