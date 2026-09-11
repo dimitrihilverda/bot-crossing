@@ -398,8 +398,18 @@ export class Astronauts {
     /** One counter per style, reset and refilled every frame. See `_writeMatrices`. */
     this._hairCounts = new Uint32Array(HAIR_STYLES.length)
 
-    for (const mesh of Object.values(parts)) {
+    for (const [name, mesh] of Object.entries(parts)) {
       mesh.frustumCulled = false // one bounding volume for every agent everywhere is useless
+      // The face cap and the primitive hair caps are stopped from drawing here, deliberately,
+      // ahead of the rest of this stage's own work. Each garment set's head mesh (see
+      // `mergeSet` in crew.js) already carries a painted face and hair modelled into the
+      // geometry itself, so drawing these primitives on top doubles up: measured in the
+      // running colony, every figure got the old sphere-cap face over a face already on the
+      // head, and 71 of 90 got a primitive hair cap over hair already there. Both meshes are
+      // still built and still live in `parts` — a later task deletes `faces.js`, this
+      // construction and the agent-record fields that feed it — but neither is added to the
+      // scene, so nothing about them is ever drawn.
+      if (name === 'face' || name.startsWith('hair_')) continue
       this.group.add(mesh)
     }
     this._applyShadowFlags()
