@@ -433,12 +433,22 @@ export class Colony {
     // — never because a different repo gained or lost a thread. `plotCells` carries it
     // between polls, and the colony file carries it between sessions.
     const colonyOf = this.projectColony || new Map()
+    // The visiting colonies, in a stable order, so each gets an even slot around the ring and
+    // they surround the centre rather than clumping where their names hash.
+    const visitingColonies = [...new Set([...colonyOf.values()].map((v) => v.colony).filter(Boolean))].sort()
+    const colonyIndex = new Map(visitingColonies.map((c, i) => [c, i]))
     const layout = allocateCells(
       projects.map(([name, list]) => {
         const visiting = colonyOf.get(name)
         // A visiting colony's repos anchor to that colony's district out past the home zones,
         // so they cluster together and read as somebody else's settlement.
-        return { id: name, size: list.length, anchor: visiting ? colonyAnchor(visiting.colony) : null }
+        return {
+          id: name,
+          size: list.length,
+          anchor: visiting
+            ? colonyAnchor(visiting.colony, colonyIndex.get(visiting.colony), visitingColonies.length)
+            : null,
+        }
       }),
       this.plotCells
     )

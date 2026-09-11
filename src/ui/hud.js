@@ -232,7 +232,8 @@ export class Hud {
       ),
       this._slider('Environment', 'iblIntensity', 0, 2, 0.05, (v) => v.toFixed(2)),
       this._slider('Exposure', 'exposure', 0.4, 2, 0.05, (v) => v.toFixed(2)),
-      this._slider('Bloom', 'bloomStrength', 0, 1.6, 0.02, (v) => v.toFixed(2))
+      this._slider('Bloom', 'bloomStrength', 0, 1.6, 0.02, (v) => v.toFixed(2)),
+      this._slider('Haze', 'haze', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`, 'Drifting atmospheric dust/haze on the map.')
     )
     body.appendChild(light)
 

@@ -45,7 +45,7 @@ export const PLANETS = {
     roughness: 1.15,
     scatter: 'rocks',
     companion: { name: 'Phobos', color: 0x9a8878, size: 1.5, glow: 0xb8a494 },
-    dust: 0.4,
+    dust: 1,
   },
   terra: {
     id: 'terra',

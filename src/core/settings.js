@@ -150,6 +150,8 @@ const DEFAULTS = {
   tiltShiftAngle: 0, // degrees — 0 keeps the sharp band horizontal
   iblIntensity: 1.0,
   fov: 38,
+  /** Multiplier on a planet's drifting atmospheric haze/dust (0 = none, 1 = the planet's full). */
+  haze: 0.4,
 
   // Behaviour
   autoQuality: true, // drop render scale when frames get expensive
