@@ -811,21 +811,44 @@ const luminance = (hex) => {
   const [r, g, b] = srgb(hex).map(toLinear)
   return 0.2126 * r + 0.7152 * g + 0.0722 * b
 }
+const distance = (a, b) => {
+  const [ar, ag, ab] = srgb(a)
+  const [br, bg, bb] = srgb(b)
+  return Math.hypot(ar - br, ag - bg, ab - bb)
+}
 
-test('there are six hair tones', () => {
-  assert.equal(HAIR_TONES.length, 6)
+test('there are five hair tones', () => {
+  assert.equal(HAIR_TONES.length, 5)
 })
 
-test('every hair tone is darker than every skin tone', () => {
-  // The constraint stage 3 used to pick its single HAIR_TONE, now applied to six: hair has
-  // to read as hair against all six skin tones, and the only way it reliably does at this
-  // figure size is by being darker than the face it sits above.
+test('every hair tone is far enough from every skin tone to read against it', () => {
+  // Hair and skin are chosen independently, so any of the 30 pairings can occur and every
+  // one has to be legible. The rule is sRGB distance, NOT "hair is darker": the six skin
+  // tones span 0.035 to 0.675 in luminance, so they cover the whole brown-and-tan range
+  // that hair also lives in, and a mid-brown hair measures 0.048 from one of them --
+  // effectively the same colour. Requiring hair to be darker than the darkest skin (0.035)
+  // would force six shades of near-black and throw away the variety it exists for.
+  //
+  // This threshold is why the palette is greyscale-to-blue-black: browns, gingers and
+  // blondes are exactly the colours human skin comes in, so none of them can clear it.
+  // Measured: black 0.221, blue-black 0.210, slate 0.227, ash grey 0.244, steel grey 0.310;
+  // platinum 0.120, deep olive 0.119 and dark auburn 0.059 all fail.
   for (const hair of HAIR_TONES) {
     for (const skin of SKIN_TONES) {
+      const d = distance(hair, skin)
       assert.ok(
-        luminance(hair) < luminance(skin),
-        `hair 0x${hair.toString(16)} is not darker than skin 0x${skin.toString(16)}`
+        d >= 0.15,
+        `hair 0x${hair.toString(16)} is ${d.toFixed(3)} from skin 0x${skin.toString(16)}`
       )
+    }
+  }
+})
+
+test('the hair tones are distinct from each other', () => {
+  for (let i = 0; i < HAIR_TONES.length; i++) {
+    for (let j = i + 1; j < HAIR_TONES.length; j++) {
+      const d = distance(HAIR_TONES[i], HAIR_TONES[j])
+      assert.ok(d >= 0.08, `hair tones ${i} and ${j} are only ${d.toFixed(3)} apart`)
     }
   }
 })
@@ -846,7 +869,7 @@ test('the hair tone is independent of the skin tone', () => {
     const id = `thread-${i}`
     pairs.add(`${hairToneIndexFor(id)}:${skinToneIndexFor(id)}`)
   }
-  assert.equal(pairs.size, 36, `only ${pairs.size} of 36 hair/skin pairs appeared`)
+  assert.equal(pairs.size, 30, `only ${pairs.size} of 30 hair/skin pairs appeared`)
 })
 
 test('no primitive hairstyle geometry survives', () => {
@@ -864,10 +887,14 @@ test('no primitive hairstyle geometry survives', () => {
 Run: `node --test test/crew-look.test.mjs`
 Expected: FAIL — `HAIR_TONES` is not exported and the primitives are still there.
 
-Rewrite `src/agents/hair.js` as the counterpart of `skin.js`: six tones and a per-id lookup,
-with the four primitive builders, `HAIR_STYLES`, `BALD` and `hairStyleIndexFor` deleted. Pick
-the six tones against the stated constraint — each darker in relative luminance than all six
-`SKIN_TONES` — and **record the measured worst-case margin in the module comment**. Use a
+Rewrite `src/agents/hair.js` as the counterpart of `skin.js`: five tones and a per-id lookup,
+with the four primitive builders, `HAIR_STYLES`, `BALD` and `hairStyleIndexFor` deleted.
+
+**Pick plausible hair colours and then verify them; do not maximise the distance.** 14025
+colours clear the 0.15 threshold, and a search that maximises it returns bright cyans. Five
+that are both plausible and measured to clear it are black, blue-black, slate, ash grey and
+steel grey. **Record the measured worst-case margin in the module comment**, and if you choose
+different tones, record yours. Use a
 salt distinct from `skin.js`'s and `garment-sets.js`'s, and the same `lowbias32` finalizer.
 
 Keep the module's existing import-allowlist test passing: it must still be unable to reach
@@ -1271,7 +1298,7 @@ git commit -m "docs: describe the clothed crew, and that the face no longer anim
 
 **2. Placeholder scan.** No "TBD" and no "handle edge cases". Three places deliberately hand
 the implementer a decision rather than a value, each with the constraint stated and a
-requirement to record what was chosen: the six hair tones (Task 3 Step 6), the band multiples
+requirement to record what was chosen: the five hair tones (Task 3 Step 6), the band multiples
 (Task 4 Step 4) and the band-contrast threshold (Task 5 Step 4.5). Task 3's shader is given as
 the two rules that matter — ratio substitution, and the eye cell's exception — plus the
 precedent to copy, rather than as a full listing: `_faceMaterial` is the working example in

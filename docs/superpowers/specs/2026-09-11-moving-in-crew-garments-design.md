@@ -68,11 +68,22 @@ across without losing what stage 3 built.
   spend without a picture to show for it. On a modelled head it is a free consequence of the
   same mechanism.
 
-  **The hair palette does not exist yet and this stage creates it**: six tones, chosen the way
-  `HAIR_TONE` was — dark enough to read as hair against all six skin tones — and asserted
-  against them rather than eyeballed. Six is chosen to match the skin count so neither
-  palette is the one that limits variety; the exact tones are the implementer's to pick and
-  record, against that stated constraint.
+  **The hair palette does not exist yet and this stage creates it**: five tones, asserted
+  against the skin tones rather than eyeballed.
+
+  The rule is **sRGB distance ≥ 0.15 from every one of the six skin tones**, not "darker than
+  the skin". Stage 3's single `HAIR_TONE` could be chosen by darkness because there was only
+  one; a palette cannot. The six skin tones span 0.035 to 0.675 in luminance and cover the
+  whole brown-and-tan range hair also lives in — a mid-brown hair measures 0.048 from one of
+  them, effectively the same colour — and requiring every tone to beat the darkest skin at
+  0.035 would force six shades of near-black, throwing away the variety the palette exists
+  for. Since hair and skin are drawn independently, all 30 pairings occur and each must read.
+
+  **That threshold makes the palette greyscale-to-blue-black, and that is a consequence
+  rather than a choice**: browns, gingers and blondes are exactly the colours human skin
+  comes in, so none of them can clear it. Measured — black 0.221, blue-black 0.210, slate
+  0.227, ash grey 0.244, steel grey 0.310; platinum 0.120, deep olive 0.119 and dark auburn
+  0.059 all fail. Read as dark, greying and grey hair, it suits a crew of mixed ages.
 
 **Lost, deliberately, and this is the price of the modelled heads:**
 
@@ -101,7 +112,7 @@ across without losing what stage 3 built.
   that reason is gone: each adventurer `_Head` is weighted entirely to the single `head` bone
   and merges into its set's geometry like any other part.
 
-**Per-mover variety afterwards:** 2 sets × 6 skin tones × 6 hair tones = 72 combinations, all
+**Per-mover variety afterwards:** 2 sets × 6 skin tones × 5 hair tones = 60 combinations, all
 stable from the thread id and none of them tracking status. Status stays where stage 3 put it:
 the trim colour on the hi-vis band, the eye colour, and the band's pulse when blocked.
 
