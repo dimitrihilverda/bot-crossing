@@ -1,9 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
 import { SKIN_TONES, skinToneIndexFor } from '../src/agents/skin.js'
 import { HAIR_TONES, hairToneFor, hairToneIndexFor } from '../src/agents/hair.js'
-import { bandPulse } from '../src/agents/band-pulse.js'
 
 const SRC = readFileSync('src/agents/astronauts.js', 'utf8')
 
@@ -25,7 +24,11 @@ for (const name of GONE) {
   })
 }
 
-test('the face survives, because it carries the eye colour', () => {
+test('the face survives — it is not yet deleted, even though it no longer carries a colour', () => {
+  // Still built and still positioned every frame, but never added to the scene (see the
+  // comment where `parts.face` is built) and, since this task, never repainted either — the
+  // eye colour it used to carry is gone. `faces.js` and this construction are a later task's
+  // to delete.
   assert.match(SRC, /parts\.face\s*=/, 'parts.face was removed')
   assert.match(SRC, /setPart\([^)]*\bface\b/, 'the face is no longer written')
 })
@@ -186,41 +189,41 @@ test('hairToneFor returns a THREE.Color and a thread always gets the same one', 
   assert.equal(a.getHex(), HAIR_TONES[hairToneIndexFor(id)])
 })
 
-test('a calm band holds steady', () => {
-  const a = bandPulse(0, false)
-  const b = bandPulse(1.7, false)
-  const c = bandPulse(9.3, false)
-  assert.equal(a, b)
-  assert.equal(b, c)
-  assert.ok(a > 0, 'a calm band is not invisible')
-})
+// ── task 4r: the hi-vis bands and the garment eye repaint are gone at the owner's request.
+//
+// The `bandPulse` tests and the "the bands are built and written" test that used to live here
+// asserted on a mechanism (`band-pulse.js`, `parts.bands`) that no longer exists — rewritten
+// below rather than left to fail. Status is still carried by the badge (`indicators.js`) and
+// by the pose; see `src/agents/astronauts.js`'s `AGENT_LOOK` comment for the full reasoning.
 
-test('an errored band actually moves', () => {
-  const samples = []
-  for (let t = 0; t < 2; t += 0.05) samples.push(bandPulse(t, true))
-  const min = Math.min(...samples)
-  const max = Math.max(...samples)
-  assert.ok(max - min > 0.3, `pulse only spans ${(max - min).toFixed(3)} — invisible at distance`)
-})
-
-test('the pulse never goes dark and never blows out', () => {
-  for (let t = 0; t < 10; t += 0.017) {
-    for (const errored of [true, false]) {
-      const v = bandPulse(t, errored)
-      assert.ok(v >= 0 && v <= 1, `bandPulse(${t}, ${errored}) = ${v}`)
-    }
+test('no hi-vis band is built or written', () => {
+  // The bands are gone at the owner's request: they read oddly against the garments. Status
+  // is carried by the badge (indicators.js) and by the pose, and `sleeping` and `idle` are
+  // deliberately BADGE.none, so nothing that wants attention lost its signal.
+  for (const gone of ['bands', 'BAND_GLOW', 'BAND_SPARK', 'bandPulse', 'bandY', 'bandR', 'bandDepth', 'bandThickness', 'bandGap']) {
+    assert.doesNotMatch(SRC, new RegExp(`\\b${gone}\\b`), `astronauts.js still has ${gone}`)
   }
 })
 
-test('an errored band is never fully off, so the figure never disappears', () => {
-  let min = Infinity
-  for (let t = 0; t < 10; t += 0.017) min = Math.min(min, bandPulse(t, true))
-  assert.ok(min > 0.15, `dips to ${min.toFixed(3)} — reads as a flicker, not a beacon`)
+test('band-pulse.js is gone', () => {
+  assert.equal(existsSync('src/agents/band-pulse.js'), false)
 })
 
-test('the bands are built and written', () => {
-  assert.match(SRC, /parts\.bands\s*=/, 'parts.bands is not built')
-  assert.match(SRC, /setPart\([^)]*\bbands\b/, 'the bands are not written per frame')
+test('the eyes are left as the pack painted them', () => {
+  // The atlas's own eye swatch is #13191b -- near-black already, which is why the shader had
+  // to special-case it against a ratio that divides by almost nothing. So "dark eyes" is
+  // achieved by not repainting that cell at all, rather than by feeding it a dark colour.
+  for (const gone of ['aEye', 'vEye', 'CELL_EYES', 'eyeAttr', 'eyeRect']) {
+    assert.doesNotMatch(SRC, new RegExp(`\\b${gone}\\b`), `astronauts.js still has ${gone}`)
+  }
+})
+
+test('skin and hair are still repainted per mover', () => {
+  // The regression guard for this task: removing one of three attributes must not take the
+  // other two with it.
+  for (const kept of ['aSkin', 'aHair', 'CELL_SKIN', 'CELL_HAIR', 'cellRect', 'CELL_BASE']) {
+    assert.match(SRC, new RegExp(`\\b${kept}\\b`), `astronauts.js lost ${kept}`)
+  }
 })
 
 test('hair.js cannot reach anything that knows a status', () => {
@@ -249,10 +252,11 @@ test('the face cap is sized to P.headR, not the old 1.047-over multiplier', () =
 
 test('the face does not glow past 1.0 any more', () => {
   // 1.85 pushed the eyes and mouth over the HDR/bloom threshold, which is what made the
-  // face-off-the-head defect (fixed above) conspicuous. The eyes keep carrying status
-  // through colour (`face.setColorAt(i, agent.eye)`, unchanged) — only the brightness push
-  // past 1.0 is gone, now that the hi-vis bands carry night-time status on their own.
+  // face-off-the-head defect (fixed above) conspicuous. Task 4r removed the eyes' status
+  // colour entirely (`face.setColorAt(i, agent.eye)` is gone along with `agent.eye`), so
+  // there is nothing left to push past 1.0 even in principle — this now just guards that
+  // uGlow stays at the harmless value.
   assert.match(SRC, /uGlow = \{ value: 1\.0 \}/, 'uGlow is not set to 1.0')
   assert.doesNotMatch(SRC, /uGlow = \{ value: 1\.85 \}/, 'uGlow is still pushed past 1.0')
-  assert.match(SRC, /face\.setColorAt\(i, agent\.eye\)/, 'the eye no longer carries status through colour')
+  assert.doesNotMatch(SRC, /face\.setColorAt\(i, agent\.eye\)/, 'the face still repaints from the removed agent.eye')
 })

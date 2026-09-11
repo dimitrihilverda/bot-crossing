@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { ATLAS_COLS, ATLAS_ROWS, CELL_EYES, CELL_HAIR, CELL_SKIN, cellRect } from '../src/agents/atlas-cells.js'
+import { readFileSync } from 'node:fs'
+import { ATLAS_COLS, ATLAS_ROWS, CELL_HAIR, CELL_SKIN, cellRect } from '../src/agents/atlas-cells.js'
 
 test('the atlas is eight columns by four rows', () => {
   assert.equal(ATLAS_COLS, 8)
@@ -22,12 +23,13 @@ test('cell 7 is the last cell of the first row', () => {
   assert.deepEqual(cellRect(7), { u0: 0.875, v0: 0, u1: 1, v1: 0.25 })
 })
 
-test('the three named cells are the ones the head meshes use', () => {
+test('the two named cells are the ones this project repaints', () => {
   // Measured from the UVs of Ranger_Head and Rogue_Head: cell 1 is hair (770 and 1640
-  // vertices), cell 0 is skin (322 and 309), cell 2 is eyes and brows (80 and 98).
+  // vertices), cell 0 is skin (322 and 309). Cell 2, eyes and brows (80 and 98), is measured
+  // in the same place but deliberately not given a name here any more — see the module
+  // comment for why it is left unrepainted.
   assert.equal(CELL_SKIN, 0)
   assert.equal(CELL_HAIR, 1)
-  assert.equal(CELL_EYES, 2)
 })
 
 test('every cell index has a rectangle inside the unit square', () => {
@@ -36,4 +38,9 @@ test('every cell index has a rectangle inside the unit square', () => {
     assert.ok(r.u0 >= 0 && r.u1 <= 1 && r.v0 >= 0 && r.v1 <= 1, `cell ${n} escapes the atlas`)
     assert.ok(r.u1 > r.u0 && r.v1 > r.v0, `cell ${n} is empty`)
   }
+})
+
+test('CELL_EYES is not exported — the eyes are left as the pack painted them', () => {
+  const src = readFileSync('src/agents/atlas-cells.js', 'utf8')
+  assert.doesNotMatch(src, /\bCELL_EYES\b/, 'atlas-cells.js still exports CELL_EYES')
 })

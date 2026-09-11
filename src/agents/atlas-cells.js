@@ -5,12 +5,20 @@
  * columns by four rows, each cell a vertical gradient and the bottom row filler. That is the
  * same shape `tools/atlas-cells.mjs` reads for the kit atlases.
  *
- * Three of those cells are what this project repaints per crew member, measured from the UVs
+ * Two of those cells are what this project repaints per crew member, measured from the UVs
  * of `Ranger_Head` and `Rogue_Head` rather than guessed:
  *
  *  - cell 0, `#f6c09c`, skin — 322 vertices on the Ranger's head, 309 on the Rogue's
  *  - cell 1, `#9b5a45`, hair — 770 and 1640
- *  - cell 2, `#13191b`, eyes and brows — 80 and 98
+ *
+ * A third cell was measured at the same time and is worth keeping on record even though
+ * nothing repaints it: cell 2, `#13191b`, eyes and brows — 80 vertices on the Ranger's head,
+ * 98 on the Rogue's. It is deliberately left as the pack painted it rather than named and
+ * given a shader branch of its own: the owner asked for the eyes to read as black or dark,
+ * and `#13191b` already is — near enough to black that the ratio substitution `astronauts.js`
+ * uses for skin and hair (dividing by the cell's own mid colour) would divide by almost
+ * nothing, turning any rounding error into a visible colour. Not repainting it costs nothing
+ * and sidesteps that entirely.
  *
  * glTF puts the UV origin at the **top** left and `v` runs downward, so cell 0 spans
  * v 0 to 0.25. Inverting that repaints a different swatch and still looks deliberate, which
@@ -24,13 +32,11 @@ export const ATLAS_ROWS = 4
 
 export const CELL_SKIN = 0
 export const CELL_HAIR = 1
-export const CELL_EYES = 2
 
 /** The cell's own mid colour, for the ratio substitution the shader does. */
 export const CELL_BASE = Object.freeze({
   [CELL_SKIN]: 0xf6c09c,
   [CELL_HAIR]: 0x9b5a45,
-  [CELL_EYES]: 0x13191b,
 })
 
 /** The UV rectangle cell `n` occupies. */
