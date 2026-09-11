@@ -42,7 +42,7 @@ export const GARMENT_SETS = Object.freeze([
  * its skin tone does, and it is one of the few things on the figure a status change cannot
  * move.
  *
- * Salting alone would not be enough here, for the reason `hairStyleIndexFor` in `hair.js`
+ * Salting alone would not be enough here, for the reason `hairToneIndexFor` in `hair.js`
  * spells out at length: plain FNV-1a (`hashString`) never mixes its own lowest bit, so two
  * hashes taken with an even modulus each — this one's `% 2` and skin tone's `% 6` — would
  * inherit the same parity and move in lockstep, and a status quality this test actually

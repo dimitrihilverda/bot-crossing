@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { SKIN_TONES, skinToneIndexFor } from '../src/agents/skin.js'
-import { HAIR_STYLES, hairStyleIndexFor, BALD } from '../src/agents/hair.js'
+import { HAIR_TONES, hairToneFor, hairToneIndexFor } from '../src/agents/hair.js'
 import { bandPulse } from '../src/agents/band-pulse.js'
 
 const SRC = readFileSync('src/agents/astronauts.js', 'utf8')
@@ -97,90 +97,93 @@ test('setRig builds one InstancedMesh per garment set, each carrying its own tex
   assert.match(SRC, /map:\s*set\.texture/, 'a garment set mesh is not textured with its own set')
 })
 
-test('there are three or four styles and one of them is bald', () => {
-  assert.ok(HAIR_STYLES.length >= 3 && HAIR_STYLES.length <= 4, `${HAIR_STYLES.length} styles`)
-  assert.ok(HAIR_STYLES.some((s) => s.name === BALD), `no style named ${BALD}`)
+// ── D5: the old procedural hairstyles are gone, replaced by a per-mover tone on the atlas.
+//
+// The primitive-geometry tests that used to live here (`HAIR_STYLES`, `hairStyleIndexFor`,
+// `BALD`, sized against `P.headR`) asserted on exports `hair.js` no longer has: every
+// adventurer head now has its hair modelled and painted in, and what varies per mover is the
+// colour of one atlas cell, not a choice of geometry. Replaced below with the tone-palette
+// tests, which are what a status-independent per-mover *colour* actually needs checked:
+// distinct from the skin tones, distinct from each other, stable per id, and every tone
+// reachable.
+
+const srgb = (hex) => [((hex >> 16) & 255) / 255, ((hex >> 8) & 255) / 255, (hex & 255) / 255]
+const distance = (a, b) => {
+  const [ar, ag, ab] = srgb(a)
+  const [br, bg, bb] = srgb(b)
+  return Math.hypot(ar - br, ag - bg, ab - bb)
+}
+
+test('there are five hair tones', () => {
+  assert.equal(HAIR_TONES.length, 5)
 })
 
-// The head's own radius (astronauts.js P.headR), not P.helmetR (0.48) — the radius of the
-// helmet these figures no longer wear. Using 0.48 here would read as endorsing the wrong
-// number, in the one file whose job is guarding against exactly that mistake (task 2's face
-// cap shipped sized against helmetR and sat inside the skull at every one of its vertices).
-const HEAD_R = 0.554
-
-test('bald builds nothing, every other style builds geometry', () => {
-  for (const style of HAIR_STYLES) {
-    const geo = style.geometry(HEAD_R)
-    if (style.name === BALD) {
-      assert.equal(geo, null, 'bald should build no geometry')
-      continue
+test('every hair tone is far enough from every skin tone to read against it', () => {
+  // Hair and skin are chosen independently, so any of the 30 pairings can occur and every
+  // one has to be legible. The rule is sRGB distance, NOT "hair is darker than skin": the six
+  // skin tones span 0.035 to 0.675 in luminance, so they cover the whole brown-and-tan range
+  // that hair also lives in, and a mid-brown hair measures about 0.05 from one of them --
+  // effectively the same colour. Requiring hair to be darker than the darkest skin (0.035)
+  // would force five shades of near-black and throw away the variety it exists for.
+  //
+  // This threshold is why the palette is greyscale-to-blue-black: browns, gingers and
+  // blondes are exactly the colours human skin comes in, so none of them can clear it.
+  // Measured: black 0.221, blue-black 0.210, slate 0.227, ash grey 0.244, steel grey 0.310;
+  // platinum 0.120, deep olive 0.119 and dark auburn 0.059 all fail.
+  for (const hair of HAIR_TONES) {
+    for (const skin of SKIN_TONES) {
+      const d = distance(hair, skin)
+      assert.ok(
+        d >= 0.15,
+        `hair 0x${hair.toString(16)} is ${d.toFixed(3)} from skin 0x${skin.toString(16)}`
+      )
     }
-    assert.ok(geo, `${style.name} built nothing`)
-    assert.ok(geo.attributes.position.count > 0, `${style.name} has no vertices`)
-    geo.computeBoundingBox()
-    // Read the extent off the box directly rather than through a Vector3, so this test does
-    // not need a three.js import of its own.
-    const height = geo.boundingBox.max.y - geo.boundingBox.min.y
-    assert.ok(height > 0 && height < HEAD_R * 3, `${style.name} is ${height} tall against R ${HEAD_R}`)
-    geo.dispose()
   }
 })
 
-test('hair is sized against the head, not the helmet the crew stopped wearing', () => {
-  // Source-level guard, the same idiom this file already uses for GONE/parts.head/head.setColorAt
-  // above: `geometry(HEAD_R)` alone only proves the *shape* is fine at whatever radius is passed
-  // in — it says nothing about what the real call site in astronauts.js actually sizes hair
-  // against at runtime. Task 2 shipped exactly this defect once (face cap built against
-  // helmetR, 187/187 vertices inside the skull), so the call site itself needs its own check.
-  assert.match(SRC, /style\.geometry\(P\.headR\)/, 'hair is not sized against the head radius')
-  assert.doesNotMatch(SRC, /geometry\(P\.helmetR\)/, 'something is sized against the helmet radius')
-})
-
-test('a thread always gets the same hairstyle', () => {
-  const id = 'claude-code:6b17e5c7-1d06-490c-a8fe-9899fee895fa'
-  assert.equal(hairStyleIndexFor(id), hairStyleIndexFor(id))
-})
-
-test('every hair index is inside the table', () => {
-  for (const id of ['a', 'bb', '', 'claude-code:x', '💡']) {
-    const i = hairStyleIndexFor(id)
-    assert.ok(Number.isInteger(i) && i >= 0 && i < HAIR_STYLES.length, `${JSON.stringify(id)} gave ${i}`)
+test('the hair tones are distinct from each other', () => {
+  for (let i = 0; i < HAIR_TONES.length; i++) {
+    for (let j = i + 1; j < HAIR_TONES.length; j++) {
+      const d = distance(HAIR_TONES[i], HAIR_TONES[j])
+      assert.ok(d >= 0.08, `hair tones ${i} and ${j} are only ${d.toFixed(3)} apart`)
+    }
   }
 })
 
-test('hairstyle and skin tone are independent', () => {
-  // Both hash the same id. If they used the same modulus in the same way, tone and style
-  // would move together and the crew would come in matched pairs instead of looking varied.
-  //
-  // This id set is fixed (thread-0 .. thread-199) and both hashes are pure, so both halves
-  // below are deterministic — no flakiness in asserting them exactly rather than by threshold.
-  //
-  // A threshold of `pairs.size > SKIN_TONES.length` (i.e. > 6) does NOT do that: the defective
-  // hash the brief originally suggested (`hashString('hair:' + id) % 4`, no finalizer) reaches
-  // exactly 12 of the 24 possible pairs, and 12 > 6, so that assertion passes on the exact bug
-  // it exists to catch — every dark-skinned figure bald or long-haired, never short or bunned.
-  // The 12 pairs come from a shared, unmixed low bit: both `% 6` and `% 4` are even moduli, so
-  // both indices inherit the same parity and move together in lockstep on it.
-  //
-  // So assert the count exactly (24 = 6 tones x 4 styles, all reachable) and add a direct
-  // parity-independence bound the defective hash fails. Measured: shipped hash 94/200 parity
-  // agreements (47%, chance), defective hash 200/200 (100%, lockstep) — 70..130 sits safely
-  // between the two and is generous around the 50% chance expectation.
-  //
-  // Deliberately brittle: if SKIN_TONES or HAIR_STYLES ever changes length, `pairs.size` must
-  // be re-derived by hand rather than loosened back to a threshold — a threshold is exactly
-  // what let this defect through once already.
+test('a thread always gets the same hair tone, and every tone is used', () => {
+  const seen = new Set()
+  for (let i = 0; i < 600; i++) {
+    const id = `thread-${i}`
+    assert.equal(hairToneIndexFor(id), hairToneIndexFor(id))
+    seen.add(hairToneIndexFor(id))
+  }
+  assert.equal(seen.size, HAIR_TONES.length, `only ${seen.size} of ${HAIR_TONES.length} tones appear`)
+})
+
+test('the hair tone is independent of the skin tone', () => {
   const pairs = new Set()
-  let agree = 0
-  for (let n = 0; n < 200; n++) {
-    const id = `claude-code:thread-${n}`
-    const tone = skinToneIndexFor(id)
-    const style = hairStyleIndexFor(id)
-    pairs.add(`${tone}:${style}`)
-    if ((tone & 1) === (style & 1)) agree++
+  for (let i = 0; i < 6000; i++) {
+    const id = `thread-${i}`
+    pairs.add(`${hairToneIndexFor(id)}:${skinToneIndexFor(id)}`)
   }
-  assert.equal(pairs.size, SKIN_TONES.length * HAIR_STYLES.length, `only ${pairs.size} of 24 combinations`)
-  assert.ok(agree > 70 && agree < 130, `parities agreed ${agree}/200 times`)
+  assert.equal(pairs.size, 30, `only ${pairs.size} of 30 hair/skin pairs appeared`)
+})
+
+test('no primitive hairstyle geometry survives', () => {
+  // The four procedural styles are gone: each adventurer head has its hair modelled in, so
+  // a primitive cap on top of it would intersect the mesh.
+  const src = readFileSync('src/agents/hair.js', 'utf8')
+  for (const gone of ['HAIR_STYLES', 'hairStyleIndexFor', 'BALD', 'SphereGeometry', 'CylinderGeometry']) {
+    assert.doesNotMatch(src, new RegExp(`\\b${gone}\\b`), `hair.js still mentions ${gone}`)
+  }
+})
+
+test('hairToneFor returns a THREE.Color and a thread always gets the same one', () => {
+  const id = 'claude-code:6b17e5c7-1d06-490c-a8fe-9899fee895fa'
+  const a = hairToneFor(id)
+  const b = hairToneFor(id)
+  assert.equal(a.getHex(), b.getHex())
+  assert.equal(a.getHex(), HAIR_TONES[hairToneIndexFor(id)])
 })
 
 test('a calm band holds steady', () => {

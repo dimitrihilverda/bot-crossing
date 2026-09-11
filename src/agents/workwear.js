@@ -23,7 +23,7 @@
  * have met.
  *
  * Its own module, importing nothing at all, for the same reason `skin.js` (`SKIN_TONES`),
- * `hair.js` (`HAIR_STYLES`) and `band-pulse.js` already are: `node --test` can reach five
+ * `hair.js` (`HAIR_TONES`) and `band-pulse.js` already are: `node --test` can reach five
  * numbers and a comment without a GL context or a loaded glb, which is what importing
  * `astronauts.js` itself needs.
  */
