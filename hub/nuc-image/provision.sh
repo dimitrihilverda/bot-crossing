@@ -184,6 +184,15 @@ run_as_user "
   ln -sf ../bot-crossing-hub.service ~/.config/systemd/user/graphical-session.target.wants/bot-crossing-hub.service
 "
 
+echo "--- network recovery watchdog ---"
+# Raises the setup hotspot again if the hub is ever offline for a while (moved office, wifi
+# changed), so wifi can be re-entered from a phone without a keyboard on the NUC.
+if [ -f "${SETUP_DIR}/systemd/bch-netwatch.service" ]; then
+  cp "${SETUP_DIR}/systemd/bch-netwatch.service" /etc/systemd/system/
+  systemctl daemon-reload
+  systemctl enable bch-netwatch.service
+fi
+
 echo "=== provision complete @ $(date -Is) ==="
 if [ "${BCH_NO_REBOOT:-0}" = "1" ]; then
   # Headless flow: firstboot.sh still has the Tailscale QR step to do, and owns the reboot + the
