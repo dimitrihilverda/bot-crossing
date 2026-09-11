@@ -139,7 +139,7 @@ const cellsNeeded = (threadCount) =>
  * deliberate: a district you walk to reads as somebody else's settlement, not as your own
  * colony growing a lobe.
  */
-const ANCHOR_RING = 5
+const ANCHOR_RING = 3
 export function colonyAnchor(name) {
   const ring = hexRing(ANCHOR_RING)
   return ring[hashString(`colony:${name}`) % ring.length]
