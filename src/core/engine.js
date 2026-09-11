@@ -187,8 +187,10 @@ export class Engine {
     const composer = new EffectComposer(this.renderer, target)
     composer.addPass(new RenderPass(this.scene, this.camera))
 
-    // A high threshold is what keeps this an accent rather than a haze: only the eyes,
-    // lamps, sparks and the sun's disc clear it, so lit surfaces stay crisp.
+    // A high threshold is what keeps this an accent rather than a haze: only the eyes, sparks,
+    // a crew member's reflective hi-vis ring (steadily, for the brighter statuses; crossing it
+    // and back is what makes an errored thread's ring a beacon rather than a wash), and the
+    // sun's disc clear it, so lit surfaces stay crisp.
     this.bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), this.settings.get('bloomStrength'), 0.55, 0.92)
     composer.addPass(this.bloomPass)
 
