@@ -5,6 +5,7 @@ import { Engine } from './core/engine.js'
 import { CameraRig } from './core/camera.js'
 import { Colony, STATUS_LABEL, STATUS_ORDER, statusFor, transcriptProgress } from './game/colony.js'
 import { Hud } from './ui/hud.js'
+import { Hub } from './ui/hub.js'
 import { PLANETS } from './world/planet.js'
 import { loadKit } from './world/kit.js'
 import { crewRig, loadCrew } from './agents/crew.js'
@@ -32,6 +33,17 @@ import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-project
 const POLL_MS = 15000
 const app = document.getElementById('app')
 
+/**
+ * The office-wall view: `?hub=1` merges every teammate's colony (the same shared-colonies
+ * machinery that already tags and folds in a visited neighbour's threads) and drops a
+ * read-only triage HUD over the unmodified game. See
+ * `docs/superpowers/specs/2026-09-10-team-hub-design.md`. Nothing below this line changes
+ * for the ordinary, non-hub app: the flag is read once, and every hub-only effect is gated
+ * behind it.
+ */
+const HUB = new URLSearchParams(location.search).get('hub') === '1'
+if (HUB) document.body.classList.add('hub')
+
 app.insertAdjacentHTML(
   'beforeend',
   `<div class="boot"><div class="inner">
@@ -52,9 +64,10 @@ let state = { archived: [], archivedAt: {}, opened: [], plots: {}, seen: {}, hid
 
 /** The machine's own network block, always a well-formed object for the settings panel. */
 function network() {
-  if (!state.network || typeof state.network !== 'object') state.network = { colonyName: '', share: false, neighbors: [], shared: [] }
+  if (!state.network || typeof state.network !== 'object') state.network = { colonyName: '', share: false, neighbors: [], shared: [], allowedReaders: [] }
   if (!Array.isArray(state.network.neighbors)) state.network.neighbors = []
   if (!Array.isArray(state.network.shared)) state.network.shared = []
+  if (!Array.isArray(state.network.allowedReaders)) state.network.allowedReaders = []
   return state.network
 }
 
@@ -87,6 +100,10 @@ function patchNetwork(patch) {
   setTimeout(poll, 600)
 }
 let threads = []
+/** The merged `/api/threads` response's own `.colonies` from the last poll — hub mode's only
+ *  use for it, so it stays a plain module-level cache rather than a field on `state`. */
+let lastColonies = []
+let firstPollDone = false
 /** Last legend built for the bottom bar, kept so the open zone's chip can light up between polls. */
 let legendProjects = []
 /** The zone layout as last written to the colony file, so an unchanged map is not re-saved. */
@@ -358,6 +375,17 @@ const actions = {
   removeNeighbor: (host, port) => {
     patchNetwork({ neighbors: network().neighbors.filter((n) => !(n.host === host && n.port === port)) })
   },
+  /** Let one address read this colony without adding it as a neighbour or visiting it back. */
+  addAllowedReader: (ip) => {
+    const host = String(ip || '').trim()
+    if (!host) return
+    const set = new Set(network().allowedReaders || [])
+    set.add(host)
+    patchNetwork({ allowedReaders: [...set] })
+  },
+  removeAllowedReader: (ip) => {
+    patchNetwork({ allowedReaders: (network().allowedReaders || []).filter((h) => h !== ip) })
+  },
 
   /** Toggle whether one repo, with all its sessions present and future, is shared. */
   toggleShareRepo: (name) => {
@@ -387,11 +415,43 @@ const actions = {
   },
 }
 
+if (HUB) {
+  // The hub reads every colony it can see, including ones it merely visits — it must never
+  // be able to write to any of them. Every action that mutates local state, the saved colony
+  // file, or another machine (opening a thread, starting one, revealing a folder), or that
+  // reshapes what a repo exposes to the network, becomes a no-op. Read-only actions (the
+  // getters the settings panel and legend use) are untouched — they still answer honestly,
+  // there is simply nothing in hub mode that renders them.
+  for (const key of [
+    'openThread',
+    'archiveThread',
+    'newConversation',
+    'markViewed',
+    'hideProject',
+    'unhideProject',
+    'revealProject',
+    'copyProjectPath',
+    'setShare',
+    'setColonyName',
+    'addNeighbor',
+    'removeNeighbor',
+    'addAllowedReader',
+    'removeAllowedReader',
+    'toggleShareRepo',
+    'toggleShareSession',
+  ]) {
+    actions[key] = () => {}
+  }
+}
+
 const hud = new Hud(app, settings, actions)
 // The sidebar is permanent, so the card beside an astronaut has a wall to stay clear of.
 const sideWidth = () => (window.innerWidth <= 820 ? 0 : 334)
 hud.setSideWidth(sideWidth())
 window.addEventListener('resize', () => hud.setSideWidth(sideWidth()))
+
+// The triage HUD, mounted only in hub mode — see `applyThreads` for the data it is fed.
+const hub = HUB ? new Hub(app) : null
 
 // ── selection ─────────────────────────────────────────────────────────────────────────
 
@@ -778,6 +838,14 @@ function applyThreads(list) {
     state.plots = layout
     queueSave()
   }
+
+  // The hub HUD is a read of the exact same merged, colony-tagged list the game itself just
+  // rendered — `threads` above, not the raw `list` argument, so a viewed/unread rewrite at
+  // the top of this function is reflected on the board too.
+  // Only after a real poll has delivered the backlog. A settings-driven applyThreads() during
+  // boot runs before the first fetch, and seeding the hub baseline off that empty list would
+  // make the first poll replay the whole backlog as fresh toasts. See poll().
+  if (HUB && firstPollDone) hub.update(threads, lastColonies)
 }
 
 let polling = false
@@ -786,6 +854,8 @@ async function poll() {
   polling = true
   try {
     const res = await fetchThreads()
+    lastColonies = res.colonies || []
+    firstPollDone = true
     applyThreads(res.threads || [])
     hud.removeBoot()
   } catch (err) {
@@ -847,11 +917,15 @@ async function boot() {
     if (!document.hidden) poll()
   })
 
-  if (!localStorage.getItem('botcrossing.seen-help')) {
-    hud.toggleHelp(true)
-    localStorage.setItem('botcrossing.seen-help', '1')
-  } else {
-    hud.hint('Drag to move · click a crew member · H hides everything', 5200)
+  // The hub kiosk is read-only — no drag/click help, and it must not consume the origin's
+  // first-run flag for a later normal session.
+  if (!HUB) {
+    if (!localStorage.getItem('botcrossing.seen-help')) {
+      hud.toggleHelp(true)
+      localStorage.setItem('botcrossing.seen-help', '1')
+    } else {
+      hud.hint('Drag to move · click a crew member · H hides everything', 5200)
+    }
   }
 }
 

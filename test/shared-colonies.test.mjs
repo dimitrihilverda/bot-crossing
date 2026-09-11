@@ -95,6 +95,25 @@ test('the guest socket answers only loopback and added neighbours', () => {
   assert.equal(normalizeIp('::ffff:10.0.0.1'), '10.0.0.1')
 })
 
+test('an allowed reader is admitted without being a neighbour', () => {
+  // Simulates api.mjs merging neighbours + allowedReaders into the host list.
+  const hosts = ['192.168.55.10' /* a neighbour */, '100.100.1.9' /* a hub reader */]
+  assert.equal(hostAllowed('100.100.1.9', hosts), true)
+  assert.equal(hostAllowed('192.168.55.99', hosts), false)
+})
+
+test('a refused stranger is remembered so it can be added, and forgotten after a while', () => {
+  const guest = new GuestServer({ instanceId: 'x', getName: () => 'X', getThreads: async () => [], getAllowedHosts: () => [] })
+  guest._noteRefused('10.212.134.7')
+  assert.equal(guest.recentRefused().some((r) => r.host === '10.212.134.7'), true)
+  // Stale entries drop out of the window.
+  guest._refused.set('10.212.134.7', Date.now() - 10 * 60 * 1000)
+  assert.equal(guest.recentRefused().length, 0)
+  // And the list is bounded rather than growing without limit.
+  for (let i = 0; i < 40; i++) guest._noteRefused(`10.0.0.${i}`)
+  assert.ok(guest._refused.size <= 12)
+})
+
 // ── the merge ─────────────────────────────────────────────────────────────────
 
 test('cleanNeighbor drops garbage and keeps the valid shape', () => {

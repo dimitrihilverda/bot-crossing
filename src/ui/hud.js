@@ -286,9 +286,23 @@ export class Hud {
          <div class="net-head">Found on your network</div>
          <div class="net-list net-discovered"></div>
        </div>
-       <div class="net-add">
+       <div class="net-block net-refused-block" hidden>
+         <div class="net-head">Tried to visit you</div>
+         <p class="note">A colleague reached your colony from an address you have not added — over a VPN this can differ from the one they expect. Add it to let them in.</p>
+         <div class="net-list net-refused"></div>
+       </div>
+       <div class="net-add net-add-neighbor">
          <input class="net-host text-input" type="text" spellcheck="false" placeholder="hostname or IP">
          <input class="net-port text-input" type="text" spellcheck="false" inputmode="numeric" placeholder="5275">
+         <button class="btn net-add-btn" type="button">Add</button>
+       </div>
+       <div class="net-block">
+         <div class="net-head">Allow a screen / hub to read me</div>
+         <p class="note">These addresses can read this colony without being added as a neighbour or visiting back — handy for a hallway screen or a shared team hub.</p>
+         <div class="net-list net-readers"></div>
+       </div>
+       <div class="net-add net-add-reader">
+         <input class="net-host text-input" type="text" spellcheck="false" placeholder="hostname or IP">
          <button class="btn net-add-btn" type="button">Add</button>
        </div>`
     )
@@ -301,8 +315,13 @@ export class Hud {
       this.actions.setShare?.(!now)
       this._refreshNetwork()
     })
-    const host = g.querySelector('.net-host')
-    const port = g.querySelector('.net-port')
+
+    // Scoped to its own container rather than the whole section, so the lookup finds this
+    // form's own input/button even though the reader add-row below reuses the same classes
+    // for styling — matching by DOM order would silently rebind to whichever row is first.
+    const neighborAdd = g.querySelector('.net-add-neighbor')
+    const host = neighborAdd.querySelector('.net-host')
+    const port = neighborAdd.querySelector('.net-port')
     const add = () => {
       const h = host.value.trim()
       const p = Number(port.value.trim()) || 5275
@@ -312,9 +331,21 @@ export class Hud {
       port.value = ''
       this._refreshNetwork()
     }
-    g.querySelector('.net-add-btn').addEventListener('click', add)
+    neighborAdd.querySelector('.net-add-btn').addEventListener('click', add)
     port.addEventListener('keydown', (e) => e.key === 'Enter' && add())
     host.addEventListener('keydown', (e) => e.key === 'Enter' && add())
+
+    const readerAdd = g.querySelector('.net-add-reader')
+    const readerHost = readerAdd.querySelector('.net-host')
+    const addReader = () => {
+      const h = readerHost.value.trim()
+      if (!h) return
+      this.actions.addAllowedReader?.(h)
+      readerHost.value = ''
+      this._refreshNetwork()
+    }
+    readerAdd.querySelector('.net-add-btn').addEventListener('click', addReader)
+    readerHost.addEventListener('keydown', (e) => e.key === 'Enter' && addReader())
     this._net = g
   }
 
@@ -396,6 +427,50 @@ export class Hud {
         this._refreshNetwork()
       })
       dlist.appendChild(row)
+    }
+
+    // Strangers the guest socket turned away — the click adds them at the guest port so a
+    // colleague blocked by a VPN's unexpected source address can be let in on sight.
+    const refused = (live.refused || []).filter(
+      (r) => !neighbors.some((n) => n.host === r.host)
+    )
+    const rblock = g.querySelector('.net-refused-block')
+    rblock.hidden = refused.length === 0
+    const rlist = g.querySelector('.net-refused')
+    rlist.innerHTML = ''
+    const guestPort = live.guestPort || 5275
+    for (const r of refused) {
+      const row = document.createElement('div')
+      row.className = 'net-item'
+      row.innerHTML =
+        `<i class="net-dot off"></i>` +
+        `<span class="net-item-name">${escapeHtml(r.host)}</span>` +
+        `<span class="net-item-addr">turned away</span>` +
+        `<button class="btn net-add-one">Add</button>`
+      row.querySelector('.net-add-one').addEventListener('click', () => {
+        this.actions.addNeighbor?.({ name: r.host, host: r.host, port: guestPort })
+        this._refreshNetwork()
+      })
+      rlist.appendChild(row)
+    }
+
+    // Addresses allowed to read this colony without being a neighbour or visiting back.
+    const readers = cfg.allowedReaders || []
+    const readerList = g.querySelector('.net-readers')
+    readerList.innerHTML = readers.length
+      ? ''
+      : `<div class="net-empty">None yet. Add one below to let a screen or hub read this colony.</div>`
+    for (const ip of readers) {
+      const row = document.createElement('div')
+      row.className = 'net-item'
+      row.innerHTML =
+        `<span class="net-item-name">${escapeHtml(ip)}</span>` +
+        `<button class="btn icon ghost net-remove" title="Stop allowing">${ICON.close}</button>`
+      row.querySelector('.net-remove').addEventListener('click', () => {
+        this.actions.removeAllowedReader?.(ip)
+        this._refreshNetwork()
+      })
+      readerList.appendChild(row)
     }
   }
 

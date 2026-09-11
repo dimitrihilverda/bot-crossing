@@ -1,0 +1,40 @@
+# Bot Crossing — hub kiosk, systemd user unit.
+#
+# Install (as the account that auto-logs into the graphical session on the NUC):
+#   mkdir -p ~/.config/systemd/user
+#   cp hub/bot-crossing-hub.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now bot-crossing-hub.service
+#
+# If this account is not kept logged in interactively, also run once (as root):
+#   loginctl enable-linger <username>
+# so the user's systemd instance (and this unit) starts at boot rather than only at login.
+#
+# Edit the two paths below if the repo was not cloned to ~/bot-crossing.
+#
+# See hub/README.md for the full NUC setup this unit assumes is already done (Node,
+# Chromium, `npm install && npm run build`, Tailscale, sharing configured both ways).
+
+[Unit]
+Description=Bot Crossing team hub (kiosk wall display)
+After=graphical-session.target network-online.target
+Wants=network-online.target
+PartOf=graphical-session.target
+# No cooldown on repeated crashes — a wall display should keep trying forever rather than
+# give up and go dark after a handful of failures in a row.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=%h/bot-crossing
+ExecStart=/bin/bash %h/bot-crossing/hub/start-hub.sh
+Restart=always
+RestartSec=3
+Environment=PORT=5274
+# Needed if this unit is not itself started inside the graphical session's own environment
+# (e.g. triggered from a plain multi-user login rather than a desktop autostart). Harmless
+# to leave set when it already matches.
+Environment=DISPLAY=:0
+
+[Install]
+WantedBy=graphical-session.target

@@ -1,0 +1,7 @@
+# Files that run on Linux must keep LF even when edited on Windows.
+hub/**/*.sh          text eol=lf
+hub/**/*.py          text eol=lf
+hub/**/*.mjs         text eol=lf
+hub/**/*.service     text eol=lf
+hub/**/*.conf        text eol=lf
+hub/nuc-image/autoinstall/meta-data text eol=lf
