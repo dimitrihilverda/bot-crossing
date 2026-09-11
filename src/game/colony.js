@@ -5,6 +5,7 @@ import {
   Plot,
   allocateCells,
   colonyAnchor,
+  setColonySpacing,
   cellWorld,
   shipPosition,
   createLabel,
@@ -311,6 +312,8 @@ export class Colony {
    */
   setThreads(threads, archivedIds = new Set(), hiddenProjects = new Set(), knownIds = new Set()) {
     const now = Date.now()
+    // Lay the districts out at whatever spacing the config asks for, read fresh each pass.
+    setColonySpacing(this.settings.get('colonySpacing'))
     const live = liveThreadsForColony(threads, archivedIds, hiddenProjects)
 
     // Group by repo, biggest project first so the busiest work lands nearest the middle.

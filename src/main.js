@@ -998,6 +998,8 @@ settings.onChange((changed, scope) => {
   // rebuilt from the list rather than merely re-rendered.
   if (changed.has('hideDormant')) applyThreads(threads)
   if (changed.has('maxAgents')) applyThreads(threads)
+  // Re-lay the districts when the colony spacing changes so the new gap shows at once.
+  if (changed.has('colonySpacing')) applyThreads(threads)
 })
 
 // ── frame ─────────────────────────────────────────────────────────────────────────────

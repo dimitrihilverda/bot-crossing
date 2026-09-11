@@ -128,6 +128,8 @@ const DEFAULTS = {
 
   // World
   planet: 'terra',
+  /** How far apart visiting colonies sit on the map (hex-ring radius). Higher = more spread. */
+  colonySpacing: 4,
   /**
    * Fold away repos where every thread has been quiet for three days. On by default: with
    * several harnesses read at once the map otherwise fills with every checkout you have ever
