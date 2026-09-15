@@ -11,7 +11,7 @@ import {
   createLabel,
   createBanner,
   hashString,
-  worldToHex,
+  worldToCell,
   DECK_TOP,
   PLOT_PALETTE,
   PLOT_CELL,
@@ -58,7 +58,7 @@ export { statusFor }
  *   long idle      → asleep on the job
  *   anything else  → pottering about its plot
  *
- * Threads group by repo, one repo per hex plot, and every thread gets a building seeded
+ * Threads group by repo, one repo per plot, and every thread gets a building seeded
  * from its own session id — so the colony's skyline is a stable, readable picture of what
  * you have running.
  */
@@ -72,9 +72,9 @@ const LAYOUT_MEMORY = 80
 
 // The depot's own cell, for planning streets. `SHIP_CELL` itself is module-local to
 // `plots.js` and deliberately not exported; converting the depot's world position back to a
-// cell with `worldToHex` gives the same answer without opening another export. Computed once
+// cell with `worldToCell` gives the same answer without opening another export. Computed once
 // at module scope rather than per call — the depot does not move.
-const SHIP_CELL_FOR_STREETS = worldToHex(shipPosition().x, shipPosition().z)
+const SHIP_CELL_FOR_STREETS = worldToCell(shipPosition().x, shipPosition().z)
 
 /**
  * The reveal progress at which a house has already hidden itself.
@@ -249,7 +249,7 @@ export class Colony {
     this.worldGroup.add(this.terrain)
     this._buildScatter()
 
-    // The ship has legs, and legs have to reach the ground. Its landing spot is a fixed hex
+    // The ship has legs, and legs have to reach the ground. Its landing spot is a fixed
     // cell, but the height of that spot is the planet's, so it is set here rather than once
     // at construction — a world with more relief would otherwise leave it hovering.
     const ship = shipPosition()
@@ -489,7 +489,7 @@ export class Colony {
     const anchored = new Set()
     for (const p of projectList) {
       if (!p.anchor) continue
-      for (const cell of firstPass.get(p.id) || []) anchored.add(`${cell.q},${cell.r}`)
+      for (const cell of firstPass.get(p.id) || []) anchored.add(`${cell.x},${cell.z}`)
     }
     this.streets = planStreets(firstPass, { ship: SHIP_CELL_FOR_STREETS, anchored })
     // A route cached before the ring moved would drive the old road. Stamping the plan and
@@ -512,7 +512,7 @@ export class Colony {
     while (this.plotCells.size > LAYOUT_MEMORY) this.plotCells.delete(this.plotCells.keys().next().value)
 
     const wanted = new Map()
-    for (const [name, cells] of layout) wanted.set(name, `${name}:${cells.map((c) => `${c.q},${c.r}`).join('/')}`)
+    for (const [name, cells] of layout) wanted.set(name, `${name}:${cells.map((c) => `${c.x},${c.z}`).join('/')}`)
 
     // A plot is rebuilt whenever its own footprint moved, and left completely alone
     // whenever it did not.
@@ -536,7 +536,7 @@ export class Colony {
       const accent = this._pickAccent(name)
       // Sit the slab on the terrain under its root cell. Near the ship that is ~0; a visiting
       // district anchored far out lands on whatever the ground does there, instead of floating.
-      const root = cellWorld(cells[0].q, cells[0].r)
+      const root = cellWorld(cells[0].x, cells[0].z)
       const groundY = terrainHeight(root.x, root.z, this.planet)
       const plot = new Plot({ id: name, name, index, cells, accent, groundY })
       plot.signature = wanted.get(name)
@@ -566,14 +566,14 @@ export class Colony {
     this._syncColonyBanners()
     // Zones that just moved, appeared or grew are zones the scatter does not know about.
     if (this.scatterGroup && this._plotFootprint() !== this._scatterFootprint) this._buildScatter()
-    // Which hex cells are decked. Ground height is asked for once per moving agent per
+    // Which cells are decked. Ground height is asked for once per moving agent per
     // frame, so it wants to be a lookup rather than a scan over every plot's every tile.
     // Cell → the deck's top height there, so the crew stands on a sunk district's deck rather
     // than at a flat 0.45. Near the ship groundY is ~0, so this is the old DECK_TOP everywhere
     // that mattered before districts existed.
     this.deckedCells = new Map()
     for (const plot of this.plotOrder) {
-      for (const cell of plot.cells) this.deckedCells.set(`${cell.q},${cell.r}`, plot.groundY + DECK_TOP)
+      for (const cell of plot.cells) this.deckedCells.set(`${cell.x},${cell.z}`, plot.groundY + DECK_TOP)
     }
     this._syncLabels()
   }
@@ -635,8 +635,8 @@ export class Colony {
   }
 
   groundAt(x, z) {
-    const cell = worldToHex(x, z)
-    const deck = this.deckedCells?.get(`${cell.q},${cell.r}`)
+    const cell = worldToCell(x, z)
+    const deck = this.deckedCells?.get(`${cell.x},${cell.z}`)
     if (deck !== undefined) return deck
     return terrainHeight(x, z, this.planet)
   }
@@ -785,7 +785,7 @@ export class Colony {
     this.nav.rebuild(obstacles)
   }
 
-  /** The plot under a world point. On a hex lattice the nearest cell centre is the cell. */
+  /** The plot under a world point. On this square lattice the nearest cell centre is the cell. */
   plotAt(x, z) {
     let best = null
     let bestD = Infinity
@@ -837,9 +837,21 @@ export class Colony {
   }
 
   /**
-   * Take the zone layout out of the colony file. Cells arrive as `[q, r]` pairs from a file
+   * Take the zone layout out of the colony file. Cells arrive as `[x, z]` pairs from a file
    * a person can edit, so anything that is not a pair of whole numbers is dropped rather
    * than trusted — a bad entry would put a zone on a cell that does not exist.
+   *
+   * Cells remembered before the lattice was squared are read as square coordinates. They are
+   * valid small integers, so nothing errors -- every plot simply lands somewhere new once and
+   * is sticky from then on.
+   *
+   * It cannot be done more cleanly. `data/colony.json` carries a version, but the gate that
+   * reads it is `server/api.mjs:37`, and `server/` is a colleague's file this branch does not
+   * touch. So there is no way to announce the change through the file.
+   *
+   * This is the one-time rearrangement the whole stickiness machinery exists to prevent,
+   * happening deliberately. Without this note a reader who finds it later will think it is the
+   * bug rather than the migration.
    */
   restoreLayout(saved) {
     const clean = new Map()
@@ -847,9 +859,9 @@ export class Colony {
       if (!Array.isArray(cells)) continue
       const list = []
       for (const cell of cells) {
-        const q = Array.isArray(cell) ? cell[0] : cell?.q
-        const r = Array.isArray(cell) ? cell[1] : cell?.r
-        if (Number.isInteger(q) && Number.isInteger(r)) list.push({ q, r })
+        const x = Array.isArray(cell) ? cell[0] : cell?.x
+        const z = Array.isArray(cell) ? cell[1] : cell?.z
+        if (Number.isInteger(x) && Number.isInteger(z)) list.push({ x, z })
       }
       if (list.length) clean.set(String(name), list)
     }
@@ -859,7 +871,7 @@ export class Colony {
   /** The same, on the way out. */
   layoutForSave() {
     const out = {}
-    for (const [name, cells] of this.plotCells) out[name] = cells.map((c) => [c.q, c.r])
+    for (const [name, cells] of this.plotCells) out[name] = cells.map((c) => [c.x, c.z])
     return out
   }
 
@@ -930,8 +942,8 @@ export class Colony {
     // standing in the neighbouring repo's yard reads as belonging to that repo. The inside
     // of its own plot is always the better answer when the outside is somebody else's.
     const onPlot = (v) => {
-      const cell = worldToHex(v.x, v.z)
-      return plot.cellKeys.has(`${cell.q},${cell.r}`)
+      const cell = worldToCell(v.x, v.z)
+      return plot.cellKeys.has(`${cell.x},${cell.z}`)
     }
     if (!onPlot(site)) {
       const inward = new THREE.Vector3(b.x - Math.cos(a) * stand, 0, b.z - Math.sin(a) * stand)
@@ -1251,7 +1263,7 @@ export class Colony {
     let route = this._trafficRoutes.get(key)
     if (!route) {
       const house = houses[vehicle.addressSeed % houses.length]
-      const houseCell = worldToHex(house.mesh.position.x, house.mesh.position.z)
+      const houseCell = worldToCell(house.mesh.position.x, house.mesh.position.z)
       const points = roadCells(SHIP_CELL_FOR_STREETS, houseCell, this.streets?.all).map((c) => cellWorld(c.q, c.r))
       route = { points, length: pathLength(points) }
       this._trafficRoutes.set(key, route)
@@ -1271,7 +1283,7 @@ export class Colony {
   /**
    * The route from the depot to one house, built once and kept on the building entry.
    *
-   * A hex line is cheap but not free, and redrawing one every frame for every thread in a
+   * A route is cheap but not free, and rebuilding one every frame for every thread in a
    * full colony is pure waste — a route only changes when the house it ends at does. Keyed
    * on the plot and slot, plus the house's own position: a zone rebuilt underneath a building
    * keeps its id and its slot but moves the ground, and a route cached on the ids alone would
@@ -1292,8 +1304,8 @@ export class Colony {
     }
 
     const depot = shipPosition()
-    const start = worldToHex(depot.x, depot.z)
-    const end = worldToHex(p.x, p.z)
+    const start = worldToCell(depot.x, depot.z)
+    const end = worldToCell(p.x, p.z)
     // The cell sequence is the only thing the streets change. Everything below — the kerb
     // pull-back, the cache key, the route object — is stage 2's, verified by hand over 600
     // frames, and is deliberately left alone.

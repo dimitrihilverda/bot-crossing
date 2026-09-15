@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { planStreets } from '../src/world/streets.js'
-import { allocateCells, colonyAnchor } from '../src/world/plots.js'
+import { allocateCells, colonyAnchor, shipPosition, worldToCell, cellWorld } from '../src/world/plots.js'
 import { distance, ring } from '../src/world/grid.js'
 
 const SHIP = { q: -2, r: 1 }
@@ -240,4 +241,89 @@ test('colonyAnchor still falls back to a hash without an index', () => {
   const a = colonyAnchor('somebody')
   const b = colonyAnchor('somebody')
   assert.deepEqual(a, b, 'the nameless fallback is not stable')
+})
+
+// ── colony.js speaks square cells (Task 6) ─────────────────────────────────────────────────
+//
+// colony.js cannot be imported outside a browser, so — as the rest of the suite does for that
+// file — these assert against its source. The bug Task 6 exists to fix was colony.js reading
+// `.q`/`.r` off cells the allocator hands back as `{ x, z }`: the reads came back `undefined`,
+// the arithmetic came back `NaN`, and the street search downstream never terminated. Every
+// call site listed here is one that fed that hang.
+
+test('colony.js no longer calls worldToHex, and converts every former call site to worldToCell', () => {
+  const src = readFileSync('src/game/colony.js', 'utf8')
+  assert.doesNotMatch(src, /worldToHex/, 'a worldToHex call site (or its import) survives')
+  // The six sites this task converts: SHIP_CELL_FOR_STREETS, groundAt, the onPlot check in
+  // _workSite, _trafficRouteFor's houseCell, and _routeFor's start and end.
+  const calls = src.match(/worldToCell\(/g) || []
+  assert.equal(calls.length, 6, `expected 6 worldToCell call sites, found ${calls.length}`)
+})
+
+test('the cells the allocator hands back are read as x/z, not q/r', () => {
+  const src = readFileSync('src/game/colony.js', 'utf8')
+  // The three spots that read straight off allocateCells' output (firstPass / layout), which
+  // is where the hang actually lived: valid {x, z} cells misread as {q, r} turn into NaN the
+  // moment streets.js or road-path.js does arithmetic on them.
+  assert.match(src, /anchored\.add\(`\$\{cell\.x\},\$\{cell\.z\}`\)/, 'the anchored-district set still keys on q/r')
+  assert.match(src, /cells\.map\(\(c\) => `\$\{c\.x\},\$\{c\.z\}`\)/, 'the plot signature still keys on q/r')
+  assert.match(src, /cellWorld\(cells\[0\]\.x, cells\[0\]\.z\)/, "a plot's root cell is still read as q/r")
+  // deckedCells and its lookup in groundAt.
+  assert.match(src, /deckedCells\.set\(`\$\{cell\.x\},\$\{cell\.z\}`/, 'deckedCells is still built keyed on q/r')
+  assert.match(src, /deckedCells\?\.get\(`\$\{cell\.x\},\$\{cell\.z\}`\)/, 'groundAt still looks deckedCells up by q/r')
+})
+
+test('roadCells output is still read as q/r, because road-path.js has not converted yet', () => {
+  // The other side of the same boundary: roadCells (src/world/road-path.js) is Task 4's file
+  // and still returns {q, r} cells. Renaming these reads to .x/.z would not fix anything -- it
+  // would just read a different pair of undefined properties off the same object -- so they
+  // are deliberately left alone here.
+  const src = readFileSync('src/game/colony.js', 'utf8')
+  const reads = src.match(/cellWorld\(c\.q, c\.r\)/g) || []
+  assert.equal(reads.length, 2, `expected 2 untouched roadCells reads, found ${reads.length}`)
+})
+
+test('the persisted layout shape is still an array of two integers', () => {
+  // merge-state.js (not this task's to touch) merges plot cells structurally, as arrays. The
+  // fields renamed, the shape must not: an object would break that merge silently.
+  const src = readFileSync('src/game/colony.js', 'utf8')
+  assert.match(src, /list\.push\(\{ x, z \}\)/, 'restoreLayout no longer builds { x, z } cells')
+  assert.match(
+    src,
+    /cells\.map\(\(c\) => \[c\.x, c\.z\]\)/,
+    'layoutForSave no longer writes [x, z] pairs'
+  )
+})
+
+test('the layout-reset note sits where plotCells is populated from the loaded state', () => {
+  const src = readFileSync('src/game/colony.js', 'utf8')
+  const region = src.slice(src.indexOf('restoreLayout(saved)') - 1500, src.indexOf('restoreLayout(saved)'))
+  assert.match(region, /read as square coordinates/, 'the migration note is missing')
+  assert.match(region, /server\/api\.mjs:37/, 'the note does not explain why no version gate could be used')
+  assert.match(region, /this branch does not\s*\n?\s*\*?\s*touch/, 'the note does not say server/ is off-limits')
+})
+
+// ── the sharp edge: worldToCell can return -0 ──────────────────────────────────────────────
+
+test("the depot's world position round-trips to the ship's reserved cell", () => {
+  // Mirrors colony.js's module-level `SHIP_CELL_FOR_STREETS = worldToCell(shipPosition())`.
+  const ship = shipPosition()
+  const cell = worldToCell(ship.x, ship.z)
+  // Normalised with +0 rather than compared with a weaker assertion: deepEqual is
+  // deepStrictEqual under node:assert/strict, and deepStrictEqual({ x: -0 }, { x: 0 }) fails.
+  assert.deepEqual({ x: cell.x + 0, z: cell.z + 0 }, { x: -2, z: 0 })
+})
+
+test('worldToCell . cellWorld round-trips every cell, -0 included', () => {
+  for (let x = -3; x <= 3; x++) {
+    for (let z = -3; z <= 3; z++) {
+      const world = cellWorld(x, z)
+      const back = worldToCell(world.x, world.z)
+      // Harmless for ===, arithmetic and the string keys colony.js builds with it (`${-0}`
+      // stringifies to "0"), but deepStrictEqual tells -0 and 0 apart -- normalise before
+      // comparing rather than weakening the assertion.
+      assert.deepEqual({ x: back.x + 0, z: back.z + 0 }, { x, z })
+      assert.equal(`${back.x},${back.z}`, `${x},${z}`, 'the string key differs even where deepEqual would not')
+    }
+  }
 })
