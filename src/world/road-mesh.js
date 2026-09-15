@@ -29,6 +29,46 @@ export const CARRIAGEWAY_WIDTH = 2.5
 /** What a kit road tile has to be scaled by to become one carriageway width. */
 export const roadTileScale = () => CARRIAGEWAY_WIDTH / ROAD_TILE_SIZE
 
+/**
+ * How far above the sampled ground a carriageway patch's tile sits. A tile's `y` places its
+ * *base*, not its centre (`road_straight`'s own bounding box runs from local y=0 to y=0.1,
+ * not -0.05 to 0.05), so laying the base at `groundY` exactly would make it touch the
+ * terrain's height field with zero gap at the sampled point.
+ *
+ * Measured in the running colony rather than assumed: at lift 0, rendering the ring's
+ * steepest local slope from close range (distance 2.5, polar 78 degrees — a grazing angle,
+ * near this rig's 84 degree limit) and diffing two frames a 0.00001-unit camera nudge apart —
+ * enough to move silhouette edges a fraction of a pixel but far below anything a person would
+ * notice — found only a few dozen changed pixels out of ~650k, almost all contiguous with an
+ * ordinary silhouette edge rather than the isolated, scattered pixels a genuine depth-fight
+ * produces.
+ * Lift 0.01 measured the same way was not measurably cleaner. In other words: this kit's
+ * road tile is a solid box, about 0.125 units thick once scaled to carriageway width, and its
+ * *rendered* top face is never actually coincident with the terrain — only its back-face-
+ * culled underside is, and culling means that face is never rasterised against the terrain
+ * from above. No dither was actually caught in this colony at lift 0.
+ *
+ * The lift is kept anyway, at this small a value, as a margin rather than as the fix for a
+ * confirmed artifact: it costs nothing visible, it keeps the tile's touch point from ever
+ * being exactly degenerate, and it gives some slack against a steeper local slope than this
+ * colony's terrain happened to produce (the worst measured here, across all 90 ring patches,
+ * was a 0.039 rise within one tile's footprint).
+ */
+export const ROAD_SURFACE_LIFT = 0.01
+
+/**
+ * Where a carriageway patch's tile sits, vertically — pure so the decision is testable
+ * without a renderer. It must *track* `groundY` for any input, never clamp it: a clamp here
+ * is exactly the bug this replaced (`Math.max(DECK_TOP, groundY)` clamped every ring patch
+ * to `DECK_TOP`, because no street cell is ever decked — see the comment in `createRoads`).
+ *
+ * @param groundY the terrain height sampled under this patch
+ * @param lift how far above that the tile's base sits; defaults to `ROAD_SURFACE_LIFT`
+ */
+export function carriagewayHeight(groundY, lift = ROAD_SURFACE_LIFT) {
+  return groundY + lift
+}
+
 /** How many tiles are laid along one cell-to-cell hop. */
 const TILES_PER_HOP = Math.ceil((PLOT_CELL * Math.sqrt(3)) / CARRIAGEWAY_WIDTH)
 
@@ -195,14 +235,20 @@ export function createRoads({ streets, groundAt }) {
     for (const patch of patches) {
       const composer = patch.kind === 'junction' ? junctions : straights
       const name = patch.kind === 'junction' ? JUNCTION_PART : STRAIGHT_PART
-      // Sample the ground per patch, exactly as the streetlights below already do: a patch
-      // against the deck still meets it flush (Math.max keeps it from sinking under
-      // DECK_TOP), and a patch out on the surrounding terrain sits on the terrain instead
-      // of floating at deck height. The tile itself stays flat — it is not tilted to the
-      // local slope. That would need a surface normal per patch, and it would open seams
-      // between neighbouring tiles wherever two of them picked a slightly different tilt.
-      // So this follows the terrain's height, not its slope.
-      const y = groundAt ? Math.max(DECK_TOP, groundAt(patch.x, patch.z)) : DECK_TOP
+      // The carriageway always sits on bare terrain, never on a deck: `planStreets` only
+      // takes cells no plot claims (`streets.js`), and the deck is exactly the claimed
+      // cells, so no street cell is ever part of it. That's why this follows the ground
+      // directly (`carriagewayHeight`, a small lift above `groundAt`) with no
+      // `Math.max(DECK_TOP, ...)` clamp — unlike the streetlights below, where the clamp is
+      // correct: a lamp on the verge must not sink under a deck it stands beside. If a
+      // future change ever put a street cell onto a deck, this patch would sink into it —
+      // nothing here would catch that.
+      //
+      // The tile itself stays flat — it is not tilted to the local slope. That would need a
+      // surface normal per patch, and it would open seams between neighbouring tiles
+      // wherever two of them picked a slightly different tilt. So this follows the terrain's
+      // height, not its slope.
+      const y = groundAt ? carriagewayHeight(groundAt(patch.x, patch.z)) : DECK_TOP
       // `road_straight`'s dashed lane markings are modelled along the tile's own local Z
       // axis (confirmed by dumping the part's vertices out of city.glb: the marking strips
       // are narrow bands of X spaced across the tile and subdivided many times along Z, the
