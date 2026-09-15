@@ -1,8 +1,16 @@
 # A Town Around the Colony — Stage 6 of the Moving-In theme
 
-**Status:** approved 2026-09-15
-**Stage:** 6, following the world (1), the delivery drive (2), the crew (3), streets and
-traffic (4) and crew garments (5).
+**Status:** approved 2026-09-15. **Renumbered and pending revision** — see below.
+**Stage:** 7, following the world (1), the delivery drive (2), the crew (3), streets and
+traffic (4), crew garments (5) and the square lattice (6).
+
+> **This spec was written before the colony's lattice was squared, and assumes a hexagonal
+> colony.** Its content stands — the 2 × 2 module, the derived-layer rule, the flattened
+> ground, the budget — but two things in it are now wrong and must be revisited before it is
+> planned: the town no longer needs its own grid separate from the colony's, and the "join
+> between the two road networks" it names as a known unfinished edge does not exist, because
+> there is only one network. See
+> `docs/superpowers/specs/2026-09-15-moving-in-square-lattice-design.md`.
 **Preceding specs:** `docs/superpowers/specs/2026-09-10-moving-in-streets-and-traffic-design.md`,
 `docs/superpowers/specs/2026-09-11-moving-in-crew-garments-design.md`
 
