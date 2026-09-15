@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { planStreets } from '../src/world/streets.js'
-import { allocateCells } from '../src/world/plots.js'
+import { allocateCells, colonyAnchor } from '../src/world/plots.js'
+import { distance, ring } from '../src/world/grid.js'
 
 const SHIP = { q: -2, r: 1 }
 const k = (c) => `${c.q},${c.r}`
@@ -104,8 +105,8 @@ test('a colony whose plots are separated by street cells is still connected', ()
   // passability this layout is judged disconnected and re-seeded from the middle on
   // every poll — the exact upheaval `allocateCells` exists to prevent.
   const previous = new Map([
-    ['a', [{ q: -2, r: 0 }]],
-    ['b', [{ q: 2, r: 0 }]],
+    ['a', [{ x: -2, z: 0 }]],
+    ['b', [{ x: 2, z: 0 }]],
   ])
   const projects = [
     { id: 'a', size: 1 },
@@ -113,16 +114,16 @@ test('a colony whose plots are separated by street cells is still connected', ()
   ]
   const streets = new Set(['-1,0', '0,0', '1,0'])
   const out = allocateCells(projects, previous, streets)
-  assert.deepEqual(out.get('a'), [{ q: -2, r: 0 }], 'plot a moved')
-  assert.deepEqual(out.get('b'), [{ q: 2, r: 0 }], 'plot b moved')
+  assert.deepEqual(out.get('a'), [{ x: -2, z: 0 }], 'plot a moved')
+  assert.deepEqual(out.get('b'), [{ x: 2, z: 0 }], 'plot b moved')
 })
 
 test('a genuinely scattered colony is still re-seeded', () => {
   // No street connects these, so the memory really does describe a broken map and
   // starting over is correct. The guard must not become a rubber stamp.
   const previous = new Map([
-    ['a', [{ q: -4, r: 0 }]],
-    ['b', [{ q: 4, r: 0 }]],
+    ['a', [{ x: -4, z: 0 }]],
+    ['b', [{ x: 4, z: 0 }]],
   ])
   const projects = [
     { id: 'a', size: 1 },
@@ -130,8 +131,8 @@ test('a genuinely scattered colony is still re-seeded', () => {
   ]
   const out = allocateCells(projects, previous, new Set())
   const moved =
-    JSON.stringify(out.get('a')) !== JSON.stringify([{ q: -4, r: 0 }]) ||
-    JSON.stringify(out.get('b')) !== JSON.stringify([{ q: 4, r: 0 }])
+    JSON.stringify(out.get('a')) !== JSON.stringify([{ x: -4, z: 0 }]) ||
+    JSON.stringify(out.get('b')) !== JSON.stringify([{ x: 4, z: 0 }])
   assert.ok(moved, 'a scattered colony was allowed to keep its broken layout')
 })
 
@@ -139,6 +140,102 @@ test('street cells are never handed out as plot cells', () => {
   const streets = new Set(['0,0', '1,0'])
   const out = allocateCells([{ id: 'a', size: 1 }], new Map(), streets)
   for (const cell of out.get('a')) {
-    assert.ok(!streets.has(`${cell.q},${cell.r}`), `plot took street cell ${cell.q},${cell.r}`)
+    assert.ok(!streets.has(`${cell.x},${cell.z}`), `plot took street cell ${cell.x},${cell.z}`)
   }
+})
+
+test('a layout re-allocated from its own memory does not move', () => {
+  // This is the property allocateCells exists for. It held on the hex lattice and must hold
+  // here: a zone moves only when its own footprint changes, never because a neighbour did.
+  const projects = [
+    { id: 'a', size: 20 },
+    { id: 'b', size: 5 },
+    { id: 'c', size: 1 },
+  ]
+  const first = allocateCells(projects, new Map())
+  const second = allocateCells(projects, first)
+  for (const [id, cells] of first) {
+    assert.deepEqual(second.get(id), cells, `${id} moved on a re-allocation`)
+  }
+})
+
+test('a colony split only by street cells is still connected', () => {
+  const previous = new Map([
+    ['a', [{ x: -2, z: 0 }]],
+    ['b', [{ x: 2, z: 0 }]],
+  ])
+  const projects = [{ id: 'a', size: 1 }, { id: 'b', size: 1 }]
+  const streets = new Set(['-1,0', '0,0', '1,0'])
+  const out = allocateCells(projects, previous, streets)
+  assert.deepEqual(out.get('a'), [{ x: -2, z: 0 }], 'plot a moved')
+  assert.deepEqual(out.get('b'), [{ x: 2, z: 0 }], 'plot b moved')
+})
+
+test('a genuinely scattered colony is still re-seeded (wide split)', () => {
+  const previous = new Map([
+    ['a', [{ x: -6, z: 0 }]],
+    ['b', [{ x: 6, z: 0 }]],
+  ])
+  const projects = [{ id: 'a', size: 1 }, { id: 'b', size: 1 }]
+  const out = allocateCells(projects, previous, new Set())
+  const moved =
+    JSON.stringify(out.get('a')) !== JSON.stringify([{ x: -6, z: 0 }]) ||
+    JSON.stringify(out.get('b')) !== JSON.stringify([{ x: 6, z: 0 }])
+  assert.ok(moved, 'a scattered colony kept its broken layout')
+})
+
+test('corner contact does not count as connected', () => {
+  // The four-neighbour rule, asserted where it matters: two plots meeting only at a corner
+  // are two colonies, and the guard must re-seed them.
+  const previous = new Map([
+    ['a', [{ x: 0, z: 0 }]],
+    ['b', [{ x: 1, z: 1 }]],
+  ])
+  const projects = [{ id: 'a', size: 1 }, { id: 'b', size: 1 }]
+  const out = allocateCells(projects, previous, new Set())
+  const kept =
+    JSON.stringify(out.get('a')) === JSON.stringify([{ x: 0, z: 0 }]) &&
+    JSON.stringify(out.get('b')) === JSON.stringify([{ x: 1, z: 1 }])
+  assert.ok(!kept, 'two plots touching only at a corner were treated as one colony')
+})
+
+test('a plot never lands on a street cell', () => {
+  const streets = new Set(['0,0', '1,0'])
+  const out = allocateCells([{ id: 'a', size: 1 }], new Map(), streets)
+  for (const cell of out.get('a')) {
+    assert.ok(!streets.has(`${cell.x},${cell.z}`), `plot took street cell ${cell.x},${cell.z}`)
+  }
+})
+
+test('a plot grows into cells that share an edge', () => {
+  const out = allocateCells([{ id: 'a', size: 40 }], new Map())
+  const cells = out.get('a')
+  assert.ok(cells.length > 1, 'a large project claimed only one cell')
+  // Every cell after the first touches at least one already-claimed cell by an edge.
+  const claimed = [cells[0]]
+  for (let i = 1; i < cells.length; i++) {
+    assert.ok(
+      claimed.some((c) => distance(c, cells[i]) === 1),
+      `cell ${i} is not edge-adjacent to the blob so far`
+    )
+    claimed.push(cells[i])
+  }
+})
+
+test('visiting colonies are spread evenly around a ring', () => {
+  // Dimitri's change, which must carry over exactly: districts surround the centre rather
+  // than clumping wherever their names hash.
+  const total = 4
+  const anchors = [0, 1, 2, 3].map((i) => colonyAnchor(`colony-${i}`, i, total))
+  const keys = anchors.map((a) => `${a.x},${a.z}`)
+  assert.equal(new Set(keys).size, total, 'two colonies were given the same anchor')
+  for (const a of anchors) {
+    assert.ok(Math.max(Math.abs(a.x), Math.abs(a.z)) > 0, 'an anchor landed at the origin')
+  }
+})
+
+test('colonyAnchor still falls back to a hash without an index', () => {
+  const a = colonyAnchor('somebody')
+  const b = colonyAnchor('somebody')
+  assert.deepEqual(a, b, 'the nameless fallback is not stable')
 })

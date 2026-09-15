@@ -3,14 +3,19 @@ import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 import { DECK_TEXTURE_SCALE, KERB_UV, deckSurface, kerbSurface } from './surfaces.js'
 import { atlasTexture, hasPart, part } from './kit.js'
 import { mulberry } from './planet.js'
+import { CELL_SIZE, DIRS, cellWorld, distance, key, neighbours, ring, worldToCell } from './grid.js'
+
+// Re-exported so the rest of the app can keep pulling the lattice's world<->cell mapping from
+// plots.js rather than reaching into grid.js directly at every call site.
+export { CELL_SIZE, DIRS, cellWorld, distance, key, neighbours, ring, worldToCell }
 
 /**
  * Project plots — the fenced-off sections of the map, one per repo.
  *
- * Plots sit on a hexagonal lattice, and a project claims **as many cells as it has threads
- * to house**: a repo with forty sessions sprawls across six tiles, a one-off gets a single
- * tile. The cells tile exactly, so a multi-cell plot reads as one continuous zone, and the
- * accent border is drawn only on the edges that actually face something else — internal
+ * Plots sit on a square lattice (see `grid.js`), and a project claims **as many cells as it
+ * has threads to house**: a repo with forty sessions sprawls across five tiles, a one-off gets
+ * a single tile. The cells tile exactly, so a multi-cell plot reads as one continuous zone, and
+ * the accent border is drawn only on the edges that actually face something else — internal
  * seams between a project's own cells get no border at all.
  *
  * Cells are handed out in a spiral from the middle, biggest project first, so the busiest
@@ -22,12 +27,70 @@ export const PLOT_PALETTE = [
   0x3fa8a0, 0xc97f4f, 0x6f8f4f, 0x5c7fc9, 0xc95c5c, 0x7f6fc9,
 ]
 
-/** Hex size, centre to corner. Cells tile exactly at this radius. */
+/**
+ * DEVIATION from this task's brief, recorded here rather than silently applied: Step 3 says to
+ * delete `HEX_DIRS`, `hexRing`, `hexDistance`, `PLOT_CELL`, `CELL` and `TILE` outright. Doing
+ * that literally breaks `npm run build` — a *hard*, non-negotiable requirement of this stage —
+ * because `road-path.js`, `road-mesh.js` and `streets.js` still import these names and Rollup
+ * resolves named imports statically, so a missing export is a build error, not merely a test
+ * failure. Those three files are Tasks 4 and 5's job to move onto `grid.js`, not this one's.
+ *
+ * So this block keeps the **old hex implementations**, verbatim, purely as a bridge for those
+ * not-yet-converted consumers — nothing in the allocator below reads any of it; every allocator
+ * function uses `DIRS` / `distance` / `ring` from `grid.js`, exactly as Step 3 asks. Task 4/5
+ * should delete this whole block the moment the last of `road-path.js`, `road-mesh.js` and
+ * `streets.js` stops importing from it.
+ */
+const HEX_DIRS = [
+  [1, 0],
+  [1, -1],
+  [0, -1],
+  [-1, 0],
+  [-1, 1],
+  [0, 1],
+]
+function hexRing(radius) {
+  if (radius === 0) return [{ q: 0, r: 0 }]
+  const out = []
+  let q = HEX_DIRS[4][0] * radius
+  let r = HEX_DIRS[4][1] * radius
+  for (let i = 0; i < 6; i++) {
+    for (let j = 0; j < radius; j++) {
+      out.push({ q, r })
+      q += HEX_DIRS[i][0]
+      r += HEX_DIRS[i][1]
+    }
+  }
+  return out
+}
+function hexDistance(a, b) {
+  return (Math.abs(a.q - b.q) + Math.abs(a.q + a.r - b.q - b.r) + Math.abs(a.r - b.r)) / 2
+}
+/** Hex size, centre to corner — `road-mesh.js`'s `PLOT_CELL` hit-test radius, pre-conversion. */
 const CELL = 7.6
-/** Exported for hit-testing: on a hex lattice the nearest cell centre *is* the containing cell. */
-export const PLOT_CELL = CELL
 /** Pulled in a hair so two neighbouring plots never z-fight along a shared edge. */
 const TILE = CELL * 0.992
+export const PLOT_CELL = CELL
+function cubeRound(q, r) {
+  const y = -q - r
+  let rq = Math.round(q)
+  let rr = Math.round(r)
+  const ry = Math.round(y)
+  const dq = Math.abs(rq - q)
+  const dr = Math.abs(rr - r)
+  const dy = Math.abs(ry - y)
+  if (dq > dr && dq > dy) rq = -rr - ry
+  else if (dr > dy) rr = -rq - ry
+  return { q: rq, r: rr }
+}
+/** `src/game/colony.js` still calls this (Task 6's conversion); `worldToCell` is its replacement. */
+export function worldToHex(x, z, size = CELL) {
+  const q = x / (size * 1.5)
+  const r = z / (size * Math.sqrt(3)) - q / 2
+  return cubeRound(q, r)
+}
+export { HEX_DIRS, hexRing, hexDistance }
+
 /**
  * Top face of a plot's tile slab — the surface everything on a plot stands on, and the one
  * height every prop, building, kerb and pair of boots on a plot is measured from.
@@ -54,80 +117,26 @@ export const DECK_TOP = 0.45
 const DECK_SKIRT = 0.4
 /** The whole prism: the rim you can see, plus the skirt buried under it. */
 const DECK_HEIGHT = DECK_TOP + DECK_SKIRT
-/** Building slots per cell: one in the middle and six around it. */
-const SLOTS_PER_CELL = 7
+/** Building slots per cell, laid out 3 x 3 — see `grid.js`'s `CELL_SIZE` comment for why. */
+const SLOTS_PER_CELL = 9
 const MAX_CELLS = 9
-/** The lattice cell the ship owns. Nothing else may be placed there. */
-const SHIP_CELL = { q: -2, r: 1 }
-
-export const HEX_DIRS = [
-  [1, 0],
-  [1, -1],
-  [0, -1],
-  [-1, 0],
-  [-1, 1],
-  [0, 1],
-]
+/**
+ * The lattice cell the ship owns. Nothing else may be placed there.
+ *
+ * Picked as the square cell nearest the depot's old position on the hex lattice (hex cell
+ * `{ q: -2, r: 1 }`, world `(-22.8, 0)`): `worldToCell(-22.8, 0)` rounds to `(-2, 0)`.
+ */
+const SHIP_CELL = { x: -2, z: 0 }
 
 /**
  * Edge j of a flat-top hexagon runs between the corners at 60j° and 60(j+1)°, so its
  * midpoint faces 60j+30°. This maps that edge to the neighbour sitting across it.
+ *
+ * Still hex math: `_buildBorder` below hasn't moved to the square lattice yet.
  */
 const EDGE_TO_DIR = [0, 5, 4, 3, 2, 1]
 
-export const key = (q, r) => `${q},${r}`
-const ORIGIN = { q: 0, r: 0 }
-
-/** Flat-top axial hex → world. */
-function hexToWorld(q, r, size = CELL) {
-  return { x: size * 1.5 * q, z: size * Math.sqrt(3) * (r + q / 2) }
-}
-
-/** The world XZ of a cell's centre — so the colony can sample terrain height under a plot. */
-export function cellWorld(q, r) {
-  return hexToWorld(q, r)
-}
-
-/**
- * The inverse: which cell a world point falls in. Exact rather than nearest-centre, because
- * it decides whether something is standing on a plot's raised deck or on bare ground, and a
- * radius test would put an astronaut on a deck it is not actually over.
- */
-export function worldToHex(x, z, size = CELL) {
-  const q = x / (size * 1.5)
-  const r = z / (size * Math.sqrt(3)) - q / 2
-  return cubeRound(q, r)
-}
-
-/** Round fractional axial coordinates to the cell that actually contains the point. */
-function cubeRound(q, r) {
-  const y = -q - r
-  let rq = Math.round(q)
-  let rr = Math.round(r)
-  const ry = Math.round(y)
-  const dq = Math.abs(rq - q)
-  const dr = Math.abs(rr - r)
-  const dy = Math.abs(ry - y)
-  // Whichever axis drifted furthest is the one recomputed from the other two.
-  if (dq > dr && dq > dy) rq = -rr - ry
-  else if (dr > dy) rr = -rq - ry
-  return { q: rq, r: rr }
-}
-
-export function hexRing(radius) {
-  if (radius === 0) return [{ q: 0, r: 0 }]
-  const out = []
-  let q = HEX_DIRS[4][0] * radius
-  let r = HEX_DIRS[4][1] * radius
-  for (let i = 0; i < 6; i++) {
-    for (let j = 0; j < radius; j++) {
-      out.push({ q, r })
-      q += HEX_DIRS[i][0]
-      r += HEX_DIRS[i][1]
-    }
-  }
-  return out
-}
+const ORIGIN = { x: 0, z: 0 }
 
 const cellsNeeded = (threadCount) =>
   Math.max(1, Math.min(MAX_CELLS, Math.ceil(threadCount / SLOTS_PER_CELL)))
@@ -141,23 +150,18 @@ const cellsNeeded = (threadCount) =>
  */
 let ANCHOR_RING = 4
 /** How far visiting colonies are anchored from the centre — driven by the `colonySpacing`
- *  setting so the wall's colony spacing can be tuned live. Clamped to a sane hex range. */
+ *  setting so the wall's colony spacing can be tuned live. Clamped to a sane range. */
 export function setColonySpacing(n) {
   ANCHOR_RING = Math.max(2, Math.min(8, Math.round(Number(n) || 4)))
 }
 export function colonyAnchor(name, index = null, count = null) {
-  const ring = hexRing(ANCHOR_RING)
+  const anchorRing = ring(ANCHOR_RING)
   // With an index among the colonies, spread them evenly around the ring so they surround the
   // centre (the Hub) rather than clumping wherever their names happen to hash.
   if (index != null && count > 0) {
-    return ring[Math.round((index / count) * ring.length) % ring.length]
+    return anchorRing[Math.round((index / count) * anchorRing.length) % anchorRing.length]
   }
-  return ring[hashString(`colony:${name}`) % ring.length]
-}
-
-/** Hex distance in axial coordinates: the cube distance, halved. */
-export function hexDistance(a, b) {
-  return (Math.abs(a.q - b.q) + Math.abs(a.q + a.r - b.q - b.r) + Math.abs(a.r - b.r)) / 2
+  return anchorRing[hashString(`colony:${name}`) % anchorRing.length]
 }
 
 /**
@@ -177,9 +181,9 @@ export function hexDistance(a, b) {
  * Each list is ordered root-first and growth appends, so a shrink is a slice, and
  * grow-then-shrink puts a zone back in exactly the shape it started in.
  *
- * Contiguity still comes from a flood fill: slicing runs out of a hex spiral looks like it
- * would work and does not, because the last cell of one ring and the first of the next sit
- * on opposite sides of the colony.
+ * Contiguity still comes from a flood fill: slicing runs out of a spiral looks like it would
+ * work and does not, because the last cell of one ring and the first of the next sit on
+ * opposite sides of the colony.
  *
  * @param projects [{ id, size }], biggest first — the order only decides who gets the
  *   innermost seed among repos that are *new*.
@@ -207,10 +211,10 @@ function isConnected(out, anchored = new Set(), streets = new Set()) {
   // the home zones by design — so they neither have to be reached nor count as unreachable.
   for (const [id, list] of out) {
     if (anchored.has(id)) continue
-    for (const c of list) cells.set(key(c.q, c.r), c)
+    for (const c of list) cells.set(key(c.x, c.z), c)
   }
   if (cells.size < 2) return true
-  const ship = key(SHIP_CELL.q, SHIP_CELL.r)
+  const ship = key(SHIP_CELL.x, SHIP_CELL.z)
   // Street cells are stepping stones on exactly the same footing as the ship's cell: they
   // may be crossed and need not be reached. A ring road runs *through* the colony, so
   // without this a colony the road divides is judged broken and every plot re-seeds from
@@ -222,9 +226,9 @@ function isConnected(out, anchored = new Set(), streets = new Set()) {
   const queue = [cells.get(start)]
   while (queue.length) {
     const c = queue.pop()
-    for (const [dq, dr] of HEX_DIRS) {
-      const n = { q: c.q + dq, r: c.r + dr }
-      const k = key(n.q, n.r)
+    for (const [dx, dz] of DIRS) {
+      const n = { x: c.x + dx, z: c.z + dz }
+      const k = key(n.x, n.z)
       if (!passable.has(k) || seen.has(k)) continue
       seen.add(k)
       queue.push(n)
@@ -249,7 +253,7 @@ export function allocateCells(projects, previous = new Map(), streets = new Set(
 }
 
 function layOut(projects, previous, streets = new Set()) {
-  const reserved = key(SHIP_CELL.q, SHIP_CELL.r)
+  const reserved = key(SHIP_CELL.x, SHIP_CELL.z)
   const wanted = projects.map((p) => ({ id: p.id, want: cellsNeeded(p.size), anchor: p.anchor || null }))
   const total = wanted.reduce((n, w) => n + w.want, 0)
 
@@ -264,14 +268,14 @@ function layOut(projects, previous, streets = new Set()) {
   // prevent, arriving by the back door.
   let farthest = 0
   for (const project of projects) {
-    for (const cell of previous.get(project.id) || []) farthest = Math.max(farthest, hexDistance(cell, ORIGIN))
+    for (const cell of previous.get(project.id) || []) farthest = Math.max(farthest, distance(cell, ORIGIN))
     // An anchored district sits out past the home zones, so the pool has to reach it — plus
     // a ring of slack for the district to grow into.
-    if (project.anchor) farthest = Math.max(farthest, hexDistance(project.anchor, ORIGIN) + 2)
+    if (project.anchor) farthest = Math.max(farthest, distance(project.anchor, ORIGIN) + 2)
   }
-  for (let ring = 0; (pool.length < total + 30 || ring <= farthest) && ring < ANCHOR_RING + 5; ring++) {
-    for (const cell of hexRing(ring)) {
-      const k = key(cell.q, cell.r)
+  for (let radius = 0; (pool.length < total + 30 || radius <= farthest) && radius < ANCHOR_RING + 5; radius++) {
+    for (const cell of ring(radius)) {
+      const k = key(cell.x, cell.z)
       // The ship's cell and every street cell are off the market. A street cell in `free`
       // would be handed to a plot, and the road would then run through a zone.
       if (k === reserved || streets.has(k)) continue
@@ -293,17 +297,17 @@ function layOut(projects, previous, streets = new Set()) {
     // on the zone is placed relative to it. A blob that loses its root has *moved*, so if
     // the root is gone this project is seeded afresh rather than quietly re-rooted onto
     // whichever of its old cells happens to still be free.
-    if (!free.has(key(before[0].q, before[0].r))) continue
+    if (!free.has(key(before[0].x, before[0].z))) continue
     // A district member whose memory drifted far from the anchor is re-seeded, so a stale
     // placement cannot hold a repo out on its own away from the rest of its colony.
-    if (anchor && hexDistance(before[0], anchor) > DISTRICT_DRIFT) continue
+    if (anchor && distance(before[0], anchor) > DISTRICT_DRIFT) continue
     const keep = []
     for (const cell of before) {
       if (keep.length >= want) break // shrunk: whatever it claimed last is what it gives up
-      const k = key(cell.q, cell.r)
+      const k = key(cell.x, cell.z)
       if (!free.has(k)) continue // the ship's cell, or a duplicate in a hand-edited file
       free.delete(k)
-      keep.push({ q: cell.q, r: cell.r })
+      keep.push({ x: cell.x, z: cell.z })
     }
     if (keep.length) held.set(id, keep)
   }
@@ -325,13 +329,13 @@ function layOut(projects, previous, streets = new Set()) {
     // one district instead of scattering them through the home zones.
     const seed = anchor
       ? nearestFree(pool, free, anchor)
-      : pool.find((c) => free.has(key(c.q, c.r)))
+      : pool.find((c) => free.has(key(c.x, c.z)))
     if (!seed) {
       out.set(id, [])
       continue
     }
-    free.delete(key(seed.q, seed.r))
-    const cells = [{ q: seed.q, r: seed.r }]
+    free.delete(key(seed.x, seed.z))
+    const cells = [{ x: seed.x, z: seed.z }]
     growBlob(cells, want, free, anchor)
     out.set(id, cells)
   }
@@ -343,8 +347,8 @@ function nearestFree(pool, free, to) {
   let best = null
   let bestD = Infinity
   for (const c of pool) {
-    if (!free.has(key(c.q, c.r))) continue
-    const d = hexDistance(c, to)
+    if (!free.has(key(c.x, c.z))) continue
+    const d = distance(c, to)
     if (d < bestD) {
       bestD = d
       best = c
@@ -363,11 +367,11 @@ function growBlob(cells, want, free, anchor = null) {
     let best = null
     let bestScore = Infinity
     for (const c of cells) {
-      for (const [dq, dr] of HEX_DIRS) {
-        const n = { q: c.q + dq, r: c.r + dr }
-        if (!free.has(key(n.q, n.r))) continue
+      for (const [dx, dz] of DIRS) {
+        const n = { x: c.x + dx, z: c.z + dz }
+        if (!free.has(key(n.x, n.z))) continue
         // Hug the root first, then the middle of the colony, so blobs come out compact.
-        const score = hexDistance(n, root) * 100 + hexDistance(n, pull)
+        const score = distance(n, root) * 100 + distance(n, pull)
         if (score < bestScore) {
           bestScore = score
           best = n
@@ -375,13 +379,13 @@ function growBlob(cells, want, free, anchor = null) {
       }
     }
     if (!best) break // completely hemmed in by neighbours
-    free.delete(key(best.q, best.r))
+    free.delete(key(best.x, best.z))
     cells.push(best)
   }
 }
 
 export const shipPosition = () => {
-  const { x, z } = hexToWorld(SHIP_CELL.q, SHIP_CELL.r)
+  const { x, z } = cellWorld(SHIP_CELL.x, SHIP_CELL.z)
   return new THREE.Vector3(x, 0, z)
 }
 
