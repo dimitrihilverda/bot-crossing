@@ -110,6 +110,13 @@ Everything else follows from those two choices:
 - `hexDistance` becomes **Manhattan** distance, which is the step count under four-neighbour
   movement.
 
+- `hexLine` becomes Bresenham.
+- `worldToHex` and `cellWorld` become plain division and multiplication by the pitch. The
+  containing cell of a point stops being a nearest-centre search and becomes a floor.
+- The deck prism becomes a box, and the kerb runs **one bar per outside edge, four rather than
+  six**.
+- `corner(cx, cz, i, size)` and the flat-top hexagon geometry go.
+
 **Those are deliberately two different metrics, and the reason belongs in the code.** A ring is
 an *outline*: a Chebyshev ring is a square, which is what a square colony should grow as, while
 a Manhattan ring is a diamond and would grow the colony as a rotated lozenge. A distance is a
@@ -118,12 +125,7 @@ honest answer for connectivity, for how far a remembered cell has drifted, and f
 allocation pool must reach. The hex lattice needed only one metric because its ring and its
 step count coincide; a square lattice does not, and a single metric used for both would either
 grow diamonds or miscount distances.
-- `hexLine` becomes Bresenham.
-- `worldToHex` and `cellWorld` become plain division and multiplication by the pitch. The
-  containing cell of a point stops being a nearest-centre search and becomes a floor.
-- The deck prism becomes a box, and the kerb runs **one bar per outside edge, four rather than
-  six**.
-- `corner(cx, cz, i, size)` and the flat-top hexagon geometry go.
+
 
 ## Naming
 
