@@ -68,13 +68,15 @@ export const distance = (a, b) => Math.abs(a.x - b.x) + Math.abs(a.z - b.z)
  *
  * Walked, not merely listed: consecutive cells are genuine four-neighbours, and the last
  * cell is a neighbour of the first, so the whole thing is a closed loop a road can actually
- * follow. That property is load-bearing, not decorative — `streets.js` hands this straight to
- * `road-mesh.js`'s `carriagewayPoints` as `streets.ring` with `closed: true`, which lays a
- * straight patch of carriageway between each pair of consecutive entries and a corner
- * wherever the direction into one differs from the direction out of it. Two cells that merely
- * share the same outline but sit far apart in the array would turn that hop into a long
- * diagonal streak of paving across the middle of the colony instead of a ring road, and every
- * "bend" the walk found would be measuring the wrong thing.
+ * follow. That property is load-bearing, not decorative — `streets.js`'s `ringRuns` walks
+ * this same array once and cuts a new arc wherever a claimed cell breaks it, so every arc it
+ * hands to `road-mesh.js`'s `carriagewayPoints` stays a genuine walk of its own, closed only
+ * when nothing broke the ring at all. That depends on consecutive entries here always being
+ * adjacent: two cells that merely share the same outline but sit far apart in the array would
+ * turn a hop between them into a long diagonal streak of paving across the middle of the
+ * colony instead of a ring road, and every "bend" the walk found would be measuring the wrong
+ * thing. Order here is what `ringRuns` cuts arcs *from* — get it wrong and there is nothing
+ * correct left to split.
  */
 export function ring(radius) {
   if (radius <= 0) return [{ x: 0, z: 0 }]

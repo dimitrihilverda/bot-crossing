@@ -78,11 +78,12 @@ export function carriagewayHeight(groundY, lift = ROAD_SURFACE_LIFT) {
  * Two things a caller must say explicitly, because this function cannot guess them from
  * `cells` alone:
  *
- * - `closed` — whether `cells` is a loop (the last cell connects back to the first, as
- *   `streets.ring` does) or an open-ended run (a spur, which starts at a plot and ends on
- *   the cell it joins). A closed run gets an extra hop laid from its last cell back to its
- *   first, and its first and last cells are treated as interior — each has both an
- *   incoming and an outgoing direction — so either can be a bend too.
+ * - `closed` — whether `cells` is a loop (the last cell connects back to the first) or an
+ *   open-ended run (a spur, which starts at a plot and ends on the cell it joins, or one of
+ *   the open arcs `streets.ringRuns` splits the ring into wherever a claimed cell breaks it
+ *   — see `streets.js`'s `ringRuns`). A closed run gets an extra hop laid from its last cell
+ *   back to its first, and its first and last cells are treated as interior — each has both
+ *   an incoming and an outgoing direction — so either can be a bend too.
  * - `placed` — the dedup set. It defaults to a fresh `Set` per call, so a single run is
  *   still deduplicated against itself exactly as before. Callers that lay more than one run
  *   onto the same surface (the ring, then every spur) must pass one shared `Set` across all
@@ -227,8 +228,8 @@ export function createRoads({ streets, groundAt }) {
     return group
 
   const spurRuns = [...streets.spurs.values()].filter((run) => run && run.length)
-  const hasRing = streets.ring && streets.ring.length
-  if (!hasRing && !spurRuns.length) return group
+  const ringRuns = (streets.ringRuns || []).filter((run) => run.cells && run.cells.length)
+  if (!ringRuns.length && !spurRuns.length) return group
 
   const scale = roadTileScale()
   const straights = new Composer({ kit: 'city' })
@@ -238,18 +239,24 @@ export function createRoads({ streets, groundAt }) {
   let cornerCount = 0
   let junctionCount = 0
 
-  // One dedup set shared across the ring and every spur: a spur's chain ends *on* the ring
-  // cell it joins, so without a shared set the ring's pass and the spur's pass would each
-  // lay an identical, exactly coincident patch there.
+  // One dedup set shared across every ring run and every spur: a spur's chain ends *on* the
+  // ring cell it joins, so without a shared set that pass and the ring's own would each lay
+  // an identical, exactly coincident patch there.
   const placed = new Set()
   // Computed once and reused below for the streetlights, so that second pass doesn't ask
   // `carriagewayPoints` to lay patches onto an already-fully-`placed` set and get nothing back.
-  const ringPatches = hasRing ? carriagewayPoints(streets.ring, CELL_SIZE, { closed: true, placed }) : []
-  const runs = [ringPatches, ...spurRuns.map((run) => carriagewayPoints(run, CELL_SIZE, { placed }))]
+  //
+  // One call per run, each with its own `closed` flag — never one call across the
+  // concatenation of every run's cells, which would treat two unrelated arcs as one
+  // continuous walk and reintroduce exactly the gapped-ring bug `ringRuns` exists to avoid.
+  const ringPatches = ringRuns.flatMap((run) =>
+    carriagewayPoints(run.cells, CELL_SIZE, { closed: run.closed, placed })
+  )
+  const patchRuns = [ringPatches, ...spurRuns.map((run) => carriagewayPoints(run, CELL_SIZE, { placed }))]
 
   const PART_BY_KIND = { straight: STRAIGHT_PART, corner: CORNER_PART, junction: JUNCTION_PART }
 
-  for (const patches of runs) {
+  for (const patches of patchRuns) {
     for (const patch of patches) {
       const composer = patch.kind === 'corner' ? corners : patch.kind === 'junction' ? junctions : straights
       const name = PART_BY_KIND[patch.kind]
@@ -295,9 +302,9 @@ export function createRoads({ streets, groundAt }) {
     let lampCount = 0
     // One lamp every fourth patch along the ring, on the verge rather than the carriageway:
     // half a carriageway plus a little, out from the centre line. Reuses `ringPatches` from
-    // above rather than calling `carriagewayPoints(streets.ring, ...)` again — with a shared
-    // `placed` set, a second call would find every one of the ring's coordinates already
-    // taken and return nothing.
+    // above rather than calling `carriagewayPoints` on `streets.ringRuns` again — with a
+    // shared `placed` set, a second pass would find every one of the ring's coordinates
+    // already taken and return nothing.
     const offset = CARRIAGEWAY_WIDTH * 0.5 + 0.6
     for (let i = 0; i < ringPatches.length; i += 4) {
       const p = ringPatches[i]

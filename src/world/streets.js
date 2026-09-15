@@ -10,12 +10,19 @@ import { key, neighbours, ring } from './grid.js'
  * the roads wrong, and cannot make the colony rearrange itself.
  *
  * Streets take whole cells rather than threading between plots, because they cannot thread
- * between plots. Measured in the running colony: buildings sit on a slot ring at 4.37 from
- * a cell's centre and reach about 1.5 past it, the kerb is at 6.53, and existing ground
- * clutter occupies 4.00 to 6.35. So the clear band is 0.66 at its widest and 0.18 with the
- * clutter, against a car 0.61 wide and a road tile carrying two painted lanes.
+ * between plots. Re-measured against the code as it now stands, not carried over from the
+ * old hex numbers: houses sit on a 3 x 3 grid at `SLOT_SPACING` = 4.0 from a cell's centre
+ * (`plots.js`) and reach `HOUSE_HALF_WIDTH` = 1.45 past that, so the outermost one's edge
+ * sits at 5.45; the kerb's own inner face (`KERB_INNER`) is at 5.582. That leaves a verge
+ * only **0.132** wide between a plot's own buildings and its own boundary, against a car
+ * 0.61 wide — under a quarter of one. The conclusion holds even more strongly than the old
+ * hex-lattice numbers ever showed it, and it holds regardless of ground clutter: this verge
+ * is not where `_buildClutter` places its props any more (`plots.js`'s own comment on that
+ * method explains where they went and why), so the 0.132 is the verge's width outright, not
+ * a width further narrowed by anything sitting in it. No vehicle fits that gap on any cell,
+ * so a street has nowhere to thread through a plot and has to take a whole cell of its own.
  *
- * A street cell is **not** a cell paved over. A cell is 13.16 across — twenty-one car
+ * A street cell is **not** a cell paved over. A cell is 12 units across — about 19.7 car
  * widths — so a paved one would read as a plaza. The carriageway is 2.5 wide down the
  * middle and the rest is verge; that is `road-mesh.js`'s business, not this file's.
  */
@@ -102,20 +109,68 @@ function shortestChain(from, targets, blocked, limit) {
 }
 
 /**
+ * Split `ring()`'s output into the arcs a claimed cell leaves behind.
+ *
+ * `ring(radius)` is a closed walk: every consecutive pair is a genuine four-neighbour, and
+ * the last cell closes back to the first (see `grid.js`). Simply filtering claimed cells out
+ * of that array — what this used to do — keeps the set but throws the walk away: two
+ * surviving cells that were not adjacent in the ring end up adjacent in the filtered array,
+ * and handing that to `carriagewayPoints({ closed: true })` turns the gap into a long
+ * diagonal streak of paving with a corner tile bent to a heading no piece in the kit fits.
+ *
+ * A ring with cells removed is not one loop; it is one or more open arcs. So: walk the full
+ * ring once, and cut a new arc wherever a claimed cell is met. If nothing on the ring is
+ * claimed, the whole thing survives as a single arc that is *still* a closed loop — the
+ * common case, and the one the old code got right by accident. Every other case comes back
+ * as open runs, each one still a genuine walk, just no longer required to close.
+ *
+ * @returns an array of `{ cells, closed }` — `closed` is true only for the one case where
+ *   `cells` is the entire, unbroken ring.
+ */
+function ringRuns(radius, claimed) {
+  const cells = ring(radius)
+  const free = cells.map((cell) => !claimed.has(key(cell.x, cell.z)))
+  if (free.every(Boolean)) return cells.length ? [{ cells, closed: true }] : []
+  if (free.every((f) => !f)) return []
+
+  // Start the scan at a claimed cell so a run that would otherwise wrap across the array's
+  // own start/end boundary — the last few cells of `ring()`'s walk and the first few, both
+  // free — comes back as the one arc it actually is, not two.
+  const start = free.indexOf(false)
+  const runs = []
+  let current = []
+  for (let i = 0; i < cells.length; i++) {
+    const idx = (start + i) % cells.length
+    if (free[idx]) {
+      current.push(cells[idx])
+    } else if (current.length) {
+      runs.push({ cells: current, closed: false })
+      current = []
+    }
+  }
+  if (current.length) runs.push({ cells: current, closed: false })
+  return runs
+}
+
+/**
  * Plan the streets for one colony layout.
  *
  * @param layout the `Map<plotId, Array<{x, z}>>` that `allocateCells` returned
  * @param options `{ ship, anchored }` — the depot cell, and the cell keys of every visiting
  *   colony's district
- * @returns `{ ring, spurs, all }`. `spurs` has no entry for a plot that cannot be reached
- *   by road; the caller falls back to driving over the deck for those, exactly as stage 2
- *   did for every plot.
+ * @returns `{ ring, ringRuns, spurs, all }`. `ring` is every unclaimed ring cell, flat, in
+ *   ring order — handy for a caller that only wants membership. `ringRuns` is what actually
+ *   drives the mesh: `carriagewayPoints` must be called once per run, with that run's own
+ *   `closed` flag, never once across the concatenation of all of them (see `ringRuns` above
+ *   for why). `spurs` has no entry for a plot that cannot be reached by road; the caller
+ *   falls back to driving over the deck for those, exactly as stage 2 did for every plot.
  */
 export function planStreets(layout, { ship, anchored = new Set() }) {
   const claimed = claimedCells(layout, ship, anchored)
   const radius = ringRadius(layout, ship, anchored)
 
-  const ringCells = ring(radius).filter((cell) => !claimed.has(key(cell.x, cell.z)))
+  const runs = ringRuns(radius, claimed)
+  const ringCells = runs.flatMap((run) => run.cells)
   const all = new Set(ringCells.map((cell) => key(cell.x, cell.z)))
   const onRing = new Set(all)
 
@@ -137,5 +192,5 @@ export function planStreets(layout, { ship, anchored = new Set() }) {
     for (const cell of chain) all.add(key(cell.x, cell.z))
   }
 
-  return { ring: ringCells, spurs, all }
+  return { ring: ringCells, ringRuns: runs, spurs, all }
 }

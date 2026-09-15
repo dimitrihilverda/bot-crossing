@@ -91,10 +91,16 @@ const SLOT_SPACING = CELL_SIZE / SLOTS_SIDE
 /** Half-width of a house at that scale — the other half of the 1.1 clearance measurement. */
 const HOUSE_HALF_WIDTH = 1.45
 /**
- * The smallest axis-aligned square, centred on a cell, that contains every one of its 3 x 3
- * slots' houses — the inner edge `_buildClutter` has to clear.
+ * Centreline of the gap between two adjacent columns (or rows) of houses in the 3 x 3 slot
+ * grid — the midpoint between two slot centres one `SLOT_SPACING` apart.
  */
-const SLOT_REACH = SLOT_SPACING + HOUSE_HALF_WIDTH
+const CHANNEL_OFFSET = SLOT_SPACING / 2
+/**
+ * Half-width of that gap: what is left of the distance between two slot centres once a
+ * house's own half-width is subtracted from each side. 2.0 - 1.45 = 0.55, so the gap is 1.1
+ * wide — `_buildClutter`'s only ground on a cell that is actually wide enough for a prop.
+ */
+const CHANNEL_HALF_WIDTH = CHANNEL_OFFSET - HOUSE_HALF_WIDTH
 
 const ORIGIN = { x: 0, z: 0 }
 
@@ -622,12 +628,31 @@ export class Plot {
   }
 
   /**
-   * Ground clutter — crates, drums and a floodlight or two, hugging the kerb.
+   * Ground clutter — crates, drums and a floodlight or two, in the gaps between house rows.
    *
    * A plot with buildings on its slots and nothing anywhere else reads as a car park. This
-   * fills the gap for one extra draw call: a merged mesh of kit props, placed against the
-   * outer edge of each cell where the crew's routes between slots do not run, so nothing
-   * has to be added to the navigation grid and nobody ends up walking through a barrel.
+   * fills the gap for one extra draw call: a merged mesh of kit props.
+   *
+   * There is nowhere along the kerb wide enough for one: the 3 x 3 slot grid's houses reach
+   * to `SLOT_SPACING + HOUSE_HALF_WIDTH` (5.45) from the cell's centre and the kerb's own
+   * inner face (`KERB_INNER`) sits at 5.58, a band only 0.13 wide against a prop whose own
+   * navigation-radius floor is 0.3. The ground that is actually open is the cross of gaps
+   * *between* the houses — `CHANNEL_HALF_WIDTH` either side of the midpoint between two
+   * adjacent slot centres, 1.1 wide in total, eight times the kerb band and wide enough for
+   * a prop scaled down to 0.55-0.7.
+   *
+   * That gap is also, unavoidably, part of the crew's own way in: the corner and edge slots
+   * can be reached straight from outside a cell, but nothing reaches the middle slot except
+   * through one of these four channels. The kerb band never touched a route for exactly that
+   * reason; this one sometimes will. What still holds is the property that actually keeps
+   * nobody walking into a barrel — every spot pushed to `clutterSpots` below is handed to
+   * `_rebuildNavigation` (`colony.js`) as an obstacle, on the same footing as a building, so
+   * the crew is routed *around* whatever lands here exactly as it is around a house. What no
+   * longer holds without qualification is that a route runs clear of clutter altogether: a
+   * path down a channel can be nudged toward one side of it instead of running straight down
+   * the middle. Placement stays light (up to two spots per channel, better than half skipped)
+   * and is pushed off-centre within the channel's width, so slack across it survives for a
+   * path to use.
    *
    * Seeded off the plot's own name, so a repo's yard is laid out the same on every reload.
    */
@@ -641,33 +666,36 @@ export class Plot {
     this.clutterSpots = []
 
     this.localCenters.forEach(({ x, z }) => {
-      // One thin band, re-measured for the square lattice rather than scaled from the hex
-      // numbers by eye. `SLOT_REACH` is the smallest axis-aligned square that contains every
-      // house in the 3 x 3 slot grid (5.45 out from the cell's centre); `KERB_INNER` is the
-      // kerb's own inner face (5.58 out). That leaves only about 0.13 of a unit of clearance
-      // along an axis (wider on the diagonal, ~0.19) — this lattice's tighter slot spacing
-      // leaves far less yard than the hex ring did, so the band sits in the middle of what's
-      // left and the props are scaled down to actually fit it. `squareEdge` accounts for the
-      // tile being square rather than round: the boundary is not the same distance from the
-      // centre at every angle the way a hex's roughly was.
-      const squareEdge = (angle, half) => half / Math.max(Math.abs(Math.cos(angle)), Math.abs(Math.sin(angle)))
+      // A channel's length is capped by the kerb, the same inner face the old band measured
+      // against.
+      const reach = KERB_INNER
+      // One candidate point along a channel, offset toward one side of it rather than centred,
+      // so clearance survives on the other side for a path to use.
+      const along = (min, max) => min + (max - min) * rand()
+      const across = (centre) => centre + (rand() < 0.5 ? -1 : 1) * CHANNEL_HALF_WIDTH * (0.3 + rand() * 0.35)
+
       const spots = []
-      for (let i = 0; i < 8; i++) {
-        if (rand() > 0.4) {
-          const a = (Math.PI / 4) * i + Math.PI / 8
-          const half = SLOT_REACH + (KERB_INNER - SLOT_REACH) * (0.35 + rand() * 0.3)
-          spots.push({ a, r: squareEdge(a, half) })
+      // The two vertical channels — between the x = -4/0 and 0/4 columns of houses — run the
+      // full reach along z.
+      for (const cx of [x - CHANNEL_OFFSET, x + CHANNEL_OFFSET]) {
+        for (let i = 0; i < 2; i++) {
+          if (rand() > 0.4) spots.push({ x: across(cx), z: along(z - reach, z + reach) })
+        }
+      }
+      // The two horizontal channels — between the z = -4/0 and 0/4 rows — run the full reach
+      // along x.
+      for (const cz of [z - CHANNEL_OFFSET, z + CHANNEL_OFFSET]) {
+        for (let i = 0; i < 2; i++) {
+          if (rand() > 0.4) spots.push({ x: along(x - reach, x + reach), z: across(cz) })
         }
       }
 
-      for (const { a, r } of spots) {
+      for (const { x: px, z: pz } of spots) {
         const name = props[Math.floor(rand() * props.length)]
         const geo = part(name)
         const s = name === 'lights' ? 0.55 : 0.7
         geo.scale(s, s, s)
         geo.rotateY(rand() * Math.PI * 2)
-        const px = x + Math.cos(a) * r
-        const pz = z + Math.sin(a) * r
         // How much ground this prop actually covers, rather than a guess: a stack of cargo
         // containers is three times the footprint of a lamp, and a radius that splits the
         // difference is one an astronaut walks into the corner of.

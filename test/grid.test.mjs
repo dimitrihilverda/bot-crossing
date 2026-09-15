@@ -37,6 +37,31 @@ test('a ring has no duplicates', () => {
   }
 })
 
+test('a ring is a walk: every consecutive pair is a four-neighbour, and it closes', () => {
+  // This is the property the earlier membership/count/duplicate tests above never touched —
+  // and the exact one that regressed once already this stage. `ring()` returning the right
+  // *set* in a non-walkable order silently broke both `streets.js`'s road ring (a hop between
+  // two cells that merely share the outline, not an edge, reads as a diagonal streak of
+  // paving) and `colonyAnchor`'s even-spreading. `grid.js`'s own comment on `ring()` calls this
+  // "load-bearing, not decorative" — this test is what actually pins it down, so a rewrite
+  // that keeps the set but scrambles the order (e.g. a naive row-by-row emission) fails here
+  // even though it still passes every test above.
+  //
+  // Verified by hand before trusting it: a row-by-row `ring()` (walk x low-to-high on each z
+  // row, in Chebyshev-distance order) reproduces the exact set, count and no-duplicates
+  // properties above, but breaks this one — a jump from the end of one row to the start of
+  // the next is not a four-neighbour step for any radius above 0.
+  for (const n of [1, 2, 3, 5, 8, 12]) {
+    const r = ring(n)
+    for (let i = 1; i < r.length; i++) {
+      assert.equal(step(r[i - 1], r[i]), 1, `ring(${n}): step ${i} (${key(r[i - 1].x, r[i - 1].z)} -> ${key(r[i].x, r[i].z)}) is not a four-neighbour hop`)
+    }
+    // The loop closes: the last cell is a neighbour of the first, so a road built from this
+    // array with `closed: true` actually rejoins itself instead of ending in a horseshoe.
+    assert.equal(step(r[r.length - 1], r[0]), 1, `ring(${n}) does not close: the last cell is not adjacent to the first`)
+  }
+})
+
 test('distance is the step count under four-neighbour movement', () => {
   // Manhattan, not Chebyshev. A distance is a STEP COUNT, and with four neighbours crossing
   // costs |dx| + |dz| moves.
