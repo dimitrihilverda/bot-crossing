@@ -1,39 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { hexLine, pathLength, pointAt } from '../src/world/drive-path.js'
+import { pathLength, pointAt } from '../src/world/drive-path.js'
 
-test('a line to itself is one cell', () => {
-  assert.deepEqual(hexLine(0, 0, 0, 0), [{ q: 0, r: 0 }])
-})
-
-test('a line to a neighbour is two adjacent cells', () => {
-  const line = hexLine(0, 0, 1, 0)
-  assert.equal(line.length, 2)
-  assert.deepEqual(line[0], { q: 0, r: 0 })
-  assert.deepEqual(line[1], { q: 1, r: 0 })
-})
-
-test('every step of a long line is adjacent to the last', () => {
-  // Axial neighbours differ by one of the six HEX_DIRS; in cube terms the
-  // cube distance between consecutive cells is exactly 1.
-  const line = hexLine(-3, 2, 4, -5)
-  assert.ok(line.length > 2)
-  for (let i = 1; i < line.length; i++) {
-    const a = line[i - 1]
-    const b = line[i]
-    const dq = b.q - a.q
-    const dr = b.r - a.r
-    const ds = -dq - dr
-    const dist = (Math.abs(dq) + Math.abs(dr) + Math.abs(ds)) / 2
-    assert.equal(dist, 1, `step ${i} jumps ${dist} cells: ${JSON.stringify(a)} -> ${JSON.stringify(b)}`)
-  }
-})
-
-test('a line starts and ends where asked', () => {
-  const line = hexLine(-3, 2, 4, -5)
-  assert.deepEqual(line[0], { q: -3, r: 2 })
-  assert.deepEqual(line[line.length - 1], { q: 4, r: -5 })
-})
+// The `hexLine` tests that used to live here moved to `test/grid.test.mjs`, which exercises
+// `grid.js`'s `line` — the square lattice's four-neighbour Bresenham walk that replaced it.
+// Deleted rather than duplicated: the property (every step adjacent, starts and ends where
+// asked) is already asserted there, against the function that actually implements it now.
 
 test('path length sums the segments', () => {
   const pts = [

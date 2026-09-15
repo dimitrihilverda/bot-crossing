@@ -19,7 +19,6 @@ import {
 import { buildingUniforms } from '../world/buildings.js'
 import { createHouse } from '../world/houses.js'
 import {
-  hexLine,
   pathLength,
   pointAt,
   kerbBack,

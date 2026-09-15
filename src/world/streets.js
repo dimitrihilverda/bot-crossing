@@ -1,7 +1,7 @@
-import { HEX_DIRS, hexDistance, hexRing, key } from './plots.js'
+import { key, neighbours, ring } from './grid.js'
 
 /**
- * Where the streets run — pure arithmetic over plain `{q, r}` cells.
+ * Where the streets run — pure arithmetic over plain `{x, z}` cells.
  *
  * Streets are a **derived layer**. This function reads a layout that `allocateCells` has
  * already produced and never influences it, so the sticky placement persisted in
@@ -23,11 +23,16 @@ import { HEX_DIRS, hexDistance, hexRing, key } from './plots.js'
 /** The depot's spur is keyed under a name no repo can collide with. */
 export const SHIP_SPUR = '__ship__'
 
-const ORIGIN = { q: 0, r: 0 }
+const ORIGIN = { x: 0, z: 0 }
 
-/** Cells adjacent to `cell`, in `HEX_DIRS` order. */
-function neighbours(cell) {
-  return HEX_DIRS.map(([dq, dr]) => ({ q: cell.q + dq, r: cell.r + dr }))
+/**
+ * A cell's distance from the origin, in the same Chebyshev metric `grid.js`'s `ring` uses.
+ * Not `grid.js`'s exported `distance` — that one is Manhattan, the step count for routing —
+ * this is the outline metric, so a ring radius derived from it actually encloses every cell
+ * it is measured against.
+ */
+function chebyshev(cell) {
+  return Math.max(Math.abs(cell.x), Math.abs(cell.z))
 }
 
 /**
@@ -37,9 +42,9 @@ function neighbours(cell) {
 function claimedCells(layout, ship, anchored) {
   const claimed = new Set(anchored)
   for (const cells of layout.values()) {
-    for (const cell of cells) claimed.add(key(cell.q, cell.r))
+    for (const cell of cells) claimed.add(key(cell.x, cell.z))
   }
-  claimed.add(key(ship.q, ship.r))
+  claimed.add(key(ship.x, ship.z))
   return claimed
 }
 
@@ -52,11 +57,11 @@ function claimedCells(layout, ship, anchored) {
  * measurement even though it is excluded from the ring's cells too.
  */
 function ringRadius(layout, ship, anchored) {
-  let furthest = hexDistance(ship, ORIGIN)
+  let furthest = chebyshev(ship)
   for (const cells of layout.values()) {
     for (const cell of cells) {
-      if (anchored.has(key(cell.q, cell.r))) continue
-      furthest = Math.max(furthest, hexDistance(cell, ORIGIN))
+      if (anchored.has(key(cell.x, cell.z))) continue
+      furthest = Math.max(furthest, chebyshev(cell))
     }
   }
   return furthest + 1
@@ -75,14 +80,14 @@ function ringRadius(layout, ship, anchored) {
  * more than a handful of steps.
  */
 function shortestChain(from, targets, blocked, limit) {
-  if (targets.has(key(from.q, from.r))) return []
-  const seen = new Set([key(from.q, from.r)])
+  if (targets.has(key(from.x, from.z))) return []
+  const seen = new Set([key(from.x, from.z)])
   const queue = [{ cell: from, path: [] }]
   while (queue.length) {
     const { cell, path } = queue.shift()
     if (path.length >= limit) continue
     for (const next of neighbours(cell)) {
-      const k = key(next.q, next.r)
+      const k = key(next.x, next.z)
       if (seen.has(k)) continue
       seen.add(k)
       const chain = [...path, next]
@@ -99,7 +104,7 @@ function shortestChain(from, targets, blocked, limit) {
 /**
  * Plan the streets for one colony layout.
  *
- * @param layout the `Map<plotId, Array<{q, r}>>` that `allocateCells` returned
+ * @param layout the `Map<plotId, Array<{x, z}>>` that `allocateCells` returned
  * @param options `{ ship, anchored }` — the depot cell, and the cell keys of every visiting
  *   colony's district
  * @returns `{ ring, spurs, all }`. `spurs` has no entry for a plot that cannot be reached
@@ -110,8 +115,8 @@ export function planStreets(layout, { ship, anchored = new Set() }) {
   const claimed = claimedCells(layout, ship, anchored)
   const radius = ringRadius(layout, ship, anchored)
 
-  const ring = hexRing(radius).filter((cell) => !claimed.has(key(cell.q, cell.r)))
-  const all = new Set(ring.map((cell) => key(cell.q, cell.r)))
+  const ringCells = ring(radius).filter((cell) => !claimed.has(key(cell.x, cell.z)))
+  const all = new Set(ringCells.map((cell) => key(cell.x, cell.z)))
   const onRing = new Set(all)
 
   const spurs = new Map()
@@ -129,8 +134,8 @@ export function planStreets(layout, { ship, anchored = new Set() }) {
     const chain = shortestChain(from, onRing, claimed, SPUR_LIMIT)
     if (!chain || !chain.length) continue
     spurs.set(id, chain)
-    for (const cell of chain) all.add(key(cell.q, cell.r))
+    for (const cell of chain) all.add(key(cell.x, cell.z))
   }
 
-  return { ring, spurs, all }
+  return { ring: ringCells, spurs, all }
 }

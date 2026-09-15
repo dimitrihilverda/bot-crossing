@@ -28,53 +28,40 @@ export const PLOT_PALETTE = [
 ]
 
 /**
- * DEVIATION from this task's brief, recorded here rather than silently applied: Step 3 says to
+ * DEVIATION from this task's brief, recorded here rather than silently applied: Step 3 said to
  * delete `HEX_DIRS`, `hexRing`, `hexDistance`, `PLOT_CELL`, `CELL` and `TILE` outright. Doing
- * that literally breaks `npm run build` — a *hard*, non-negotiable requirement of this stage —
- * because `road-path.js`, `road-mesh.js`, `streets.js` and `colony.js` still import these names
- * and Rollup resolves named imports statically, so a missing export is a build error, not merely
- * a test failure. Those files are Tasks 4 to 6's job to move onto `grid.js`, not this one's.
+ * that literally broke `npm run build` at the time — a *hard*, non-negotiable requirement of
+ * this stage — because `road-path.js`, `road-mesh.js`, `streets.js` and `colony.js` all still
+ * imported these names, and Rollup resolves named imports statically, so a missing export was
+ * a build error, not merely a test failure. Those files were Tasks 4 to 6's job to move onto
+ * `grid.js`, not Task 3's.
  *
- * `CELL` and `TILE` are already off this list: Task 3 (this one) owns the Plot class's own mesh
- * geometry, and both names now live with the rest of that geometry, sized off `CELL_SIZE`,
- * further down this file — nothing here derives them any more. `PLOT_CELL` stays in this block,
- * frozen at the old hex value: it is still `road-mesh.js`'s hit-test radius and `colony.js`'s
- * picking threshold, pre-conversion.
+ * `CELL` and `TILE` were already off this list: Task 3 owns the Plot class's own mesh geometry,
+ * and both names live with the rest of that geometry, sized off `CELL_SIZE`, further down this
+ * file — nothing here derives them.
  *
- * So this block keeps the **old hex implementations**, verbatim, purely as a bridge for those
- * not-yet-converted consumers — nothing in the allocator below reads any of it; every allocator
- * function uses `DIRS` / `distance` / `ring` from `grid.js`, exactly as Step 3 asks. Tasks 4 to 6
- * should delete this whole block the moment the last of `road-path.js`, `road-mesh.js`,
- * `streets.js` and `colony.js` stops importing from it.
+ * Task 4 converted `road-path.js` and `streets.js` — two of the original four consumers — onto
+ * `grid.js`'s `neighbours`, `distance`, `key` and `ring`. Neither imports `HEX_DIRS`, `hexRing`
+ * or `hexDistance` any more, and since no other file ever did either, those three are gone
+ * from this file with them. What is actually left, as of Task 4:
+ *
+ *  - `PLOT_CELL` — still `road-mesh.js`'s hit-test radius (Task 5) and `colony.js`'s picking
+ *    threshold (Task 6), both pre-conversion, frozen at the old hex value.
+ *  - `cubeRound` and `worldToHex` — kept together, since the second is the only caller of the
+ *    first. Neither has a caller anywhere in the app any more: `colony.js` had already moved
+ *    every call site onto `worldToCell` before this task started. Deleting them isn't Task 4's
+ *    to do — road-path.js and streets.js never imported either — but the comment that used to
+ *    sit on `worldToHex` claiming `colony.js` "still calls this" was false by the time this
+ *    task read it, and has been corrected here rather than carried forward unchecked.
+ *
+ * Delete this whole block once `road-mesh.js` (Task 5) and `colony.js` (Task 6) stop needing
+ * `PLOT_CELL`. `cubeRound` and `worldToHex` could go any time before that — they are unused
+ * already — but removing genuinely dead code that isn't blocking anything is whichever task
+ * gets to it first, not specifically this one's.
  */
-const HEX_DIRS = [
-  [1, 0],
-  [1, -1],
-  [0, -1],
-  [-1, 0],
-  [-1, 1],
-  [0, 1],
-]
-function hexRing(radius) {
-  if (radius === 0) return [{ q: 0, r: 0 }]
-  const out = []
-  let q = HEX_DIRS[4][0] * radius
-  let r = HEX_DIRS[4][1] * radius
-  for (let i = 0; i < HEX_DIRS.length; i++) {
-    for (let j = 0; j < radius; j++) {
-      out.push({ q, r })
-      q += HEX_DIRS[i][0]
-      r += HEX_DIRS[i][1]
-    }
-  }
-  return out
-}
-function hexDistance(a, b) {
-  return (Math.abs(a.q - b.q) + Math.abs(a.q + a.r - b.q - b.r) + Math.abs(a.r - b.r)) / 2
-}
 /**
  * Hex size, centre to corner — `road-mesh.js`'s hit-test radius and `colony.js`'s picking
- * threshold, both still measuring in hex units until Tasks 4 to 6 move them onto `CELL_SIZE`.
+ * threshold, both still measuring in hex units until Tasks 5 and 6 move them onto `CELL_SIZE`.
  * Frozen at the old hex value on purpose: the Plot class's own geometry below is square now
  * and no longer derives this number.
  */
@@ -91,15 +78,14 @@ function cubeRound(q, r) {
   else if (dr > dy) rr = -rq - ry
   return { q: rq, r: rr }
 }
-/** `src/game/colony.js` still calls this (Task 6's conversion); `worldToCell` is its replacement.
- *  Defaults to `PLOT_CELL`, not the Plot class's own (now square) `CELL` — every call site below
- *  relies on this default, and it has to stay the old hex size or their hex math goes wrong. */
+/** Unused: `colony.js` moved onto `worldToCell` before Task 4 ran, and nothing else ever called
+ *  this. Left in place because deleting it belongs to whichever of Tasks 5 or 6 clears the rest
+ *  of this block, not to Task 4, which never imported it. */
 export function worldToHex(x, z, size = PLOT_CELL) {
   const q = x / (size * 1.5)
   const r = z / (size * Math.sqrt(3)) - q / 2
   return cubeRound(q, r)
 }
-export { HEX_DIRS, hexRing, hexDistance }
 
 /**
  * Top face of a plot's tile slab — the surface everything on a plot stands on, and the one

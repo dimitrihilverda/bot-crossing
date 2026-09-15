@@ -9,68 +9,15 @@
  * browser, and a rule whose failure mode is an invisible, unclickable crew member is one
  * that has to be asserted rather than eyeballed.
  *
- * Hex lines are drawn in cube coordinates. Axial (q, r) cannot be interpolated directly —
- * rounding a fractional axial coordinate can land two cells away from its neighbour — so
- * each sample converts to cube, rounds with the largest-error-component fix-up, and comes
- * back. That fix-up is what guarantees consecutive cells are adjacent, which the test
- * asserts step by step.
+ * The cell-by-cell line itself now lives in `grid.js`'s `line`: a four-neighbour Bresenham
+ * walk that needs no rounding or repair, because a square lattice's cells line up with the
+ * axes it is interpolated on — the cube-coordinate rounding this module used to do for a hex
+ * lattice has no equivalent here. What is left is everything downstream of that line: turning
+ * a polyline into a length and a position (`pathLength`, `pointAt`), backing a car off the
+ * house it is delivering to and onto the kerb (`kerbBack`), stepping it along its route one
+ * frame at a time (`driveStep`), and deciding when its crew member rides along instead of
+ * walking (`ridesAlong`).
  */
-
-/** Axial → cube. The third axis is implied: q + r + s = 0. */
-function toCube(q, r) {
-  return { x: q, y: r, z: -q - r }
-}
-
-/**
- * Round a fractional cube coordinate to the nearest whole cell, then repair the axis that
- * moved furthest so the three still sum to zero. Without the repair, rounding can produce a
- * cell that is not adjacent to its predecessor.
- */
-function roundCube(x, y, z) {
-  let rx = Math.round(x)
-  let ry = Math.round(y)
-  let rz = Math.round(z)
-  const dx = Math.abs(rx - x)
-  const dy = Math.abs(ry - y)
-  const dz = Math.abs(rz - z)
-  if (dx > dy && dx > dz) rx = -ry - rz
-  else if (dy > dz) ry = -rx - rz
-  else rz = -rx - ry
-  return { q: rx, r: ry }
-}
-
-/** Cube distance, which is the number of steps between two cells. */
-function cubeDistance(a, b) {
-  return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y), Math.abs(a.z - b.z))
-}
-
-/**
- * Every cell from (q0, r0) to (q1, r1) inclusive, each adjacent to the one before it.
- *
- * The nudge is the standard fix for a line that passes exactly through a cell corner: an
- * unnudged sample sits equidistant from two cells and the rounding picks arbitrarily,
- * which can break adjacency.
- */
-export function hexLine(q0, r0, q1, r1) {
-  const a = toCube(q0, r0)
-  const b = toCube(q1, r1)
-  const steps = cubeDistance(a, b)
-  if (steps === 0) return [{ q: q0, r: r0 }]
-
-  const out = []
-  const nudge = 1e-6
-  for (let i = 0; i <= steps; i++) {
-    const t = i / steps
-    out.push(
-      roundCube(
-        a.x + (b.x - a.x) * t + nudge,
-        a.y + (b.y - a.y) * t + nudge,
-        a.z + (b.z - a.z) * t - 2 * nudge
-      )
-    )
-  }
-  return out
-}
 
 /** Total 2D length of a polyline of `{x, z}` points. */
 export function pathLength(points) {

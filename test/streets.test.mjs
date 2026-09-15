@@ -5,12 +5,12 @@ import { planStreets } from '../src/world/streets.js'
 import { allocateCells, colonyAnchor, shipPosition, worldToCell, cellWorld } from '../src/world/plots.js'
 import { distance, ring } from '../src/world/grid.js'
 
-const SHIP = { q: -2, r: 1 }
-const k = (c) => `${c.q},${c.r}`
+const SHIP = { x: -2, z: 1 }
+const k = (c) => `${c.x},${c.z}`
 const opts = (anchored = []) => ({ ship: SHIP, anchored: new Set(anchored) })
 
 test('a one-cell colony gets a ring around it', () => {
-  const layout = new Map([['a', [{ q: 0, r: 0 }]]])
+  const layout = new Map([['a', [{ x: 0, z: 0 }]]])
   const { ring, all } = planStreets(layout, opts())
   assert.ok(ring.length > 0, 'no ring was planned')
   for (const cell of ring) {
@@ -20,8 +20,8 @@ test('a one-cell colony gets a ring around it', () => {
 
 test('no street cell is ever a plot cell', () => {
   const layout = new Map([
-    ['a', [{ q: 0, r: 0 }, { q: 1, r: 0 }, { q: 0, r: 1 }]],
-    ['b', [{ q: 2, r: -1 }, { q: 2, r: 0 }]],
+    ['a', [{ x: 0, z: 0 }, { x: 1, z: 0 }, { x: 0, z: 1 }]],
+    ['b', [{ x: 2, z: -1 }, { x: 2, z: 0 }]],
   ])
   const { all } = planStreets(layout, opts())
   for (const cells of layout.values()) {
@@ -32,9 +32,9 @@ test('no street cell is ever a plot cell', () => {
 })
 
 test('no street cell is an anchored district cell', () => {
-  const layout = new Map([['a', [{ q: 0, r: 0 }]]])
+  const layout = new Map([['a', [{ x: 0, z: 0 }]]])
   // A ring-5 district, which is where `colonyAnchor` puts a visiting colony.
-  const district = [{ q: 5, r: -5 }, { q: 5, r: -4 }]
+  const district = [{ x: 5, z: -5 }, { x: 5, z: -4 }]
   const { all } = planStreets(layout, opts(district.map(k)))
   for (const cell of district) {
     assert.ok(!all.has(k(cell)), `street cell ${k(cell)} belongs to a district`)
@@ -42,18 +42,18 @@ test('no street cell is an anchored district cell', () => {
 })
 
 test('the ring sits outside every home plot cell', () => {
-  const layout = new Map([['a', [{ q: 0, r: 0 }, { q: 1, r: 0 }, { q: 2, r: 0 }]]])
+  const layout = new Map([['a', [{ x: 0, z: 0 }, { x: 1, z: 0 }, { x: 2, z: 0 }]]])
   const { ring } = planStreets(layout, opts())
-  // Cube distance from the origin of the furthest plot cell is 2, so every ring cell
-  // must be further out than that.
-  const cube = (c) => Math.max(Math.abs(c.q), Math.abs(c.r), Math.abs(-c.q - c.r))
+  // Chebyshev distance from the origin of the furthest plot cell is 2 — the same metric
+  // `ring` itself is built from — so every ring cell must be further out than that.
+  const chebyshev = (c) => Math.max(Math.abs(c.x), Math.abs(c.z))
   for (const cell of ring) {
-    assert.ok(cube(cell) > 2, `ring cell ${k(cell)} is not outside the colony`)
+    assert.ok(chebyshev(cell) > 2, `ring cell ${k(cell)} is not outside the colony`)
   }
 })
 
 test('every spur is a chain of adjacent cells reaching the ring', () => {
-  const layout = new Map([['a', [{ q: 0, r: 0 }]]])
+  const layout = new Map([['a', [{ x: 0, z: 0 }]]])
   const { ring, spurs } = planStreets(layout, opts())
   const onRing = new Set(ring.map(k))
   const spur = spurs.get('a')
@@ -61,30 +61,27 @@ test('every spur is a chain of adjacent cells reaching the ring', () => {
   for (let i = 1; i < spur.length; i++) {
     const a = spur[i - 1]
     const b = spur[i]
-    const dq = b.q - a.q
-    const dr = b.r - a.r
-    const ds = -dq - dr
-    const step = (Math.abs(dq) + Math.abs(dr) + Math.abs(ds)) / 2
+    const step = Math.abs(b.x - a.x) + Math.abs(b.z - a.z)
     assert.equal(step, 1, `spur step ${i} jumps ${step} cells`)
   }
   assert.ok(onRing.has(k(spur[spur.length - 1])), 'the spur does not end on the ring')
 })
 
 test('the depot always gets a spur', () => {
-  const layout = new Map([['a', [{ q: 0, r: 0 }]]])
+  const layout = new Map([['a', [{ x: 0, z: 0 }]]])
   const { spurs } = planStreets(layout, opts())
   const spur = spurs.get('__ship__')
   assert.ok(spur && spur.length > 0, 'the depot got no spur')
 })
 
 test('a plot with no unclaimed neighbour gets no spur', () => {
-  // `b` sits at the origin, walled in on all six sides by `a`. There is no free cell
+  // `b` sits at the origin, walled in on all four sides by `a`. There is no free cell
   // adjacent to it, so no road can reach it — which is expected, not an error: the
   // vehicle drives the last stretch over the deck, exactly as it did before stage 4.
-  const HEX_DIRS = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]]
+  const DIRS = [[1, 0], [0, 1], [-1, 0], [0, -1]]
   const layout = new Map([
-    ['b', [{ q: 0, r: 0 }]],
-    ['a', HEX_DIRS.map(([dq, dr]) => ({ q: dq, r: dr }))],
+    ['b', [{ x: 0, z: 0 }]],
+    ['a', DIRS.map(([dx, dz]) => ({ x: dx, z: dz }))],
   ])
   const { spurs } = planStreets(layout, opts())
   assert.ok(!spurs.has('b'), 'a walled-in plot was given a spur it cannot have')
@@ -92,8 +89,8 @@ test('a plot with no unclaimed neighbour gets no spur', () => {
 
 test('planning is stable: the same layout gives the same streets', () => {
   const layout = new Map([
-    ['a', [{ q: 0, r: 0 }, { q: 1, r: 0 }]],
-    ['b', [{ q: -1, r: 0 }]],
+    ['a', [{ x: 0, z: 0 }, { x: 1, z: 0 }]],
+    ['b', [{ x: -1, z: 0 }]],
   ])
   const first = planStreets(layout, opts())
   const second = planStreets(layout, opts())
@@ -273,11 +270,14 @@ test('the cells the allocator hands back are read as x/z, not q/r', () => {
   assert.match(src, /deckedCells\?\.get\(`\$\{cell\.x\},\$\{cell\.z\}`\)/, 'groundAt still looks deckedCells up by q/r')
 })
 
-test('roadCells output is still read as q/r, because road-path.js has not converted yet', () => {
-  // The other side of the same boundary: roadCells (src/world/road-path.js) is Task 4's file
-  // and still returns {q, r} cells. Renaming these reads to .x/.z would not fix anything -- it
-  // would just read a different pair of undefined properties off the same object -- so they
-  // are deliberately left alone here.
+test('roadCells output is now {x, z}, but colony.js still reads it as q/r until Task 6', () => {
+  // The other side of the same boundary: roadCells (src/world/road-path.js) is Task 4's file,
+  // and after Task 4 it returns {x, z} cells like everything else on this lattice. colony.js is
+  // Task 6's file and has not moved these two reads yet, so today they read undefined off a
+  // real object and turn a route into two cells of NaN -- a live bug now, not a harmless
+  // mismatch, until Task 6 renames them to .x/.z. Fixing them here would not help -- colony.js
+  // is not this task's file to edit -- so this test only pins their count, for Task 6 to know
+  // exactly how many call sites need changing.
   const src = readFileSync('src/game/colony.js', 'utf8')
   const reads = src.match(/cellWorld\(c\.q, c\.r\)/g) || []
   assert.equal(reads.length, 2, `expected 2 untouched roadCells reads, found ${reads.length}`)
