@@ -106,9 +106,12 @@ export const cellWorld = (x, z) => ({ x: x * CELL_SIZE, z: z * CELL_SIZE })
 /**
  * The cell containing a world point.
  *
- * A floor, not a nearest-centre search: on a square lattice the containing cell is decided by
- * one division per axis, where the hex version had to round in cube coordinates and repair the
- * axis that drifted furthest.
+ * Rounds to the nearest cell *centre*, not a floor: `cellWorld` puts a cell's centre at
+ * `n * CELL_SIZE`, so the boundary between two cells sits at the halfway point between them,
+ * and the point belongs to whichever centre it is closer to. On this square lattice that is
+ * one rounding division per axis, independent of the other — simpler than the hex version,
+ * which had to round in cube coordinates and repair whichever of the three axes drifted
+ * furthest from the other two.
  */
 export const worldToCell = (wx, wz) => ({
   x: Math.round(wx / CELL_SIZE),

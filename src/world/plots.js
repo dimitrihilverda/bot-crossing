@@ -28,64 +28,6 @@ export const PLOT_PALETTE = [
 ]
 
 /**
- * DEVIATION from this task's brief, recorded here rather than silently applied: Step 3 said to
- * delete `HEX_DIRS`, `hexRing`, `hexDistance`, `PLOT_CELL`, `CELL` and `TILE` outright. Doing
- * that literally broke `npm run build` at the time — a *hard*, non-negotiable requirement of
- * this stage — because `road-path.js`, `road-mesh.js`, `streets.js` and `colony.js` all still
- * imported these names, and Rollup resolves named imports statically, so a missing export was
- * a build error, not merely a test failure. Those files were Tasks 4 to 6's job to move onto
- * `grid.js`, not Task 3's.
- *
- * `CELL` and `TILE` were already off this list: Task 3 owns the Plot class's own mesh geometry,
- * and both names live with the rest of that geometry, sized off `CELL_SIZE`, further down this
- * file — nothing here derives them.
- *
- * Task 4 converted `road-path.js` and `streets.js` — two of the original four consumers — onto
- * `grid.js`'s `neighbours`, `distance`, `key` and `ring`. Neither imports `HEX_DIRS`, `hexRing`
- * or `hexDistance` any more, and since no other file ever did either, those three are gone
- * from this file with them.
- *
- * Task 5 moved `road-mesh.js` onto `grid.js`'s `CELL_SIZE` for its own hit-test radius, so
- * `PLOT_CELL` lost that caller too. What is actually left, as of Task 5:
- *
- *  - `PLOT_CELL` — still `colony.js`'s picking threshold (Task 6), frozen at the old hex value
- *    until that task moves it onto `CELL_SIZE`.
- *  - `cubeRound` and `worldToHex` — kept together, since the second is the only caller of the
- *    first. Neither has a caller anywhere in the app any more: `colony.js` had already moved
- *    every call site onto `worldToCell` before Task 4 started. Deleting them isn't this task's
- *    to do either — road-mesh.js never imported them — but they are genuinely dead code, free
- *    for whichever task gets to them first.
- *
- * Delete this whole block once `colony.js` (Task 6) stops needing `PLOT_CELL`.
- */
-/**
- * Hex size, centre to corner — `colony.js`'s picking threshold, still measuring in hex units
- * until Task 6 moves it onto `CELL_SIZE`. Frozen at the old hex value on purpose: the Plot
- * class's own geometry below is square now and no longer derives this number.
- */
-export const PLOT_CELL = 7.6
-function cubeRound(q, r) {
-  const y = -q - r
-  let rq = Math.round(q)
-  let rr = Math.round(r)
-  const ry = Math.round(y)
-  const dq = Math.abs(rq - q)
-  const dr = Math.abs(rr - r)
-  const dy = Math.abs(ry - y)
-  if (dq > dr && dq > dy) rq = -rr - ry
-  else if (dr > dy) rr = -rq - ry
-  return { q: rq, r: rr }
-}
-/** Unused: `colony.js` moved onto `worldToCell` before Task 4 ran, and nothing else ever called
- *  this. Left in place because deleting it belongs to whichever of Tasks 5 or 6 clears the rest
- *  of this block, not to Task 4, which never imported it. */
-export function worldToHex(x, z, size = PLOT_CELL) {
-  const q = x / (size * 1.5)
-  const r = z / (size * Math.sqrt(3)) - q / 2
-  return cubeRound(q, r)
-}
-
-/**
  * Top face of a plot's tile slab — the surface everything on a plot stands on, and the one
  * height every prop, building, kerb and pair of boots on a plot is measured from.
  *

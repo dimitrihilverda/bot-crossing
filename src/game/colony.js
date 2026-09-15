@@ -14,7 +14,7 @@ import {
   worldToCell,
   DECK_TOP,
   PLOT_PALETTE,
-  PLOT_CELL,
+  key,
 } from '../world/plots.js'
 import { buildingUniforms } from '../world/buildings.js'
 import { createHouse } from '../world/houses.js'
@@ -784,22 +784,24 @@ export class Colony {
     this.nav.rebuild(obstacles)
   }
 
-  /** The plot under a world point. On this square lattice the nearest cell centre is the cell. */
+  /**
+   * The plot under a world point.
+   *
+   * Not a radius around the nearest cell centre: a square lattice's cells are squares, not
+   * circles, so a circular threshold either clips the corners (too small) or reaches past the
+   * cell's own edges into its neighbour's (too large) — the old hex-era radius did neither,
+   * because 7.6 was that hexagon's own circumradius, but it is meaningless on this lattice's
+   * 12-unit cells. `worldToCell` already answers "which cell is this point in" the same way
+   * the deck itself is laid out — round each axis to its nearest centre — so a point is on a
+   * plot exactly when that cell belongs to it, corners included and with no slop either way.
+   */
   plotAt(x, z) {
-    let best = null
-    let bestD = Infinity
+    const cell = worldToCell(x, z)
+    const k = key(cell.x, cell.z)
     for (const plot of this.plotOrder) {
-      for (const local of plot.localCenters) {
-        const dx = x - (plot.center.x + local.x)
-        const dz = z - (plot.center.z + local.z)
-        const d = dx * dx + dz * dz
-        if (d < bestD) {
-          bestD = d
-          best = plot
-        }
-      }
+      if (plot.cellKeys.has(k)) return plot
     }
-    return bestD <= PLOT_CELL * PLOT_CELL ? best : null
+    return null
   }
 
   /**

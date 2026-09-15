@@ -80,13 +80,40 @@ test('a cell centre round-trips through world coordinates', () => {
 })
 
 test('any point inside a cell maps to that cell', () => {
-  // The containing cell is a floor now, not a nearest-centre search, so the edges matter.
+  // The containing cell is a nearest-centre search, not a floor, so a point up to half the
+  // cell width away on either side of the centre — corners included — still belongs to it.
   const c = { x: 2, z: -1 }
   const w = cellWorld(c.x, c.z)
   const almost = CELL_SIZE / 2 - 1e-6
   for (const [dx, dz] of [[0, 0], [almost, almost], [-almost, -almost], [almost, -almost], [-almost, almost]]) {
     assert.deepEqual(worldToCell(w.x + dx, w.z + dz), c, `offset ${dx},${dz} left the cell`)
   }
+})
+
+test('a cell corner still maps to its own cell, not a neighbour', () => {
+  // This is exactly the shape of the plot-picking bug (colony.js's plotAt): a circular
+  // threshold sized to the old hexagon's circumradius (7.6) is smaller than a square cell's
+  // own corner distance (6 * sqrt(2) ~ 8.49), so a corner point would fall outside it and the
+  // plot would refuse a click on its own corner. worldToCell has no such shortfall — it rounds
+  // each axis independently, so even the point equidistant from four cells still resolves to
+  // one of them, corner included.
+  const c = { x: 1, z: -2 }
+  const w = cellWorld(c.x, c.z)
+  const almost = CELL_SIZE / 2 - 1e-6
+  for (const [dx, dz] of [[almost, almost], [almost, -almost], [-almost, almost], [-almost, -almost]]) {
+    assert.deepEqual(worldToCell(w.x + dx, w.z + dz), c, `corner offset ${dx},${dz} missed the cell`)
+  }
+})
+
+test('a point past the cell edge belongs to the neighbour, not this cell', () => {
+  // The other half of the same bug: PLOT_CELL = 7.6 reached past a square cell's own
+  // half-width (6), so a point up to 7.6 units out on a single axis — well outside this
+  // cell's actual footprint — used to still count as "on" it. This cell's true edge is at
+  // exactly half CELL_SIZE; a point one unit further belongs to the next cell over.
+  const c = { x: 1, z: -2 }
+  const w = cellWorld(c.x, c.z)
+  const edge = CELL_SIZE / 2 + 1
+  assert.deepEqual(worldToCell(w.x + edge, w.z), { x: c.x + 1, z: c.z }, 'a point past the edge still mapped to the old cell')
 })
 
 test('the pitch is a multiple of the art packs\' two-unit module', () => {

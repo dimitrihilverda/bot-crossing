@@ -251,10 +251,30 @@ test('colonyAnchor still falls back to a hash without an index', () => {
 test('colony.js no longer calls worldToHex, and converts every former call site to worldToCell', () => {
   const src = readFileSync('src/game/colony.js', 'utf8')
   assert.doesNotMatch(src, /worldToHex/, 'a worldToHex call site (or its import) survives')
-  // The six sites this task converts: SHIP_CELL_FOR_STREETS, groundAt, the onPlot check in
-  // _workSite, _trafficRouteFor's houseCell, and _routeFor's start and end.
+  // The six sites Task 6 converted (SHIP_CELL_FOR_STREETS, groundAt, the onPlot check in
+  // _workSite, _trafficRouteFor's houseCell, and _routeFor's start and end), plus a seventh:
+  // plotAt, which moved off the stale PLOT_CELL hex radius onto the same cell lookup.
   const calls = src.match(/worldToCell\(/g) || []
-  assert.equal(calls.length, 6, `expected 6 worldToCell call sites, found ${calls.length}`)
+  assert.equal(calls.length, 7, `expected 7 worldToCell call sites, found ${calls.length}`)
+})
+
+test('plotAt no longer thresholds picking against the old hex radius', () => {
+  // PLOT_CELL = 7.6 was the old hexagon's circumradius: too small to reach a square cell's
+  // own corners (6 * sqrt(2) ~ 8.49) and too large for its edges (half-width 6). Restoring
+  // either the constant or its value as a literal picking radius reintroduces the bug this
+  // test exists to catch. Comment lines are excluded so the fix's own explanation of the old
+  // value, kept for context, does not trip this.
+  const src = readFileSync('src/game/colony.js', 'utf8')
+  assert.doesNotMatch(src, /PLOT_CELL/, 'colony.js still references the old hex-radius picking threshold')
+  const codeLines = src.split('\n').filter((l) => !/^\s*(\*|\/\/)/.test(l))
+  assert.ok(!codeLines.some((l) => /7\.6/.test(l)), 'a literal 7.6 hex radius survives in colony.js code')
+})
+
+test('the dead hex shim is gone from plots.js', () => {
+  const src = readFileSync('src/world/plots.js', 'utf8')
+  for (const gone of ['PLOT_CELL', 'worldToHex', 'cubeRound']) {
+    assert.doesNotMatch(src, new RegExp(gone), `plots.js still has ${gone}`)
+  }
 })
 
 test('the cells the allocator hands back are read as x/z, not q/r', () => {
