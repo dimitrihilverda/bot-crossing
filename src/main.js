@@ -104,6 +104,10 @@ let threads = []
  *  use for it, so it stays a plain module-level cache rather than a field on `state`. */
 let lastColonies = []
 let firstPollDone = false
+/** Last framed content signature — the hub re-fits the camera whenever the colonies on the map change. */
+let lastHubFrameSig = ''
+/** Last applied hub display settings, so the wall picks up config changes without a reload. */
+let lastHubSettingsSig = ''
 /** Last legend built for the bottom bar, kept so the open zone's chip can light up between polls. */
 let legendProjects = []
 /** The zone layout as last written to the colony file, so an unchanged map is not re-saved. */
@@ -839,6 +843,18 @@ function applyThreads(list) {
     queueSave()
   }
 
+  // The wall has no mouse or keyboard, so it must keep every colony in frame on its own — re-fit
+  // the camera to span all plots whenever the set/spread of colonies on the map changes. clamp
+  // is off because visiting colonies are anchored out past the normal WORLD_LIMIT.
+  if (HUB) {
+    const b = colony.contentBounds()
+    const sig = b ? `${b.center.x.toFixed(0)}|${b.center.z.toFixed(0)}|${b.radius.toFixed(0)}` : ''
+    if (b && sig !== lastHubFrameSig) {
+      lastHubFrameSig = sig
+      rig.focus(b.center, { distance: THREE.MathUtils.clamp(b.radius * 2.4 + 24, 40, 150), clamp: false })
+    }
+  }
+
   // The hub HUD is a read of the exact same merged, colony-tagged list the game itself just
   // rendered — `threads` above, not the raw `list` argument, so a viewed/unread rewrite at
   // the top of this function is reflected on the board too.
@@ -858,6 +874,7 @@ async function poll() {
     firstPollDone = true
     applyThreads(res.threads || [])
     hud.removeBoot()
+    if (HUB) await syncHubSettings()
   } catch (err) {
     hud.toast(err.message || 'Could not reach the thread scanner', 'err')
     hud.removeBoot()
@@ -866,7 +883,30 @@ async function poll() {
   }
 }
 
+/**
+ * The wall has no keyboard, so its look is driven from the shared config (the config view, or
+ * anyone editing colony.json). Re-read the saved settings each poll and apply them when they
+ * change — then keep the wall crisp (no tilt-shift blur, no bloom) whatever the config chose.
+ */
+async function syncHubSettings() {
+  try {
+    const s = await fetchState()
+    const sig = JSON.stringify(s?.settings || {})
+    if (sig === lastHubSettingsSig) return
+    lastHubSettingsSig = sig
+    if (s?.settings) settings.applyAll(s.settings)
+    settings.set('tiltShift', false)
+    settings.set('bloom', false)
+  } catch {
+    /* keep the current look if the state fetch fails */
+  }
+}
+
 function queueSave() {
+  // The hub is a read-only viewer: it must never write colony.json. Otherwise its own kiosk page
+  // keeps saving the (transient) visiting layout and clobbers config changes made from another
+  // device against the same NUC — e.g. adding a neighbour from a laptop.
+  if (HUB) return
   clearTimeout(pendingSave)
   pendingSave = setTimeout(async () => {
     try {
@@ -892,9 +932,14 @@ async function boot() {
         state = s
         // Before the first roster: zones come back to the ground they were on last time.
         colony.restoreLayout(state.plots)
-        // And the settings, but only for a browser that has none of its own — an explicit
-        // choice made here always outranks the file.
-        if (!hasStoredSettings() && state.settings) settings.applyAll(state.settings)
+        // The wall follows the SHARED config (colony.json) so it can be styled remotely from the
+        // config view — its own browser profile does not get a say. A normal browser still keeps
+        // its own: an explicit choice made there always outranks the file.
+        if (HUB) {
+          if (state.settings) settings.applyAll(state.settings)
+        } else if (!hasStoredSettings() && state.settings) {
+          settings.applyAll(state.settings)
+        }
       })
       .catch(() => {
         /* first run, or the file is gone — an empty colony state is a valid one */
@@ -908,6 +953,15 @@ async function boot() {
   }
   colony.astronauts.setRig(crewRig())
   if (!kitError) colony.onAssetsReady()
+
+  if (HUB) {
+    // A wall display stays crisp — no tilt-shift blur, no bloom glow — whatever the shared config
+    // or preset says. There is no keyboard at the wall to change it, so pin it here every boot.
+    settings.set('tiltShift', false)
+    settings.set('bloom', false)
+    // Seed the sync baseline so the first poll only re-applies on a real change.
+    lastHubSettingsSig = JSON.stringify(state.settings || {})
+  }
 
   await poll()
   setInterval(poll, POLL_MS)
@@ -944,6 +998,8 @@ settings.onChange((changed, scope) => {
   // rebuilt from the list rather than merely re-rendered.
   if (changed.has('hideDormant')) applyThreads(threads)
   if (changed.has('maxAgents')) applyThreads(threads)
+  // Re-lay the districts when the colony spacing changes so the new gap shows at once.
+  if (changed.has('colonySpacing')) applyThreads(threads)
 })
 
 // ── frame ─────────────────────────────────────────────────────────────────────────────

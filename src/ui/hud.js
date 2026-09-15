@@ -173,6 +173,7 @@ export class Hud {
       this._toggle('Adaptive quality', 'autoQuality', 'Quietly drops render scale if frames get expensive.'),
       this._slider('Scatter', 'scatterDensity', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`),
       this._slider('Max crew', 'maxAgents', 10, 200, 10, (v) => String(v)),
+      this._slider('Colony spacing', 'colonySpacing', 2, 6, 1, (v) => String(v), 'How far apart visiting colonies sit on the map.'),
       this._toggle('Stars', 'stars')
     )
     body.appendChild(perf)
@@ -231,7 +232,8 @@ export class Hud {
       ),
       this._slider('Environment', 'iblIntensity', 0, 2, 0.05, (v) => v.toFixed(2)),
       this._slider('Exposure', 'exposure', 0.4, 2, 0.05, (v) => v.toFixed(2)),
-      this._slider('Bloom', 'bloomStrength', 0, 1.6, 0.02, (v) => v.toFixed(2))
+      this._slider('Bloom', 'bloomStrength', 0, 1.6, 0.02, (v) => v.toFixed(2)),
+      this._slider('Haze', 'haze', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`, 'Drifting atmospheric dust/haze on the map.')
     )
     body.appendChild(light)
 

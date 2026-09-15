@@ -324,11 +324,14 @@ export class Particles {
    * is always where you are looking without simulating the whole world.
    */
   ambient(dt, camera, planet) {
-    if (!this.enabled || !planet.dust) return
+    // The `haze` setting scales the planet's own dust so the drifting atmosphere can be dialled
+    // down (or off) on any planet without touching the planet definitions.
+    const dust = planet.dust * (this.settings.get('haze') ?? 1)
+    if (!this.enabled || dust <= 0) return
     this._ambientTimer -= dt
     if (this._ambientTimer > 0) return
     const rate = this.settings.get('particles') === 'full' ? 0.045 : 0.12
-    this._ambientTimer = rate / planet.dust
+    this._ambientTimer = rate / dust
 
     const a = Math.random() * Math.PI * 2
     const r = 12 + Math.random() * 34

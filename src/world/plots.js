@@ -139,9 +139,19 @@ const cellsNeeded = (threadCount) =>
  * deliberate: a district you walk to reads as somebody else's settlement, not as your own
  * colony growing a lobe.
  */
-const ANCHOR_RING = 5
-export function colonyAnchor(name) {
+let ANCHOR_RING = 4
+/** How far visiting colonies are anchored from the centre — driven by the `colonySpacing`
+ *  setting so the wall's colony spacing can be tuned live. Clamped to a sane hex range. */
+export function setColonySpacing(n) {
+  ANCHOR_RING = Math.max(2, Math.min(8, Math.round(Number(n) || 4)))
+}
+export function colonyAnchor(name, index = null, count = null) {
   const ring = hexRing(ANCHOR_RING)
+  // With an index among the colonies, spread them evenly around the ring so they surround the
+  // centre (the Hub) rather than clumping wherever their names happen to hash.
+  if (index != null && count > 0) {
+    return ring[Math.round((index / count) * ring.length) % ring.length]
+  }
   return ring[hashString(`colony:${name}`) % ring.length]
 }
 

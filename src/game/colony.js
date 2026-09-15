@@ -5,6 +5,7 @@ import {
   Plot,
   allocateCells,
   colonyAnchor,
+  setColonySpacing,
   cellWorld,
   shipPosition,
   createLabel,
@@ -333,6 +334,15 @@ export class Colony {
    */
   setThreads(threads, archivedIds = new Set(), hiddenProjects = new Set(), knownIds = new Set()) {
     const now = Date.now()
+    // Lay the districts out at whatever spacing the config asks for, read fresh each pass. When it
+    // changes, wipe the remembered layout so the districts actually re-seed at the new ring —
+    // otherwise the drift guard holds them where they were and the slider looks dead.
+    const spacing = this.settings.get('colonySpacing')
+    setColonySpacing(spacing)
+    if (spacing !== this._lastSpacing) {
+      this._lastSpacing = spacing
+      this.plotCells.clear()
+    }
     const live = liveThreadsForColony(threads, archivedIds, hiddenProjects)
 
     // Group by repo, biggest project first so the busiest work lands nearest the middle.
@@ -452,11 +462,21 @@ export class Colony {
     // — never because a different repo gained or lost a thread. `plotCells` carries it
     // between polls, and the colony file carries it between sessions.
     const colonyOf = this.projectColony || new Map()
+    // The visiting colonies, in a stable order, so each gets an even slot around the ring and
+    // they surround the centre rather than clumping where their names hash.
+    const visitingColonies = [...new Set([...colonyOf.values()].map((v) => v.colony).filter(Boolean))].sort()
+    const colonyIndex = new Map(visitingColonies.map((c, i) => [c, i]))
     const projectList = projects.map(([name, list]) => {
       const visiting = colonyOf.get(name)
       // A visiting colony's repos anchor to that colony's district out past the home zones,
       // so they cluster together and read as somebody else's settlement.
-      return { id: name, size: list.length, anchor: visiting ? colonyAnchor(visiting.colony) : null }
+      return {
+        id: name,
+        size: list.length,
+        anchor: visiting
+          ? colonyAnchor(visiting.colony, colonyIndex.get(visiting.colony), visitingColonies.length)
+          : null,
+      }
     })
     // Streets are planned from the layout, then fed back in so no plot sits on one. Two
     // passes rather than one because the ring's radius depends on where the plots ended up:
@@ -482,6 +502,7 @@ export class Colony {
     this.roadGroup = createRoads({ streets: this.streets, groundAt: (x, z) => this.groundAt(x, z) })
     this.worldGroup.add(this.roadGroup)
     const layout = allocateCells(projectList, this.plotCells, this.streets.all)
+
     // Remembered, not replaced: a project that has just lost its last thread keeps its
     // ground on the books, and the oldest entries fall off the end.
     for (const [name, cells] of layout) {
@@ -840,6 +861,22 @@ export class Colony {
     const out = {}
     for (const [name, cells] of this.plotCells) out[name] = cells.map((c) => [c.q, c.r])
     return out
+  }
+
+  /**
+   * Centre + radius the hub frames the map by. Centred on the ORIGIN — the Hub's own colony
+   * sits there, so it stays the middle of the wall with the visiting colonies around it — and
+   * the radius reaches the farthest plot so everything stays in view.
+   */
+  contentBounds() {
+    if (!this.plotOrder.length) return null
+    let maxR = 0
+    for (const plot of this.plotOrder) {
+      const c = plot.middle || plot.center
+      if (!c) continue
+      maxR = Math.max(maxR, Math.hypot(c.x, c.z))
+    }
+    return { center: new THREE.Vector3(0, 0, 0), radius: maxR + 10 }
   }
 
   setHoveredPlot(plot) {

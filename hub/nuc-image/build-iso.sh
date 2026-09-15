@@ -54,7 +54,7 @@ fi
 
 # ── 2. assemble the payload copied onto the ISO at /bch ───────────────────────────────────
 echo "assembling payload…"
-cp -r provision.sh firstboot.sh setup-server.py portal net systemd "$PAYLOAD"/
+cp -r provision.sh firstboot.sh net-recovery.sh setup-server.py portal net systemd "$PAYLOAD"/
 # iso.env for firstboot (account/repo only — no secrets beyond the account it already installs).
 cat > "$PAYLOAD/iso.env" <<ENV
 BCH_HOSTNAME="${BCH_HOSTNAME}"

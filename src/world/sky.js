@@ -362,10 +362,19 @@ export class Sky {
 
     this._envDirty = true
     this.domeUniforms.uHaze.value = 0.25 + planet.atmosphere * 0.5
-    this.scene.fog.color.set(planet.fog.color)
-    this.scene.fog.near = planet.fog.near
-    this.scene.fog.far = planet.fog.far
+    this._applyFog()
     this.setTime(this.time ?? 0.32)
+  }
+
+  /** The ground fog band, scaled by the `haze` setting: lower haze pushes it out so the
+   *  distance clears (and 0 all but removes it), haze 1 = the planet's own fog. */
+  _applyFog() {
+    const p = this.planet
+    if (!p) return
+    const haze = Math.max(0.02, this.settings.get('haze') ?? 1)
+    this.scene.fog.color.set(p.fog.color)
+    this.scene.fog.near = p.fog.near / haze
+    this.scene.fog.far = p.fog.far / haze
   }
 
   /** Point the shadow frustum at the middle of the view. */
@@ -461,6 +470,7 @@ export class Sky {
       }
     }
     if (changed.has('stars')) this.setTime(this.time)
+    if (changed.has('haze')) this._applyFog()
     if (changed.has('ibl') || changed.has('iblIntensity')) {
       this.scene.environmentIntensity = this.settings.get('iblIntensity')
       this._refreshEnvironment(true)
