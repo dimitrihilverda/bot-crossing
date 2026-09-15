@@ -31,15 +31,21 @@ export const PLOT_PALETTE = [
  * DEVIATION from this task's brief, recorded here rather than silently applied: Step 3 says to
  * delete `HEX_DIRS`, `hexRing`, `hexDistance`, `PLOT_CELL`, `CELL` and `TILE` outright. Doing
  * that literally breaks `npm run build` — a *hard*, non-negotiable requirement of this stage —
- * because `road-path.js`, `road-mesh.js` and `streets.js` still import these names and Rollup
- * resolves named imports statically, so a missing export is a build error, not merely a test
- * failure. Those three files are Tasks 4 and 5's job to move onto `grid.js`, not this one's.
+ * because `road-path.js`, `road-mesh.js`, `streets.js` and `colony.js` still import these names
+ * and Rollup resolves named imports statically, so a missing export is a build error, not merely
+ * a test failure. Those files are Tasks 4 to 6's job to move onto `grid.js`, not this one's.
+ *
+ * `CELL` and `TILE` are already off this list: Task 3 (this one) owns the Plot class's own mesh
+ * geometry, and both names now live with the rest of that geometry, sized off `CELL_SIZE`,
+ * further down this file — nothing here derives them any more. `PLOT_CELL` stays in this block,
+ * frozen at the old hex value: it is still `road-mesh.js`'s hit-test radius and `colony.js`'s
+ * picking threshold, pre-conversion.
  *
  * So this block keeps the **old hex implementations**, verbatim, purely as a bridge for those
  * not-yet-converted consumers — nothing in the allocator below reads any of it; every allocator
- * function uses `DIRS` / `distance` / `ring` from `grid.js`, exactly as Step 3 asks. Task 4/5
- * should delete this whole block the moment the last of `road-path.js`, `road-mesh.js` and
- * `streets.js` stops importing from it.
+ * function uses `DIRS` / `distance` / `ring` from `grid.js`, exactly as Step 3 asks. Tasks 4 to 6
+ * should delete this whole block the moment the last of `road-path.js`, `road-mesh.js`,
+ * `streets.js` and `colony.js` stops importing from it.
  */
 const HEX_DIRS = [
   [1, 0],
@@ -54,7 +60,7 @@ function hexRing(radius) {
   const out = []
   let q = HEX_DIRS[4][0] * radius
   let r = HEX_DIRS[4][1] * radius
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < HEX_DIRS.length; i++) {
     for (let j = 0; j < radius; j++) {
       out.push({ q, r })
       q += HEX_DIRS[i][0]
@@ -66,11 +72,13 @@ function hexRing(radius) {
 function hexDistance(a, b) {
   return (Math.abs(a.q - b.q) + Math.abs(a.q + a.r - b.q - b.r) + Math.abs(a.r - b.r)) / 2
 }
-/** Hex size, centre to corner — `road-mesh.js`'s `PLOT_CELL` hit-test radius, pre-conversion. */
-const CELL = 7.6
-/** Pulled in a hair so two neighbouring plots never z-fight along a shared edge. */
-const TILE = CELL * 0.992
-export const PLOT_CELL = CELL
+/**
+ * Hex size, centre to corner — `road-mesh.js`'s hit-test radius and `colony.js`'s picking
+ * threshold, both still measuring in hex units until Tasks 4 to 6 move them onto `CELL_SIZE`.
+ * Frozen at the old hex value on purpose: the Plot class's own geometry below is square now
+ * and no longer derives this number.
+ */
+export const PLOT_CELL = 7.6
 function cubeRound(q, r) {
   const y = -q - r
   let rq = Math.round(q)
@@ -83,8 +91,10 @@ function cubeRound(q, r) {
   else if (dr > dy) rr = -rq - ry
   return { q: rq, r: rr }
 }
-/** `src/game/colony.js` still calls this (Task 6's conversion); `worldToCell` is its replacement. */
-export function worldToHex(x, z, size = CELL) {
+/** `src/game/colony.js` still calls this (Task 6's conversion); `worldToCell` is its replacement.
+ *  Defaults to `PLOT_CELL`, not the Plot class's own (now square) `CELL` — every call site below
+ *  relies on this default, and it has to stay the old hex size or their hex math goes wrong. */
+export function worldToHex(x, z, size = PLOT_CELL) {
   const q = x / (size * 1.5)
   const r = z / (size * Math.sqrt(3)) - q / 2
   return cubeRound(q, r)
@@ -128,13 +138,37 @@ const MAX_CELLS = 9
  */
 const SHIP_CELL = { x: -2, z: 0 }
 
+/** One square cell's own footprint, in world units — the Plot class's own copy of `CELL_SIZE`. */
+const CELL = CELL_SIZE
 /**
- * Edge j of a flat-top hexagon runs between the corners at 60j° and 60(j+1)°, so its
- * midpoint faces 60j+30°. This maps that edge to the neighbour sitting across it.
- *
- * Still hex math: `_buildBorder` below hasn't moved to the square lattice yet.
+ * Pulled in a hair so two neighbouring plots never z-fight along a shared edge — the same
+ * trick the hex lattice used, at the same fraction: 11.904 out of a 12-unit cell, where the
+ * hex tile pulled 7.54 out of 7.6.
  */
-const EDGE_TO_DIR = [0, 5, 4, 3, 2, 1]
+const TILE = CELL * 0.992
+
+/** Kerb bar thickness, and how far its centreline sits in from the tile's own edge. */
+const BORDER_WIDTH = 0.32
+const BORDER_INSET = 0.05
+/**
+ * Distance from a cell's centre to the kerb's inner face, measured along an axis. `_buildBorder`
+ * derives the same number itself; `_buildClutter` reads it here to know how close to the kerb a
+ * prop may sit.
+ */
+const KERB_INNER = TILE / 2 - BORDER_INSET - BORDER_WIDTH
+
+/** 3 x 3 arrangement, matching `SLOTS_PER_CELL` — see `grid.js`'s `CELL_SIZE` comment for why. */
+const SLOTS_SIDE = 3
+/** Spacing between adjacent slot centres: 12 / 3 = 4.0, leaving 1.1 of clearance around a
+ *  2.9-wide house (`HOUSE_SCALE = 1.45` in `houses.js`, applied to a 2-unit building). */
+const SLOT_SPACING = CELL_SIZE / SLOTS_SIDE
+/** Half-width of a house at that scale — the other half of the 1.1 clearance measurement. */
+const HOUSE_HALF_WIDTH = 1.45
+/**
+ * The smallest axis-aligned square, centred on a cell, that contains every one of its 3 x 3
+ * slots' houses — the inner edge `_buildClutter` has to clear.
+ */
+const SLOT_REACH = SLOT_SPACING + HOUSE_HALF_WIDTH
 
 const ORIGIN = { x: 0, z: 0 }
 
@@ -389,34 +423,18 @@ export const shipPosition = () => {
   return new THREE.Vector3(x, 0, z)
 }
 
-/**
- * Three builds a 6-sided cylinder with its first vertex on +Z, which puts its corners at
- * 30°, 90°, 150°… — a *pointy-top* hexagon. The lattice, the edge-to-neighbour mapping and
- * the border bars all assume a **flat-top** hexagon with corners at 0°, 60°, 120°… so every
- * hexagonal prism has to be turned by this much to agree with them. Without it the decks sit
- * a half-step out of phase and their corners poke through the borders.
- */
-const HEX_PHASE = Math.PI / 6
-
 /** How many times the deck plate repeats around a tile's rim, at the deck's own scale. */
-const PERIMETER_REPEATS = (6 * TILE) / DECK_TEXTURE_SCALE
+const PERIMETER_REPEATS = (4 * TILE) / DECK_TEXTURE_SCALE
 
-/** Corner i of a flat-top hexagon, in plot-local coordinates. */
-function corner(cx, cz, i, size) {
-  const a = (Math.PI / 3) * i
-  return [cx + size * Math.cos(a), cz + size * Math.sin(a)]
-}
-
-/** A flat-top hexagonal prism, phase-corrected. */
 /**
  * Replace a geometry's UVs with a world-planar projection.
  *
- * A hex tile is a six-sided cylinder, and a cylinder's cap UVs are a disc — which turns a
- * tiling plate pattern into a medallion, one per tile. Projecting from XZ instead makes the
- * seams run straight across a whole plot, so seven cells read as one apron rather than seven
- * repeats. Upright faces get the rim treatment: the deck's edge is a shallow band next to
- * the plot it wraps, and a flat XZ projection smears it into streaks at exactly the grazing
- * angle it is seen from.
+ * A box's top and bottom faces come with their own generated UVs, but unwrapped per tile they
+ * would still repeat once per tile, seam and all, at every tile edge. Projecting from XZ
+ * instead makes the seams run straight across a whole plot, so seven cells read as one apron
+ * rather than seven repeats. Upright faces get the rim treatment: the deck's edge is a
+ * shallow band next to the plot it wraps, and a flat XZ projection smears it into streaks at
+ * exactly the grazing angle it is seen from.
  *
  * `height` is the prism's own height, which is what the rim's texel density is set against.
  * It is not `DECK_TOP`: the slab reaches below the ground as well as above it, and a rim
@@ -429,32 +447,30 @@ function planarUv(geo, scale, offsetX = 0, offsetZ = 0, height = DECK_TOP) {
   const uv = new Float32Array(pos.count * 2)
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i)
-    const y = pos.getY(i)
     const z = pos.getZ(i)
     if (Math.abs(nrm.getY(i)) > 0.5) {
       // Top and bottom: straight down, in world space, so the pattern runs across tiles.
       uv[i * 2] = (x + offsetX) / scale
       uv[i * 2 + 1] = (z + offsetZ) / scale
     } else {
-      // The rim keeps the cylinder's own unwrap, only rescaled to world density.
-      //
-      // Two simpler ideas both fail here. A fixed horizontal axis like `x + z` is *constant*
-      // along two of every six sides of a hexagon, which leaves those faces with no UV
-      // gradient, a degenerate tangent, and — since three builds the normal-mapped shading
-      // frame out of that — solid black. Arc length from `atan2` fixes the gradient but
-      // introduces a seam: the face straddling ±π jumps a full turn in one step, crushing a
-      // dozen repeats of the texture into one panel, which reads as fine stripes at the
-      // corners and as mud once mipmapping averages them. The generated unwrap already
-      // solves both, because it duplicates the vertices at the seam.
+      // The rim keeps the box's own per-face unwrap, only rescaled to world density. A box's
+      // four side faces are generated independently, each with its own 0..1 UV square and no
+      // vertices shared with its neighbours, so — unlike a hexagon's flat sides — there is no
+      // seam to solve for and no degenerate face to special-case.
       uv[i * 2] = src.getX(i) * PERIMETER_REPEATS
-      // The cylinder's own v runs 0 at the foot of the prism to 1 at its top, so scaling it
-      // by the prism's real height is what keeps the plate at world density whatever the
-      // slab's total depth. Lifted off zero so a rim this shallow samples the middle of a
-      // plate rather than straddling the seam that runs along the texture's own edge.
+      // Each face's own v runs 0 at the foot of the prism to 1 at its top, so scaling it by
+      // the prism's real height is what keeps the plate at world density whatever the slab's
+      // total depth. Lifted off zero so a rim this shallow samples the middle of a plate
+      // rather than straddling the seam that runs along the texture's own edge.
       uv[i * 2 + 1] = 0.25 + src.getY(i) * (height / scale)
     }
   }
   geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2))
+}
+
+/** A square tile prism, `size` on a side. */
+function tilePrism(size, height) {
+  return new THREE.BoxGeometry(size, height, size)
 }
 
 /**
@@ -478,11 +494,13 @@ function kerbUv(geo) {
   uv.needsUpdate = true
 }
 
-function hexPrism(radius, height) {
-  const geo = new THREE.CylinderGeometry(radius, radius, height, 6)
-  geo.rotateY(HEX_PHASE)
-  return geo
-}
+/** The tile's four corners, as unit sign pairs — which one a cell's lamp post sits near. */
+const POST_CORNERS = [
+  [1, 1],
+  [1, -1],
+  [-1, 1],
+  [-1, -1],
+]
 
 // ── plot mesh ─────────────────────────────────────────────────────────────────────────
 
@@ -493,7 +511,7 @@ export class Plot {
     this.index = index
     this.cells = cells
     this.accent = accent
-    this.cellKeys = new Set(cells.map((c) => key(c.q, c.r)))
+    this.cellKeys = new Set(cells.map((c) => key(c.x, c.z)))
     /**
      * The terrain height the whole slab sits on. Near the ship this is ~0 and changes nothing,
      * but a visiting colony's district is anchored far out where the ground rolls, and a slab
@@ -506,11 +524,11 @@ export class Plot {
     // — rather than the centroid of whatever cells it holds this minute. A zone that gains
     // a tile must not drag its buildings, its crew and its name sideways: the root stays
     // exactly where it was and the new tile appears beside it.
-    const origin = hexToWorld(cells[0].q, cells[0].r)
+    const origin = cellWorld(cells[0].x, cells[0].z)
     let sx = 0
     let sz = 0
     this.localCenters = cells.map((c) => {
-      const { x, z } = hexToWorld(c.q, c.r)
+      const { x, z } = cellWorld(c.x, c.z)
       sx += x
       sz += z
       return { x: x - origin.x, z: z - origin.z }
@@ -544,14 +562,14 @@ export class Plot {
     this.slots = this._buildSlots()
   }
 
-  /** One merged slab of hex tiles. */
+  /** One merged slab of square tiles. */
   _buildDeck() {
     // UVs are assigned per tile, before it is moved into place: the rim wraps around the
     // tile's own centre, so it has to be at the origin when that is worked out. The top's
     // projection takes the tile's offset explicitly, which keeps the plate pattern running
     // continuously across a whole plot.
     const parts = this.localCenters.map(({ x, z }) => {
-      const geo = hexPrism(TILE, DECK_HEIGHT)
+      const geo = tilePrism(TILE, DECK_HEIGHT)
       planarUv(geo, DECK_TEXTURE_SCALE, x, z, DECK_HEIGHT)
       // Positioned by its *top* face rather than by its middle: everything on a plot is
       // measured from that face, so it is the end of the prism that has to stay put when
@@ -590,7 +608,7 @@ export class Plot {
 
   /**
    * The glowing accent kerb, drawn as one bar per *outside* edge — skipping shared edges is
-   * what makes six tiles read as one zone instead of a honeycomb.
+   * what makes a multi-cell plot read as one zone instead of a checkerboard.
    *
    * Two things here exist purely to stop the borders flickering. The bar is inset so it lies
    * wholly **inside** its own tile: centred on the edge it would overlap the neighbouring
@@ -600,23 +618,22 @@ export class Plot {
    */
   _buildBorder() {
     const parts = []
-    const apothem = TILE * Math.cos(Math.PI / 6)
-    const width = 0.32
-    const inset = 0.05
+    const apothem = TILE / 2
     // Centreline of the bar, pulled inboard far enough to clear the tile edge entirely.
-    const mid = apothem - inset - width / 2
-    // The bars form a smaller regular hexagon, whose side equals its own circumradius.
-    const side = mid / Math.cos(Math.PI / 6)
+    const mid = apothem - BORDER_INSET - BORDER_WIDTH / 2
+    // The bars form a smaller square than the tile itself, so a bar's length is simply
+    // twice its own distance from the centre — the square analogue of the hex lattice's
+    // "the smaller hexagon's side equals its own circumradius".
+    const side = mid * 2
 
     this.cells.forEach((cell, i) => {
       const { x, z } = this.localCenters[i]
-      for (let edge = 0; edge < 6; edge++) {
-        const dir = HEX_DIRS[EDGE_TO_DIR[edge]]
-        if (this.cellKeys.has(key(cell.q + dir[0], cell.r + dir[1]))) continue
+      for (const [dx, dz] of DIRS) {
+        if (this.cellKeys.has(key(cell.x + dx, cell.z + dz))) continue
 
-        const angle = (Math.PI / 3) * edge + Math.PI / 6
+        const angle = Math.atan2(dz, dx)
         // Sits on the deck: bottom flush with the deck's top face, never inside it.
-        const geo = new THREE.BoxGeometry(width, 0.14, side * 1.02)
+        const geo = new THREE.BoxGeometry(BORDER_WIDTH, 0.14, side * 1.02)
         kerbUv(geo)
         geo.rotateY(-angle)
         geo.translate(x + Math.cos(angle) * mid, DECK_TOP + 0.07, z + Math.sin(angle) * mid)
@@ -651,8 +668,13 @@ export class Plot {
     const posts = []
     const lamps = []
     this.localCenters.forEach(({ x, z }, i) => {
-      const [px, pz] = corner(x, z, (i * 2) % 6, TILE * 0.72)
-      const pole = new THREE.CylinderGeometry(0.055, 0.085, 1.8, 6)
+      // Cycle through the tile's four corners, pulled in from the true corner so the post
+      // stands clear of the kerb bars meeting there.
+      const [sx, sz] = POST_CORNERS[i % POST_CORNERS.length]
+      const px = x + sx * TILE * 0.5 * 0.72
+      const pz = z + sz * TILE * 0.5 * 0.72
+      // A square post, to match the plot's own square corners.
+      const pole = new THREE.BoxGeometry(0.09, 1.8, 0.09)
       pole.translate(px, DECK_TOP + 0.9, pz)
       posts.push(pole)
       const head = new THREE.SphereGeometry(0.14, 8, 6)
@@ -693,21 +715,29 @@ export class Plot {
     this.clutterSpots = []
 
     this.localCenters.forEach(({ x, z }) => {
-      // Two bands, both chosen to miss the buildings. The slot ring sits at 0.58 of a tile
-      // and a building reaches about 1.5 units past it, so the gaps *between* consecutive
-      // ring slots are clear — and so is the strip inside the kerb, past every slot.
+      // One thin band, re-measured for the square lattice rather than scaled from the hex
+      // numbers by eye. `SLOT_REACH` is the smallest axis-aligned square that contains every
+      // house in the 3 x 3 slot grid (5.45 out from the cell's centre); `KERB_INNER` is the
+      // kerb's own inner face (5.58 out). That leaves only about 0.13 of a unit of clearance
+      // along an axis (wider on the diagonal, ~0.19) — this lattice's tighter slot spacing
+      // leaves far less yard than the hex ring did, so the band sits in the middle of what's
+      // left and the props are scaled down to actually fit it. `squareEdge` accounts for the
+      // tile being square rather than round: the boundary is not the same distance from the
+      // centre at every angle the way a hex's roughly was.
+      const squareEdge = (angle, half) => half / Math.max(Math.abs(Math.cos(angle)), Math.abs(Math.sin(angle)))
       const spots = []
-      for (let i = 0; i < 6; i++) {
-        if (rand() > 0.45) spots.push({ a: (Math.PI / 3) * i + Math.PI / 3, r: TILE * (0.52 + rand() * 0.1) })
-      }
-      for (let i = 0; i < 3; i++) {
-        if (rand() > 0.35) spots.push({ a: rand() * Math.PI * 2, r: TILE * (0.78 + rand() * 0.07) })
+      for (let i = 0; i < 8; i++) {
+        if (rand() > 0.4) {
+          const a = (Math.PI / 4) * i + Math.PI / 8
+          const half = SLOT_REACH + (KERB_INNER - SLOT_REACH) * (0.35 + rand() * 0.3)
+          spots.push({ a, r: squareEdge(a, half) })
+        }
       }
 
       for (const { a, r } of spots) {
         const name = props[Math.floor(rand() * props.length)]
         const geo = part(name)
-        const s = name === 'lights' ? 1.1 : 1.35
+        const s = name === 'lights' ? 0.55 : 0.7
         geo.scale(s, s, s)
         geo.rotateY(rand() * Math.PI * 2)
         const px = x + Math.cos(a) * r
@@ -720,7 +750,7 @@ export class Plot {
         const spread = Math.max(box.max.x - box.min.x, box.max.z - box.min.z) * 0.5
         geo.translate(px, DECK_TOP, pz)
         parts.push(geo)
-        this.clutterSpots.push({ x: px, z: pz, r: Math.max(0.45, spread * 0.86) })
+        this.clutterSpots.push({ x: px, z: pz, r: Math.max(0.3, spread * 0.86) })
       }
     })
 
@@ -737,17 +767,18 @@ export class Plot {
   }
 
   /**
-   * Slots, in plot-local coordinates: cell centre first, then the ring around it, cell by
-   * cell. Fixed rather than random, so a session keeps its spot as siblings come and go —
-   * a building must never jump because a neighbour was archived.
+   * Slots, in plot-local coordinates: a fixed 3 x 3 grid inside each cell, `SLOTS_PER_CELL`
+   * of them, row by row, cell by cell. Fixed rather than random, so a session keeps its spot
+   * as siblings come and go — a building must never jump because a neighbour was archived.
    */
   _buildSlots() {
     const slots = []
+    const half = (SLOTS_SIDE - 1) / 2
     for (const { x, z } of this.localCenters) {
-      slots.push({ x, z })
-      for (let i = 0; i < 6; i++) {
-        const a = (Math.PI / 3) * i + Math.PI / 6
-        slots.push({ x: x + Math.cos(a) * TILE * 0.58, z: z + Math.sin(a) * TILE * 0.58 })
+      for (let iz = 0; iz < SLOTS_SIDE; iz++) {
+        for (let ix = 0; ix < SLOTS_SIDE; ix++) {
+          slots.push({ x: x + (ix - half) * SLOT_SPACING, z: z + (iz - half) * SLOT_SPACING })
+        }
       }
     }
     return slots
