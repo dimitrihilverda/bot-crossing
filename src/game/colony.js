@@ -5,6 +5,7 @@ import {
   Plot,
   allocateCells,
   colonyAnchor,
+  setColonySpacing,
   cellWorld,
   shipPosition,
   createLabel,
@@ -15,7 +16,22 @@ import {
   PLOT_PALETTE,
   PLOT_CELL,
 } from '../world/plots.js'
-import { createBuilding, buildingUniforms, Scaffolds } from '../world/buildings.js'
+import { buildingUniforms } from '../world/buildings.js'
+import { createHouse } from '../world/houses.js'
+import {
+  hexLine,
+  pathLength,
+  pointAt,
+  kerbBack,
+  driveStep,
+  ridesAlong,
+} from '../world/drive-path.js'
+import { planStreets } from '../world/streets.js'
+import { roadCells } from '../world/road-path.js'
+import { createRoads } from '../world/road-mesh.js'
+import { Deliveries, CAR_SPEED } from '../world/deliveries.js'
+import { TrafficCars } from '../world/traffic-cars.js'
+import { MAX_TRAFFIC, newVehicle, stepVehicle, trafficCount } from '../world/traffic.js'
 import { Ship } from '../world/ship.js'
 import { Astronauts } from '../agents/astronauts.js'
 import { Indicators, BADGE } from '../agents/indicators.js'
@@ -23,6 +39,10 @@ import { MAX_AGENT_CAP } from '../core/settings.js'
 import { Particles } from '../agents/particles.js'
 import { Navigation } from '../agents/navigation.js'
 import { liveThreadsForColony } from './hidden-projects.js'
+import { stepProgress } from './growth.js'
+import { statusFor } from './status.js'
+
+export { statusFor }
 
 /**
  * The colony: everything that turns a list of agent threads into a place.
@@ -43,13 +63,49 @@ import { liveThreadsForColony } from './hidden-projects.js'
  * you have running.
  */
 
-const STALE_MS = 3 * 24 * 60 * 60 * 1000
 /** How wide an astronaut is, for the purpose of not fitting through gaps it should not. */
 const AGENT_RADIUS = 0.26
 /** Progress a live thread adds per second, so a working site visibly grows while you watch. */
 const LIVE_GROWTH = 0.004
 /** How many zones' positions to remember, including repos with nothing running in them. */
 const LAYOUT_MEMORY = 80
+
+// The depot's own cell, for planning streets. `SHIP_CELL` itself is module-local to
+// `plots.js` and deliberately not exported; converting the depot's world position back to a
+// cell with `worldToHex` gives the same answer without opening another export. Computed once
+// at module scope rather than per call — the depot does not move.
+const SHIP_CELL_FOR_STREETS = worldToHex(shipPosition().x, shipPosition().z)
+
+/**
+ * The reveal progress at which a house has already hidden itself.
+ *
+ * `setProgress` in houses.js switches the whole Group off below this, so this is the point
+ * where a retiring site has finished emptying out and there is nothing left on screen for
+ * `_removeBuilding` to take away.
+ */
+const RETIRED_PROGRESS = 0.02
+
+/**
+ * The reveal progress at which a site has broken ground and can take a delivery.
+ *
+ * Above `RETIRED_PROGRESS` on purpose: there has to be a house standing there for a car to
+ * be driving to it.
+ */
+const DELIVERY_PROGRESS = 0.03
+
+/**
+ * Where a retiring site's reveal is parked while its car is still on the road.
+ *
+ * Above both of the numbers above, and below the first furniture reveal threshold (0.05, see
+ * `revealThresholds` in houses.js): the house stands there stripped of its contents for
+ * exactly as long as the car takes to get home, and only then goes. That is the picture the
+ * spec asks for — the load leaves before the address does.
+ *
+ * Holding it above `DELIVERY_PROGRESS` is not cosmetic. `_updateDeliveries` skips a site that
+ * has not broken ground, and a skipped site is one whose `driven` stops being stepped — which
+ * is precisely how a retiring entry would come to sit on the colony's books forever.
+ */
+const RETIRE_HOLD = 0.04
 
 export const STATUS_ORDER = ['blocked', 'waiting', 'working', 'celebrating', 'idle', 'sleeping']
 
@@ -62,16 +118,6 @@ export const STATUS_LABEL = {
   sleeping: 'Dormant',
   spawning: 'Arriving',
   leaving: 'Heading home',
-}
-
-/** Thread → behaviour. First match wins, exactly like the board's auto-sort. */
-export function statusFor(thread, now = Date.now()) {
-  if (thread.hasError) return 'blocked'
-  if (thread.running) return 'working'
-  if (thread.prState === 'MERGED') return 'celebrating'
-  if (thread.unread) return 'waiting'
-  if (now - thread.lastActivityAt > STALE_MS) return 'sleeping'
-  return 'idle'
 }
 
 /**
@@ -93,15 +139,18 @@ const BADGE_FOR = {
 /** Transcript size → how finished the building looks. Log scale: threads grow fast early. */
 /**
  * How far along a thread is, on a log scale over its transcript size. This drives the bar
- * on the thread card — it no longer drives how much of the building you can see.
+ * on the thread card, and it drives how much furniture has arrived in the house — it no
+ * longer drives the sink.
  *
- * It used to. The shader draws construction by sinking the structure into the ground and
- * discarding what falls below the deck, and mapping transcript size onto that meant most
- * buildings stood permanently waist-deep in their own plot. Read as a picture of a colony
- * rather than as a chart, that is not "this thread is young", it is "this building is
- * broken" — a dome cut off by a flat plane looks like a rendering fault, and it is the
- * first thing the eye goes to. So the sink is now only what it is good at: the few seconds
- * of a new building rising out of the ground.
+ * The sink is the old mechanism: the shader draws construction by sinking the structure
+ * into the ground and discarding what falls below the deck, and this value used to be
+ * mapped onto that too, which meant most buildings stood permanently waist-deep in their
+ * own plot. Read as a picture of a colony rather than as a chart, that is not "this thread
+ * is young", it is "this building is broken" — a dome cut off by a flat plane looks like a
+ * rendering fault, and it is the first thing the eye goes to. So the sink is now only what
+ * it is good at: the few seconds of a new building rising out of the ground. Driving the
+ * furniture reveal from this same value does not bring that bug back — an empty room reads
+ * as "not moved in yet", not as broken geometry, so there is no flat plane to look wrong.
  */
 export function transcriptProgress(thread) {
   const size = Math.max(1, thread.sizeBytes || 0)
@@ -150,7 +199,20 @@ export class Colony {
     // missing. A badge is a single quad; the spare instances cost almost nothing.
     this.indicators = new Indicators(scene, settings, MAX_AGENT_CAP)
     this.particles = new Particles(scene, settings)
-    this.scaffolds = new Scaffolds(scene, 320)
+    // One car per thread at most, so the same ceiling the badges get. The cap is per accent
+    // rather than per colony — `Deliveries` keeps a mesh pair per plot colour — so this is a
+    // generous bound either way, and an unused instance slot costs nothing until it is written.
+    this.deliveries = new Deliveries(scene, MAX_AGENT_CAP)
+    // Ambient traffic: cars nobody owns, driving the same streets. Its own pool, capped well
+    // above `MAX_TRAFFIC` (the most that will ever be on the road at once) rather than at it,
+    // for the same "unused instance slot costs nothing" reason the delivery fleet is sized
+    // generously above.
+    this.traffic = new TrafficCars(scene, MAX_TRAFFIC * 2)
+    this._trafficVehicles = []
+    this._trafficRoutes = new Map()
+    // Ever-increasing, so a vehicle that leaves the pool and a different one that later
+    // takes its slot are never the same car with the same seed.
+    this._trafficSeed = 0
     this.nav = new Navigation()
     this.astronauts.setNavigation(this.nav)
 
@@ -257,6 +319,8 @@ export class Colony {
     this.sky.onSettingsChanged(changed)
     this.astronauts.onSettingsChanged(changed)
     this.particles.onSettingsChanged(changed)
+    this.deliveries.onSettingsChanged(changed)
+    this.traffic.onSettingsChanged(changed)
     if (changed.has('showLabels')) this._syncLabels()
     if (changed.has('timeOfDay')) this.sky.setTime(this.settings.get('timeOfDay'))
   }
@@ -270,6 +334,15 @@ export class Colony {
    */
   setThreads(threads, archivedIds = new Set(), hiddenProjects = new Set(), knownIds = new Set()) {
     const now = Date.now()
+    // Lay the districts out at whatever spacing the config asks for, read fresh each pass. When it
+    // changes, wipe the remembered layout so the districts actually re-seed at the new ring —
+    // otherwise the drift guard holds them where they were and the slider looks dead.
+    const spacing = this.settings.get('colonySpacing')
+    setColonySpacing(spacing)
+    if (spacing !== this._lastSpacing) {
+      this._lastSpacing = spacing
+      this.plotCells.clear()
+    }
     const live = liveThreadsForColony(threads, archivedIds, hiddenProjects)
 
     // Group by repo, biggest project first so the busiest work lands nearest the middle.
@@ -389,15 +462,47 @@ export class Colony {
     // — never because a different repo gained or lost a thread. `plotCells` carries it
     // between polls, and the colony file carries it between sessions.
     const colonyOf = this.projectColony || new Map()
-    const layout = allocateCells(
-      projects.map(([name, list]) => {
-        const visiting = colonyOf.get(name)
-        // A visiting colony's repos anchor to that colony's district out past the home zones,
-        // so they cluster together and read as somebody else's settlement.
-        return { id: name, size: list.length, anchor: visiting ? colonyAnchor(visiting.colony) : null }
-      }),
-      this.plotCells
-    )
+    // The visiting colonies, in a stable order, so each gets an even slot around the ring and
+    // they surround the centre rather than clumping where their names hash.
+    const visitingColonies = [...new Set([...colonyOf.values()].map((v) => v.colony).filter(Boolean))].sort()
+    const colonyIndex = new Map(visitingColonies.map((c, i) => [c, i]))
+    const projectList = projects.map(([name, list]) => {
+      const visiting = colonyOf.get(name)
+      // A visiting colony's repos anchor to that colony's district out past the home zones,
+      // so they cluster together and read as somebody else's settlement.
+      return {
+        id: name,
+        size: list.length,
+        anchor: visiting
+          ? colonyAnchor(visiting.colony, colonyIndex.get(visiting.colony), visitingColonies.length)
+          : null,
+      }
+    })
+    // Streets are planned from the layout, then fed back in so no plot sits on one. Two
+    // passes rather than one because the ring's radius depends on where the plots ended up:
+    // the first pass says how far the colony reaches, the second keeps the plots off the
+    // road it implies. A third pass would be chasing its own tail — the ring can only move
+    // outward between the two, never inward, so the second pass is stable.
+    const firstPass = allocateCells(projectList, this.plotCells)
+    // The cell keys of every visiting colony's district: `planStreets` keeps the road off
+    // them, the same way it keeps the road off the depot and off every home plot.
+    const anchored = new Set()
+    for (const p of projectList) {
+      if (!p.anchor) continue
+      for (const cell of firstPass.get(p.id) || []) anchored.add(`${cell.q},${cell.r}`)
+    }
+    this.streets = planStreets(firstPass, { ship: SHIP_CELL_FOR_STREETS, anchored })
+    // A route cached before the ring moved would drive the old road. Stamping the plan and
+    // comparing it is cheaper than diffing two cell sets on every house on every frame.
+    this._streetStamp = [...this.streets.all].sort().join('|')
+    // Streets are rebuilt whole rather than diffed. The plan only changes when the layout
+    // does, which is a poll-rate event, and a whole street network is two draw calls.
+    this.roadGroup?.userData.dispose?.()
+    if (this.roadGroup) this.worldGroup.remove(this.roadGroup)
+    this.roadGroup = createRoads({ streets: this.streets, groundAt: (x, z) => this.groundAt(x, z) })
+    this.worldGroup.add(this.roadGroup)
+    const layout = allocateCells(projectList, this.plotCells, this.streets.all)
+
     // Remembered, not replaced: a project that has just lost its last thread keeps its
     // ground on the books, and the oldest entries fall off the end.
     for (const [name, cells] of layout) {
@@ -551,18 +656,26 @@ export class Colony {
 
   _syncBuilding(thread, plot, index) {
     let entry = this.buildings.get(thread.id)
-    // Whole, always. A building that has finished rising is a building you can see all of.
-    const target = 1
+    // Furniture count tracks transcript size, on the same log scale as the thread card's bar.
+    // This is not the sink the comment above `transcriptProgress` warns off: that objection is
+    // about a closed solid cut off by a flat plane, which reads as a rendering fault. A house
+    // with some of its furniture missing reads as a house still being moved into — which is
+    // the truth, not a glitch — so mapping progress here does not reintroduce the bug upstream
+    // removed.
+    const target = transcriptProgress(thread)
 
     if (!entry) {
-      const mesh = createBuilding({ seed: hashString(thread.id), accent: plot.accent })
+      const mesh = createHouse({ seed: hashString(thread.id), accent: plot.accent })
       const pos = plot.worldSlot(index)
       mesh.position.copy(pos)
       mesh.rotation.y = ((hashString(thread.id) >>> 8) % 360) * (Math.PI / 180)
       // New buildings rise from nothing rather than appearing whole.
       mesh.userData.setProgress(0)
       this.worldGroup.add(mesh)
-      entry = { mesh, plot: plot.id, slot: index, progress: 0, target, retiring: false }
+      // `driven` is how far along its route this thread's delivery car has got — 0 being
+      // sitting at the depot. It belongs next to `progress` for the same reason: it is the
+      // one number the car's whole arrival is made of. See `_updateDeliveries`.
+      entry = { mesh, plot: plot.id, slot: index, progress: 0, target, retiring: false, driven: 0 }
       this.buildings.set(thread.id, entry)
     } else {
       // Where this building belongs *now*. Comparing the world position rather than the
@@ -583,18 +696,43 @@ export class Colony {
     return entry
   }
 
+  /**
+   * Wind a thread's site down, and take it off the books once nothing of it is left in the
+   * street.
+   *
+   * Called every frame while an entry is retiring rather than once when it starts: the hold
+   * below has to be re-decided as the car makes its way home, and the removal has to be
+   * re-tried on the frame it arrives.
+   *
+   * There are two ways a wait like this goes wrong, and both are guarded here.
+   *
+   *  - **The car vanishes mid-street.** Removing the entry disposes the house *and* the only
+   *    record of how far its car had got, so a car still on the road simply stops being drawn
+   *    from one frame to the next. Hence the wait for `driven` to be back at the depot.
+   *  - **The entry never leaves.** A wait is only safe if the thing waited on is certain to
+   *    arrive, and this is the one failure no test on screen would ever show: a leaked entry
+   *    is an invisible house that keeps its slot, its accent and its route forever. Three
+   *    things make arrival certain. `driveStep` lands `driven` exactly on its target rather
+   *    than approaching it (drive-path.js); `stepProgress` does the same for the reveal
+   *    (growth.js — that module exists because a damped value that only ever approached its
+   *    target cost every house its last piece of furniture); and `_updateDeliveries` forces a
+   *    retiring entry's target to 0, so the car cannot be sent back out by a thread that
+   *    still claims to be active.
+   */
   _removeBuilding(id, entry) {
-    // Wind the reveal back down, then take it out — a building that vanishes mid-frame
-    // reads as a glitch, one that sinks reads as being packed up.
     entry.retiring = true
-    entry.target = 0
-    if (entry.progress <= 0.02) {
-      this.worldGroup.remove(entry.mesh)
-      entry.mesh.geometry.dispose()
-      entry.mesh.material.dispose()
-      entry.mesh.customDepthMaterial?.dispose()
-      this.buildings.delete(id)
-    }
+    // A house that vanishes mid-frame reads as a glitch; one that empties out reads as being
+    // packed up. So the reveal winds down — but only as far as `RETIRE_HOLD`, an emptied
+    // house still standing at its address, for as long as its car is out.
+    const home = entry.driven <= 0
+    entry.target = home ? 0 : RETIRE_HOLD
+    if (!home || entry.progress > RETIRED_PROGRESS) return
+
+    this.worldGroup.remove(entry.mesh)
+    // A house is a Group of meshes, and only it knows how many. Reaching in for a Mesh's
+    // geometry and material — which is what this used to do — throws on a Group.
+    entry.mesh.userData.dispose()
+    this.buildings.delete(id)
   }
 
   /**
@@ -725,6 +863,22 @@ export class Colony {
     return out
   }
 
+  /**
+   * Centre + radius the hub frames the map by. Centred on the ORIGIN — the Hub's own colony
+   * sits there, so it stays the middle of the wall with the visiting colonies around it — and
+   * the radius reaches the farthest plot so everything stays in view.
+   */
+  contentBounds() {
+    if (!this.plotOrder.length) return null
+    let maxR = 0
+    for (const plot of this.plotOrder) {
+      const c = plot.middle || plot.center
+      if (!c) continue
+      maxR = Math.max(maxR, Math.hypot(c.x, c.z))
+    }
+    return { center: new THREE.Vector3(0, 0, 0), radius: maxR + 10 }
+  }
+
   setHoveredPlot(plot) {
     this.hoveredPlot = plot || null
   }
@@ -807,6 +961,11 @@ export class Colony {
     this.ship.update(dt, elapsed, night)
 
     this._growBuildings(dt)
+    // Ahead of the crew and the badges on purpose. This is what decides who is riding in a
+    // car this frame, and both of those pack their instances from that flag — run it after
+    // them and every crew member would be drawn one frame behind its own car.
+    this._updateDeliveries(dt)
+    this._updateTraffic(dt)
     this.astronauts.update(dt, elapsed)
     this.astronauts.updateRings(elapsed)
     this.indicators.update(this.astronauts.agents, elapsed, (a) => this._badgeFor(a))
@@ -814,7 +973,6 @@ export class Colony {
     this.particles.ambient(dt, this.camera, this.planet)
     this.particles.update(dt)
     this._updatePlots(night, elapsed)
-    this._updateScaffolds()
     this._updateLabels(dt)
   }
 
@@ -822,12 +980,21 @@ export class Colony {
     for (const [id, entry] of this.buildings) {
       // A running thread's site creeps upward while you watch it.
       if (!entry.retiring && this._isLive(id)) entry.target = Math.min(1, entry.target + LIVE_GROWTH * dt)
-      const next = THREE.MathUtils.damp(entry.progress, entry.target, 1.8, dt)
-      if (Math.abs(next - entry.progress) > 0.0005) {
+      // `stepProgress` damps toward the target and lands on it, rather than freezing the
+      // last 1.7% short the way a bare damp-plus-epsilon-gate does. See src/game/growth.js:
+      // the furniture reveal reads progress against thresholds at exactly 0.05 and exactly 1,
+      // so arriving has to mean arriving. It returns the value unchanged when there is
+      // nothing to do, which is what keeps a settled building from writing its uniform.
+      const next = stepProgress(entry.progress, entry.target, dt)
+      if (next !== entry.progress) {
         entry.progress = next
         entry.mesh.userData.setProgress(next)
       }
-      if (entry.retiring && entry.progress <= 0.02) this._removeBuilding(id, entry)
+      // Every frame while retiring, not only once the house has emptied out: the wait for
+      // the car is decided inside `_removeBuilding`, and it has to be re-decided as the car
+      // moves. Gating this call on the progress threshold instead would deadlock — the hold
+      // keeps progress above that threshold for exactly as long as the car is out.
+      if (entry.retiring) this._removeBuilding(id, entry)
     }
   }
 
@@ -842,13 +1009,45 @@ export class Colony {
     return Boolean(thread && (thread.running || thread.unread || thread.hasError))
   }
 
-  _badgeFor(agent) {
+  /** How many buildings currently have somebody standing at them, by `_isActive`'s own
+   *  reckoning — the same test `_updateDeliveries` uses to decide whether a site gets a
+   *  delivery car, so traffic density and delivery presence agree on what "active" means. */
+  _activeThreadCount() {
+    let n = 0
+    for (const id of this.buildings.keys()) {
+      if (this._isActive(id)) n++
+    }
+    return n
+  }
+
+  /**
+   * The badge a crew member's own state and status earn, with no regard for whether it
+   * happens to be drawn this frame.
+   *
+   * Split out from `_badgeFor` because this is the axis the delivery decides suppression on
+   * (see `_markRiding`), and a suppression rule that consulted a badge which had already
+   * been zeroed *by* suppression would be circular — it would answer "no badge" for every
+   * crew member it had hidden on the previous frame and happily keep hiding it.
+   */
+  _statusBadgeFor(agent) {
     if (agent.state === 'spawning') return BADGE.spawning
     if (agent.state === 'leaving') return BADGE.leaving
     // Badges only appear once an astronaut has actually reached its post — a stream of
     // symbols bobbing over a walking crowd is noise.
     if (agent.state !== 'at-site') return BADGE.none
     return BADGE_FOR[agent.status] ?? BADGE.none
+  }
+
+  _badgeFor(agent) {
+    // Riding in its delivery car, so there is no head for a badge to sit over. Left where
+    // the other state gates are rather than in the status mapping: what a thread wants has
+    // not changed, only whether anyone is on screen to ask.
+    //
+    // This can only ever zero a badge that was already `none` — `_markRiding` refuses to
+    // set the flag on a crew member whose status carries one — so it is a consistency guard
+    // between the figure and its badge, not a decision.
+    if (agent.riding) return BADGE.none
+    return this._statusBadgeFor(agent)
   }
 
   /** Particle emission, driven by what each astronaut is doing. */
@@ -914,24 +1113,261 @@ export class Colony {
     for (const plot of this.plotOrder) plot.setNight(night, urgent?.has(plot.id) ?? false, elapsed)
   }
 
-  _updateScaffolds() {
-    const sites = []
+  /**
+   * Drive one delivery car per working thread, from the depot out to its house.
+   *
+   * This is what replaced the timber. The predicate is the one the scaffolding used —
+   * `_isActive`, "somebody is standing at this site right now" — so the promise the README
+   * makes is unchanged; only the thing that keeps it moved from poles going up around a
+   * house to a car pulling up outside it.
+   *
+   * There is deliberately no "parked" flag and no seventh agent state. A thread that is
+   * neither arriving nor leaving has simply run out of road: `driven` sits at the end of its
+   * route, `pointAt` clamps there, and the car stands at the kerb for as long as the thread
+   * keeps working. Arriving and leaving are the same one number moving in opposite directions.
+   */
+  _updateDeliveries(dt) {
+    // Cleared for everyone first, the way the badges are: a crew member whose entry stops
+    // being visited this frame has to get its feet back, or a house that dips under the
+    // ground-broken threshold mid-drive leaves an astronaut invisible — and unclickable —
+    // for good.
+    for (const agent of this.astronauts.agents) agent.riding = false
+
+    const vehicles = []
     for (const [id, entry] of this.buildings) {
-      // Scaffolding says a thread is running here — the README's own promise. It used to be
-      // gated on the building being unfinished as well, which was fine while "unfinished"
-      // was most of them and useless the moment buildings stopped standing in a hole.
-      if (entry.progress <= 0.03) continue
-      if (!this._isActive(id)) continue
-      const p = entry.mesh.position
-      sites.push({
-        x: p.x,
-        z: p.z,
-        y: p.y,
-        radius: (entry.mesh.userData.footprint || 1.4) + 0.35,
-        height: Math.max(0.6, entry.mesh.userData.height * entry.progress + 0.5),
+      // Nothing to deliver to an address that has not broken ground yet — but a car that is
+      // already out gets stepped whatever its house is doing. Skipping it would freeze
+      // `driven` where it stands, and a `driven` that never reaches 0 is a retiring entry
+      // that never comes off the books (see `_removeBuilding`). A retiring house is held
+      // above this threshold for that very reason; this second test is the belt to that
+      // brace, and it also keeps a car on the road when a live house dips back under.
+      if (entry.progress <= DELIVERY_PROGRESS && entry.driven <= 0) continue
+
+      const route = this._routeFor(entry)
+      // A retiring site's car comes home whatever its thread still says. `_isActive` reads
+      // `this.threads`, which a building can outlive — a repo folded away as dormant keeps
+      // its threads in there — and a retiring entry whose car was still being sent *out*
+      // would be waiting on an arrival that never comes.
+      const wants = !entry.retiring && this._isActive(id)
+      const target = wants ? route.length : 0
+
+      // One number, driven up on the way out and back down on the way home, never past
+      // either end of the route.
+      entry.driven = driveStep(entry.driven, target, CAR_SPEED * dt)
+
+      // Home again with nowhere to be: no car on the road at all, rather than a heap of
+      // them idling on the depot pad for every thread the colony has ever seen.
+      if (entry.driven <= 0 && !wants) continue
+
+      const at = pointAt(route.points, entry.driven)
+      vehicles.push({
+        x: at.x,
+        // The route is drawn cell to cell, but the ground under it is not flat: plots sit on
+        // raised decks and the terrain rolls between them. Sampling the same height the crew
+        // walks on is what keeps a car on the surface instead of through a deck.
+        y: this.groundAt(at.x, at.z),
+        z: at.z,
+        heading: at.heading,
+        distance: entry.driven,
+        accent: entry.accent,
+      })
+
+      // A car between the ends of its route is a car that may be carrying somebody. Which
+      // direction it is going is deliberately *not* part of this test — a car drives back
+      // out again the moment a quiet thread wants you, and a rule written around the
+      // outbound leg would blank that thread's badge for the whole trip. What decides
+      // whether anyone is actually aboard is `_markRiding`.
+      if (entry.driven > 0 && entry.driven < route.length) this._markRiding(id)
+    }
+    this.deliveries.update(vehicles)
+  }
+
+  /**
+   * Ambient traffic: cars nobody owns, driving the same streets a busy colony's deliveries
+   * do. The pool is sized off how many threads are active (`trafficCount`, `traffic.js`) and
+   * grown or shrunk toward that target; each vehicle steps its own four-state machine
+   * (`stepVehicle`) between the depot and a house picked by its own `addressSeed`.
+   *
+   * Deliberately after `_updateDeliveries` in `update()`, the same way that method is
+   * deliberately ahead of the crew: ambient traffic has no rider and nothing downstream
+   * depends on its ordering, so there is no similar constraint here — it simply has to run
+   * once a frame like everything else.
+   */
+  _updateTraffic(dt) {
+    const wanted = trafficCount(this._activeThreadCount())
+    while (this._trafficVehicles.length < wanted) {
+      this._trafficVehicles.push(newVehicle(this._trafficSeed++))
+    }
+    while (this._trafficVehicles.length > wanted) {
+      const dropped = this._trafficVehicles.pop()
+      // A vehicle dropped from the pool takes its cached route with it, or the cache would
+      // grow by one entry for every car the colony has ever shed instead of staying bounded
+      // by the pool it currently holds.
+      if (dropped._routeKey) this._trafficRoutes.delete(dropped._routeKey)
+    }
+
+    const houses = [...this.buildings.values()]
+    const rendered = []
+    for (let i = 0; i < this._trafficVehicles.length; i++) {
+      const route = this._trafficRouteFor(this._trafficVehicles[i], houses)
+      const vehicle = stepVehicle(this._trafficVehicles[i], dt, route.length, Math.random)
+      this._trafficVehicles[i] = vehicle
+
+      const at = pointAt(route.points, vehicle.driven)
+      rendered.push({
+        x: at.x,
+        // Sampled the same way `_updateDeliveries` samples it, for the same reason: the
+        // route is drawn cell to cell, but the ground under it rolls between plots.
+        y: this.groundAt(at.x, at.z),
+        z: at.z,
+        heading: at.heading,
+        distance: vehicle.driven,
+        body: vehicle.body,
+        tint: vehicle.tint,
       })
     }
-    this.scaffolds.update(sites)
+    this.traffic.update(rendered)
+  }
+
+  /**
+   * The route from the depot to one traffic vehicle's address.
+   *
+   * Cached in `this._trafficRoutes`, keyed on `addressSeed` plus `this._streetStamp`, for
+   * the same reason `_routeFor` caches: a route only changes when its destination or the
+   * streets do. `houses` is handed in fresh each frame — the colony's building roster can
+   * change under a vehicle mid-journey — but only consulted on a cache miss, so a vehicle's
+   * route does not jump to a different house just because one was added or removed.
+   *
+   * With no house built yet, there is nowhere to send a car: it gets a single-point,
+   * zero-length route and sits at the depot rather than throwing on an empty `houses`.
+   */
+  _trafficRouteFor(vehicle, houses) {
+    if (houses.length === 0) {
+      const depot = shipPosition()
+      return { points: [{ x: depot.x, z: depot.z }], length: 0 }
+    }
+
+    const key = `${vehicle.addressSeed}|${this._streetStamp}`
+    let route = this._trafficRoutes.get(key)
+    if (!route) {
+      const house = houses[vehicle.addressSeed % houses.length]
+      const houseCell = worldToHex(house.mesh.position.x, house.mesh.position.z)
+      const points = roadCells(SHIP_CELL_FOR_STREETS, houseCell, this.streets?.all).map((c) => cellWorld(c.q, c.r))
+      route = { points, length: pathLength(points) }
+      this._trafficRoutes.set(key, route)
+    }
+
+    // The vehicle has moved on to a different address since the last time this ran — a
+    // round trip re-seeds `addressSeed` (see `stepVehicle`'s `'back'` phase in `traffic.js`)
+    // — so its previous cache entry is now unreachable by any key this method will look up
+    // again for it, and is dropped here rather than left to sit forever.
+    if (vehicle._routeKey && vehicle._routeKey !== key) {
+      this._trafficRoutes.delete(vehicle._routeKey)
+    }
+    vehicle._routeKey = key
+    return route
+  }
+
+  /**
+   * The route from the depot to one house, built once and kept on the building entry.
+   *
+   * A hex line is cheap but not free, and redrawing one every frame for every thread in a
+   * full colony is pure waste — a route only changes when the house it ends at does. Keyed
+   * on the plot and slot, plus the house's own position: a zone rebuilt underneath a building
+   * keeps its id and its slot but moves the ground, and a route cached on the ids alone would
+   * go on driving to where the house used to be.
+   */
+  _routeFor(entry) {
+    const p = entry.mesh.position
+    const cached = entry.route
+    if (
+      cached &&
+      cached.plot === entry.plot &&
+      cached.slot === entry.slot &&
+      cached.x === p.x &&
+      cached.z === p.z &&
+      cached.streets === this._streetStamp
+    ) {
+      return cached
+    }
+
+    const depot = shipPosition()
+    const start = worldToHex(depot.x, depot.z)
+    const end = worldToHex(p.x, p.z)
+    // The cell sequence is the only thing the streets change. Everything below — the kerb
+    // pull-back, the cache key, the route object — is stage 2's, verified by hand over 600
+    // frames, and is deliberately left alone.
+    const points = roadCells(start, end, this.streets?.all).map((c) => cellWorld(c.q, c.r))
+
+    // The last cell centre is not the address: parking on it leaves the car a half-cell short
+    // of the house it was sent to, or sitting in a neighbour's garden. The house's own centre
+    // is not the address either — a house has a footprint of nearly two units and a car
+    // driven to the middle of it parks *inside* the building, where it cannot be seen at all.
+    //
+    // So the route ends at the kerb: the house position, pulled back along the last leg by
+    // the building's own radius and a little clearance. That is where a delivery would
+    // actually stop, and it is the same radius the scaffolding used to stand its poles on.
+    //
+    // How far back is `kerbBack` in `drive-path.js` — pure arithmetic, so the rule can be
+    // asserted rather than eyeballed against the layout that happens to ship today.
+    const kerb = { x: p.x, z: p.z }
+    const approach = points[points.length - 2]
+    if (approach) {
+      const dx = kerb.x - approach.x
+      const dz = kerb.z - approach.z
+      const d = Math.hypot(dx, dz)
+      const back = kerbBack(d, entry.mesh.userData.footprint || 1.4)
+      if (back > 0) {
+        kerb.x -= (dx / d) * back
+        kerb.z -= (dz / d) * back
+      }
+    }
+    points[points.length - 1] = kerb
+
+    const route = { plot: entry.plot, slot: entry.slot, x: p.x, z: p.z, streets: this._streetStamp, points, length: pathLength(points) }
+    entry.route = route
+    return route
+  }
+
+  /**
+   * Mark a thread's crew member as riding in its car, if it is one that may be hidden.
+   *
+   * Not a status and not a behaviour. `STATUS_ORDER` is a strict precedence and a seventh
+   * state would compete with the six for the badge — a riding crew member is not doing a new
+   * thing, it is just not drawn. The agent keeps its slot in the roster, keeps walking and
+   * keeps its status; the packing loop in `astronauts.js` steps over it and `_badgeFor` hands
+   * back nothing.
+   *
+   * **Two rules, both of which have to hold**, and `ridesAlong` in `drive-path.js` is where
+   * they are written down and tested — `colony.js` cannot be imported under `node --test`,
+   * and a rule whose failure mode is an invisible, unclickable crew member has to be
+   * asserted rather than eyeballed. In short:
+   *
+   *  - The crew member has to be **actually travelling** (`walking`). A thread that stops
+   *    running goes idle or dormant, `_isActive` goes false, and its car drives home from a
+   *    plot its crew member is standing still on — suppressing that one blanks a figure for
+   *    a drive it is not on. That is the most ordinary delivery in the application.
+   *  - Its status must carry **no badge**. The badge is what the application promises you can
+   *    always find; hide the figure and the badge goes with it (`_badgeFor`) and so does the
+   *    click target (`astronauts.pick`).
+   *
+   * Which way the car is driving is *not* one of them, though it looks like it should be.
+   * `_isActive` is `running || unread || hasError`, so a quiet thread parks its car at the
+   * depot; when it next comes back as `unread` — `waiting`, the one `?` that wants you — the
+   * car drives back *out*, and an outbound-only rule blanks that `?` for the whole drive.
+   *
+   * The cost of the pair is a car that sometimes drives with nobody visibly aboard. That is
+   * fine, and the spec says so: it reads as a car running its own errand. A vanishing crew
+   * member does not.
+   *
+   * Only ever sets the flag. Clearing it is `_updateDeliveries`'s opening sweep, so an entry
+   * that stops being visited cannot leave a crew member stranded off screen.
+   */
+  _markRiding(id) {
+    const agent = this.astronauts.byId.get(id)
+    if (!agent) return
+    if (!ridesAlong(agent.state, this._statusBadgeFor(agent) !== BADGE.none)) return
+    agent.riding = true
   }
 
   // ── interaction ─────────────────────────────────────────────────────────────────────
@@ -960,7 +1396,9 @@ export class Colony {
     this.astronauts.dispose()
     this.indicators.dispose()
     this.particles.dispose()
-    this.scaffolds.dispose()
+    this.deliveries.dispose()
+    this.traffic.dispose()
+    this.roadGroup?.userData.dispose?.()
     disposeTree(this.worldGroup)
     disposeTree(this.plotGroup)
     disposeTree(this.labelGroup)

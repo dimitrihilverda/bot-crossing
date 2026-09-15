@@ -1,0 +1,586 @@
+/* Hub mode — the read-only wall-display HUD drawn over the (otherwise unmodified) game.
+   A single committed dark theme, same as the approved mockup: this only ever runs on an
+   office screen nobody themes to their own taste, so every colour is painted explicitly
+   rather than following the app's own light/dark handling.
+
+   Fonts: the mockup calls for Barlow Condensed / Barlow / JetBrains Mono via Google Fonts,
+   but this app never adds a font network dependency — `styles.css` leans on the system
+   stack throughout, so the hub does the same: system sans-serif for body text, the same
+   `ui-monospace, SFMono-Regular, Menlo, monospace` stack `styles.css` already uses for the
+   sidebar's path text, and a condensed *look* (tight letter-spacing, bold weight, uppercase,
+   `font-stretch: condensed` where a font on the system actually offers one) standing in for
+   the condensed *font*. */
+
+body.hub .side,
+body.hub .settings,
+body.hub .rail,
+body.hub .thread-pop,
+body.hub .toasts,
+body.hub .fps,
+body.hub .hint-pill,
+body.hub .help {
+  /* Hub mode is one screen: its own HUD. The normal chrome — sidebar, settings, the camera
+     rail, the selection card, the normal toast/fps/hint layer, first-run help — all read as
+     controls for a session nobody at the wall owns, so none of it is shown here. Nothing
+     above needs the `!important` the sidebar/settings hiding was described with — none of
+     these rules compete with a more specific selector. */
+  display: none;
+}
+
+.hub-hud {
+  --hub-bg: #0e1014;
+  --hub-panel: #161a22;
+  --hub-panel-2: #1b2029;
+  --hub-line: rgba(255, 255, 255, 0.08);
+  --hub-line-2: rgba(255, 255, 255, 0.14);
+  --hub-text: #f1efe9;
+  --hub-dim: #8b8d97;
+  --hub-faint: #5a5c66;
+  --hub-teal: #2fd4c4;
+  --hub-wait: #e7b24c;
+  --hub-block: #e35b48;
+  --hub-work: #54c98a;
+  --hub-font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --hub-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: none;
+  flex-direction: column;
+  gap: 16px;
+  padding: 22px 24px 20px;
+  pointer-events: none;
+  font-family: var(--hub-font);
+  color: var(--hub-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+body.hub .hub-hud {
+  display: flex;
+}
+
+.hub-scrim {
+  position: absolute;
+  inset: 0;
+  /* Dims the 3D game so it reads as a backdrop, not competing with the board on top of it. */
+  background: linear-gradient(180deg, rgba(8, 9, 12, 0.32), rgba(8, 9, 12, 0.48) 55%, rgba(8, 9, 12, 0.6));
+}
+
+/* ── header ─────────────────────────────────────────────────────────────────────── */
+
+.hub-head {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.hub-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+
+.hub-mark {
+  font-weight: 700;
+  font-size: 26px;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.hub-mark b {
+  color: var(--hub-teal);
+}
+
+.hub-sub {
+  font-size: 12px;
+  color: var(--hub-dim);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.hub-ro {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--hub-teal);
+  border: 1px solid rgba(47, 212, 196, 0.4);
+  border-radius: 999px;
+  padding: 3px 9px;
+  white-space: nowrap;
+  background: rgba(47, 212, 196, 0.08);
+}
+
+.hub-head-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.hub-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--hub-dim);
+  font-size: 13px;
+}
+
+.hub-need-n {
+  font-weight: 700;
+  font-size: 22px;
+  color: var(--hub-wait);
+}
+
+.hub-mute {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--hub-line-2);
+  border-radius: 10px;
+  padding: 7px 12px;
+  color: var(--hub-dim);
+  font: inherit;
+  font-size: 13px;
+  background: var(--hub-panel);
+  cursor: pointer;
+}
+
+.hub-mute:hover {
+  color: var(--hub-text);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.hub-mute svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.hub-mute .hub-mute-x {
+  display: none;
+}
+
+.hub-mute.is-muted .hub-mute-wave {
+  display: none;
+}
+
+.hub-mute.is-muted .hub-mute-x {
+  display: block;
+}
+
+/* ── new-attention toasts, floating over the backdrop ──────────────────────────── */
+
+.hub-toasts {
+  position: absolute;
+  left: 24px;
+  right: 484px;
+  top: 92px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.hub-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: 560px;
+  background: linear-gradient(180deg, #241a1a, #1c1414);
+  border: 1px solid rgba(227, 91, 72, 0.55);
+  border-left: 5px solid var(--hub-block);
+  border-radius: 14px;
+  padding: 15px 20px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55), 0 0 34px rgba(227, 91, 72, 0.28);
+  animation: hub-toast-in 260ms ease, hub-toast-pop 3.6s ease-in-out 260ms infinite;
+}
+
+.hub-toast.is-out {
+  animation: none;
+  opacity: 0;
+  transition: opacity 380ms ease;
+}
+
+@keyframes hub-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes hub-toast-pop {
+  0%,
+  100% {
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55), 0 0 34px rgba(227, 91, 72, 0.22);
+  }
+  50% {
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55), 0 0 44px rgba(227, 91, 72, 0.42);
+  }
+}
+
+.hub-toast-bang {
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: 10px;
+  background: rgba(227, 91, 72, 0.16);
+  color: var(--hub-block);
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 22px;
+}
+
+.hub-toast-who {
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--hub-block);
+  font-weight: 600;
+}
+
+.hub-toast-what {
+  font-size: 16px;
+  font-weight: 600;
+  margin-top: 1px;
+}
+
+.hub-toast-what b {
+  color: var(--hub-text);
+}
+
+/* ── triage column: the board + the colony strip ────────────────────────────────── */
+
+.hub-triage {
+  flex: 1;
+  min-height: 0;
+  width: 460px;
+  max-width: 92vw;
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  pointer-events: auto;
+}
+
+.hub-board {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: linear-gradient(180deg, var(--hub-panel), var(--hub-bg));
+  border: 1px solid var(--hub-line);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.hub-board-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 18px 12px;
+}
+
+.hub-board-head h1 {
+  font-weight: 700;
+  font-size: 22px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin: 0;
+  line-height: 1;
+}
+
+.hub-count {
+  font-weight: 700;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--hub-wait);
+  background: rgba(231, 178, 76, 0.14);
+  border: 1px solid rgba(231, 178, 76, 0.35);
+  border-radius: 10px;
+  padding: 2px 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.hub-hint {
+  margin-left: auto;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--hub-faint);
+}
+
+.hub-rows {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+.hub-clear {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--hub-dim);
+  font-size: 15px;
+  letter-spacing: 0.04em;
+}
+
+.hub-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--hub-line);
+}
+
+.hub-row:first-child {
+  border-top: none;
+}
+
+.hub-row.is-block {
+  background: linear-gradient(90deg, rgba(227, 91, 72, 0.1), transparent 70%);
+}
+
+.hub-pip {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.hub-pip.waiting {
+  background: var(--hub-wait);
+  box-shadow: 0 0 10px rgba(231, 178, 76, 0.6);
+}
+
+.hub-pip.blocked {
+  background: var(--hub-block);
+  box-shadow: 0 0 10px rgba(227, 91, 72, 0.7);
+}
+
+.hub-rc {
+  min-width: 0;
+}
+
+.hub-title {
+  font-size: 15.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hub-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--hub-dim);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.hub-colony {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  flex: none;
+}
+
+.hub-colony i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.hub-repo {
+  color: var(--hub-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hub-st {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 1px 7px;
+  border-radius: 999px;
+  flex: none;
+}
+
+.hub-st.waiting {
+  color: var(--hub-wait);
+  background: rgba(231, 178, 76, 0.12);
+}
+
+.hub-st.blocked {
+  color: var(--hub-block);
+  background: rgba(227, 91, 72, 0.14);
+}
+
+.hub-wt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+  flex: none;
+}
+
+.hub-t {
+  font-family: var(--hub-mono);
+  font-weight: 700;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.hub-t.blocked {
+  color: var(--hub-block);
+}
+
+.hub-t.waiting {
+  color: var(--hub-wait);
+}
+
+.hub-bar {
+  width: 74px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.09);
+  overflow: hidden;
+}
+
+.hub-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+}
+
+/* ── colony strip ────────────────────────────────────────────────────────────────── */
+
+.hub-strip {
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, var(--hub-panel-2), var(--hub-bg));
+  border: 1px solid var(--hub-line);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.hub-strip-head {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--hub-faint);
+  padding: 11px 16px 7px;
+}
+
+.hub-strip-empty {
+  padding: 4px 16px 14px;
+  color: var(--hub-dim);
+  font-size: 13px;
+}
+
+.hub-cy {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--hub-line);
+}
+
+.hub-on {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--hub-faint);
+}
+
+.hub-on.up {
+  background: var(--hub-work);
+  box-shadow: 0 0 8px rgba(84, 201, 138, 0.6);
+}
+
+.hub-accent {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex: none;
+}
+
+.hub-nm {
+  font-weight: 600;
+  font-size: 16px;
+  letter-spacing: 0.02em;
+}
+
+.hub-counts {
+  margin-left: auto;
+  display: flex;
+  gap: 14px;
+  font-family: var(--hub-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.hub-counts span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--hub-dim);
+  white-space: nowrap;
+}
+
+.hub-counts b {
+  color: var(--hub-text);
+  font-weight: 700;
+}
+
+.hub-k {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.hub-k.work {
+  background: var(--hub-work);
+}
+
+.hub-k.wait {
+  background: var(--hub-wait);
+}
+
+.hub-k.block {
+  background: var(--hub-block);
+}
+
+.hub-counts .zero b {
+  color: var(--hub-faint);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hub-toast {
+    animation: none;
+  }
+  .hub-pip,
+  .hub-on {
+    box-shadow: none;
+  }
+}

@@ -199,17 +199,20 @@ const SCATTER_BUDGET = 900
  * takes them to lunar dust or Martian rust without touching the atlas.
  */
 const SCATTER = {
+  // Residential: gardens and street trees, not wilderness — grass and shrubs dominate,
+  // a modest scatter of shade trees gives it structure, and boulders are almost gone
+  // (one rare decorative stone rather than a quarry's worth).
   flora: [
-    { part: 'Tree_1_A_Color1', weight: 3, size: [0.35, 0.6], sink: 0.02, upright: true },
-    { part: 'Tree_3_A_Color1', weight: 3, size: [0.35, 0.6], sink: 0.02, upright: true },
-    { part: 'Tree_4_A_Color1', weight: 2, size: [0.3, 0.55], sink: 0.02, upright: true },
+    { part: 'Tree_1_A_Color1', weight: 2, size: [0.35, 0.6], sink: 0.02, upright: true },
+    { part: 'Tree_3_A_Color1', weight: 2, size: [0.35, 0.6], sink: 0.02, upright: true },
+    { part: 'Tree_4_A_Color1', weight: 1, size: [0.3, 0.55], sink: 0.02, upright: true },
     { part: 'Tree_1_C_Color1', weight: 1, size: [0.25, 0.4], sink: 0.02, upright: true },
     { part: 'Tree_3_C_Color1', weight: 1, size: [0.22, 0.38], sink: 0.02, upright: true },
     { part: 'Tree_4_C_Color1', weight: 1, size: [0.2, 0.35], sink: 0.02, upright: true },
-    { part: 'Bush_1_E_Color1', weight: 3, size: [0.5, 1.1], sink: 0.06, upright: true },
-    { part: 'Bush_3_B_Color1', weight: 3, size: [0.5, 1.1], sink: 0.06, upright: true },
-    { part: 'Grass_2_D_Color1', weight: 4, size: [0.6, 1.3], sink: 0.05, upright: true },
-    { part: 'Rock_1_D_Color1', weight: 2, size: [0.4, 0.9], sink: 0.3, tint: true },
+    { part: 'Bush_1_E_Color1', weight: 4, size: [0.5, 1.1], sink: 0.06, upright: true },
+    { part: 'Bush_3_B_Color1', weight: 4, size: [0.5, 1.1], sink: 0.06, upright: true },
+    { part: 'Grass_2_D_Color1', weight: 6, size: [0.6, 1.3], sink: 0.05, upright: true },
+    { part: 'Rock_1_D_Color1', weight: 1, size: [0.4, 0.9], sink: 0.3, tint: true },
   ],
   rocks: [
     { part: 'Rock_1_D_Color1', weight: 4, size: [0.5, 1.2], sink: 0.3, tint: true },

@@ -1,32 +1,37 @@
 import * as THREE from 'three'
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
-import { mulberry } from './planet.js'
-import { ATLAS, CELL, atlasTexture, cellMask, part } from './kit.js'
+import { ATLAS, part } from './kit.js'
 
 /**
- * Colony buildings — one per thread, assembled out of KayKit's *Space Base Bits* (CC0) and
- * seeded from the thread's own id, so a given session always builds the same structure on
- * every reload and on every planet.
+ * Shared building machinery — the reveal/construction shader (`decorate`, `depthMaterial`)
+ * and the part-placement helper (`Composer`) that `src/world/houses.js` builds every house
+ * out of.
  *
- * The pack is a modular one, which is the whole reason the ten kinds below can stay short:
- * a habitat is a base module with a roof module on it, a workshop is the garage variant
- * with a rover parked outside. Every part shares one gradient atlas, so a nine-part
- * greenhouse still merges down to a single geometry and a single draw call.
+ * The timber scaffolding overlay that used to live here is gone. Saying "a thread is running
+ * here" is now the job of a delivery car parked at the house — see `src/world/deliveries.js`
+ * and `colony._updateDeliveries` — so there is nothing left to prop up.
  *
- * Three things ride on top of the pack's own art:
+ * This file used to also assemble the colony's structures directly, out of KayKit's *Space
+ * Base Bits* (CC0) — ten seeded recipes (habitat, solar array, relay mast, and so on) dispatched
+ * by `createBuilding()`. That entry point and its catalogue are gone: `colony.js` now calls
+ * `houses.js`'s `createHouse()` instead. What is left here is exactly the part `houses.js`
+ * still depends on.
  *
- * 1. **Construction progress sinks the building into the ground.** The vertex stage lowers
- *    the whole structure and the fragment stage discards whatever ends up below the deck, so
- *    a thread's building rises as it grows without ever touching a vertex buffer — and what
- *    is on screen is always a *complete* building, part of it buried. Slicing the top off
- *    instead, which is what this used to do, guts a kit of closed shells: at two-thirds
- *    finished a biodome loses its entire dome and becomes an empty ring.
- * 2. **The accent is a repainted atlas cell.** Kay's gold trim band is cell 11 of the 8x4
- *    atlas; the fragment stage swaps its hue for the repo's accent while keeping the
- *    swatch's own light-to-dark gradient. One repo, one colour, no extra material.
- * 3. **PBR comes from the atlas too.** Roughness and metalness are looked up per cell, so
- *    the grey structural swatch behaves like brushed metal and the solar swatch like glass
- *    even though both arrive as flat colour in a single texture.
+ * Three things ride on top of the pack's own art, still true of everything built through
+ * `decorate()`:
+ *
+ * 1. **Construction progress sinks a structure into the ground.** The vertex stage lowers
+ *    the whole thing and the fragment stage discards whatever ends up below the deck, so
+ *    it rises as it grows without ever touching a vertex buffer — and what is on screen is
+ *    always a *complete* structure, part of it buried. Slicing the top off instead, which is
+ *    what this used to do, guts a kit of closed shells: at two-thirds finished a biodome loses
+ *    its entire dome and becomes an empty ring.
+ * 2. **The accent is a repainted atlas cell.** The fragment stage swaps one swatch's hue for
+ *    the repo's accent while keeping the swatch's own light-to-dark gradient. One repo, one
+ *    colour, no extra material.
+ * 3. **PBR comes from the atlas too.** Roughness and metalness are looked up per cell, so a
+ *    flat texture behaves like brushed metal in one place and glass in another, even though
+ *    both arrive as flat colour in a single texture.
  */
 
 /** Shared across every building, so night falling is one uniform write for the whole colony. */
@@ -36,52 +41,8 @@ export const buildingUniforms = {
   uTime: { value: 0 },
 }
 
-/**
- * Every structure is authored on the pack's 2-unit module grid and scaled once, here.
- *
- * The number is set against the crew, not the plot: an astronaut is about 1.1 units tall,
- * and a habitat you can see over is not a habitat. At 1.45 a base module clears the crew's
- * heads and a mast is three of them, while the widest footprint still leaves a walkable
- * gap at the plot's 4.4-unit slot spacing.
- */
-const BUILDING_SCALE = 1.45
-
-/** The top face of a base module — where roof modules and masts stack. */
-const DECK = 1.0
-
-/**
- * Surface response per atlas cell. The pack ships one material for everything; this is what
- * gives a colony made of it any specular variety at all under the environment map.
- *
- * Metalness is kept deliberately low almost everywhere. These are *painted* surfaces, and a
- * fully metallic one has no diffuse term at all — with only a soft sky to reflect, the grey
- * structural swatch is the largest surface in the pack and turns black the moment it is
- * treated as bare metal. A quarter is enough to pick up the horizon along an edge.
- *
- * Defaults are Kay's own (roughness 0.6, metalness 0) so an unlisted swatch still looks right.
- */
-const SURFACE = {
-  [CELL.WHITE]: [0.55, 0.0], // painted hull panel
-  [CELL.GREY]: [0.46, 0.22], // structural frame — painted metal, not bare
-  [CELL.SLATE]: [0.5, 0.3],
-  [CELL.BLACK]: [0.6, 0.18],
-  [CELL.ROCK]: [0.95, 0.0], // regolith and terrain chunks — never shiny
-  [CELL.TRIM]: [0.42, 0.08], // painted trim, semi-gloss
-  [CELL.RED]: [0.55, 0.04],
-  [CELL.SOLAR_A]: [0.16, 0.7], // photovoltaic glass, and dark on purpose
-  [CELL.SOLAR_B]: [0.16, 0.7],
-}
-
+/** Sizes the per-cell uniform arrays `decorate()` and `depthMaterial()` declare below. */
 const CELL_COUNT = ATLAS.cols * ATLAS.rows
-const ROUGHNESS = new Float32Array(CELL_COUNT).fill(0.6)
-const METALNESS = new Float32Array(CELL_COUNT).fill(0.0)
-for (const [cell, [r, m]] of Object.entries(SURFACE)) {
-  ROUGHNESS[cell] = r
-  METALNESS[cell] = m
-}
-
-/** The one swatch the accent repaints, and the one that lights up after dark. */
-const ACCENT_MASK = cellMask([CELL.TRIM])
 
 // ── composition ───────────────────────────────────────────────────────────────────────
 
@@ -89,17 +50,24 @@ const ACCENT_MASK = cellMask([CELL.TRIM])
  * A tiny placement helper. Parts are baked to the building's own frame as they are added,
  * each carrying a per-vertex emissive flag, so the whole lot merges into one buffer.
  */
-class Composer {
-  constructor() {
+export class Composer {
+  /**
+   * @param {object} [o]
+   * @param {string} [o.kit]  which registry parts resolve against. A merged geometry can
+   *   only carry one material, so one Composer means one kit.
+   */
+  constructor({ kit = 'base' } = {}) {
     this.parts = []
+    this.kit = kit
   }
 
   /**
    * @param {string} name  a node name from the kit
-   * @param {object} [o]   `x`/`y`/`z` offset, `ry` yaw, `s` uniform scale, `emissive` 0..1
+   * @param {object} [o]   `x`/`y`/`z` offset, `ry` yaw, `s` uniform scale, `emissive` 0..1,
+   *                       `reveal` the progress this part waits for
    */
   add(name, o = {}) {
-    const geo = part(name, 'base', { solo: o.solo })
+    const geo = part(name, this.kit, { solo: o.solo })
     const s = o.s ?? 1
     if (s !== 1) geo.scale(s, s, s)
     if (o.ry) geo.rotateY(o.ry)
@@ -107,6 +75,12 @@ class Composer {
 
     const count = geo.attributes.position.count
     geo.setAttribute('aEmissive', new THREE.BufferAttribute(new Float32Array(count).fill(o.emissive || 0), 1))
+
+    // The progress at which this part starts being drawn at all. Written here, per part,
+    // because `finish()` merges everything into one buffer with no seams left to address —
+    // the same reason `aEmissive` is written here. Zero, the default, means "always drawn",
+    // which is every structure in the space base kit.
+    geo.setAttribute('aReveal', new THREE.BufferAttribute(new Float32Array(count).fill(o.reveal || 0), 1))
 
     // Rotors turn in the vertex shader rather than as child meshes, so a turbine is still
     // one merged geometry and one draw call. Each spinning vertex carries the hub it turns
@@ -146,111 +120,6 @@ class Composer {
   }
 }
 
-const pick = (rand, list) => list[Math.floor(rand() * list.length)]
-
-// ── the building catalogue ────────────────────────────────────────────────────────────
-
-/**
- * Each generator gets a placer, a seeded RNG and the repo's accent. They stay deliberately
- * varied in silhouette — dome, mast, slab, derrick — so a plot full of them reads as a town
- * rather than a row of the same shed.
- */
-const KINDS = {
-  habitat(c, rand) {
-    c.add(pick(rand, ['basemodule_A', 'basemodule_B', 'basemodule_C', 'basemodule_D']))
-    c.add(pick(rand, ['roofmodule_base', 'roofmodule_cargo_A', 'roofmodule_cargo_B']), { y: DECK })
-    if (rand() > 0.45) c.add('lights', { x: 1.15, z: 0.85, s: 0.85, ry: rand() * 6.28 })
-    if (rand() > 0.6) c.add('containers_A', { x: -1.15, z: 0.9, ry: rand() * 6.28 })
-    return 'Habitat'
-  },
-
-  solar(c, rand) {
-    const cols = 2 + Math.floor(rand() * 2)
-    const rows = 2 + Math.floor(rand() * 2)
-    for (let i = 0; i < cols; i++) {
-      for (let j = 0; j < rows; j++) {
-        c.add('solarpanel', {
-          x: (i - (cols - 1) / 2) * 1.05,
-          z: (j - (rows - 1) / 2) * 0.62,
-          // A whole field tilted the same way is what makes an array read as an array.
-          ry: 0.06 * (rand() - 0.5),
-        })
-      }
-    }
-    c.add('lights', { x: cols * 0.6, z: -rows * 0.4, s: 0.8 })
-    c.add('containers_B', { x: -cols * 0.6, z: rows * 0.35, ry: 0.4 })
-    return 'Solar array'
-  },
-
-  antenna(c, rand) {
-    // The tall turbine mast — the only silhouette in the pack that breaks the skyline. The
-    // tower is taken *solo* so the rotor can be put back on as a part that turns.
-    const tall = rand() > 0.3
-    const [tower, hub] = tall ? ['windturbine_tall', 2.05] : ['windturbine_low', 0.89]
-    c.add(tower, { solo: true })
-    // Slow: a turbine that whips round reads as a desk fan. A little over half a minute a
-    // turn, jittered so a row of them never falls into step.
-    c.add(`${tower}_fan`, { y: hub, spin: 0.17 + rand() * 0.09 })
-    c.add('containers_C', { x: 0.9, z: 0.75, ry: rand() * 6.28 })
-    if (rand() > 0.5) c.add('lights', { x: -0.95, z: -0.7, s: 0.8 })
-    return 'Relay mast'
-  },
-
-  silo(c, rand) {
-    c.add(pick(rand, ['cargodepot_A', 'cargodepot_B', 'cargodepot_C']))
-    if (rand() > 0.5) c.add(pick(rand, ['cargo_A_stacked', 'cargo_B_stacked']), { x: 1.35, z: 0.4, ry: rand() * 6.28 })
-    return 'Storage'
-  },
-
-  greenhouse(c, rand) {
-    // The geodesic-topped module — the pack's own biodome.
-    c.add('basemodule_E')
-    c.ring('containers_D', 2 + Math.floor(rand() * 2), 1.45, rand)
-    return 'Greenhouse'
-  },
-
-  reactor(c, rand) {
-    c.add('drill_structure')
-    c.ring('cargo_A', 3, 1.35, rand)
-    if (rand() > 0.5) c.add('lights', { x: -1.2, z: 1.0, s: 0.9 })
-    return 'Reactor'
-  },
-
-  tower(c, rand) {
-    c.add('structure_tall')
-    c.add('lights', { y: 2.0, s: 0.7 })
-    if (rand() > 0.5) c.add('containers_A', { x: 1.15, z: 0.95, ry: rand() * 6.28 })
-    return 'Tower'
-  },
-
-  workshop(c, rand) {
-    c.add('basemodule_garage')
-    c.add('roofmodule_solarpanels', { y: DECK })
-    // Something parked outside: an empty forecourt reads as unfinished.
-    if (rand() > 0.3) {
-      c.add(pick(rand, ['spacetruck', 'spacetruck_large']), { x: 1.55, z: 0.3, ry: Math.PI / 2 + (rand() - 0.5) * 0.5 })
-    }
-    if (rand() > 0.5) c.add('spacetruck_trailer', { x: 1.55, z: 1.35, ry: Math.PI / 2 })
-    return 'Workshop'
-  },
-
-  pad(c, rand) {
-    c.add(rand() > 0.35 ? 'landingpad_large' : 'landingpad_small')
-    if (rand() > 0.4) c.add(pick(rand, ['lander_A', 'lander_B']), { y: 0.5, ry: rand() * 6.28 })
-    else c.add('lander_base', { y: 0.5, ry: rand() * 6.28 })
-    return 'Landing pad'
-  },
-
-  lab(c, rand) {
-    c.add(pick(rand, ['basemodule_C', 'basemodule_A']))
-    c.add('roofmodule_cargo_C', { y: DECK })
-    c.ring(pick(rand, ['containers_B', 'containers_C']), 2, 1.4, rand)
-    return 'Lab'
-  },
-}
-
-const KIND_IDS = Object.keys(KINDS)
-
 // ── the reveal shader ─────────────────────────────────────────────────────────────────
 
 /**
@@ -260,8 +129,14 @@ const KIND_IDS = Object.keys(KINDS)
  * above that line painted in the accent — the "under construction" glow.
  * The accent also replaces the gold trim swatch outright, and per-cell roughness and
  * metalness turn one flat texture into a surface with metal, paint and glass in it.
+ *
+ * Progress has a second reading, which is what `src/world/houses.js` uses: a vertex tagged
+ * with an `aReveal` above the current progress is not drawn at all. The two are independent,
+ * and `uSink` picks which one a mesh gets — 1 for a structure that rises out of the ground,
+ * 0 for one that is whole from the first frame and reveals its parts one at a time instead.
+ * One shader rather than two because a patch this long, copied, drifts.
  */
-function decorate(material, uniforms) {
+export function decorate(material, uniforms) {
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms)
 
@@ -272,12 +147,15 @@ function decorate(material, uniforms) {
          attribute float aEmissive;
          attribute float aSpin;
          attribute vec3 aPivot;
+         attribute float aReveal;
          varying float vEmissive;
          varying vec2 vAtlasUv;
          varying float vLocalY;
+         varying float vReveal;
          uniform float uProgress;
          uniform float uMaxY;
          uniform float uMinY;
+         uniform float uSink;
          uniform float uTime;
 
          // Turn a point about the Z axis through a hub. The pack's rotors are modelled as
@@ -298,6 +176,7 @@ function decorate(material, uniforms) {
         '#include <begin_vertex>',
         `#include <begin_vertex>
          vEmissive = aEmissive;
+         vReveal = aReveal;
          // Our own copy of the UV: three renames its map varying between versions, and the
          // cell lookup below has to survive that.
          vAtlasUv = uv;
@@ -308,7 +187,7 @@ function decorate(material, uniforms) {
          // The whole structure is lowered into the ground, and the fragment stage throws
          // away whatever ends up below the deck. What is on screen is therefore always a
          // *complete* building, part of it buried — never a sliced one.
-         transformed.y -= ( 1.0 - uProgress ) * ( uMaxY - uMinY );`
+         transformed.y -= uSink * ( 1.0 - uProgress ) * ( uMaxY - uMinY );`
       )
 
     shader.fragmentShader = shader.fragmentShader
@@ -318,9 +197,11 @@ function decorate(material, uniforms) {
          varying float vEmissive;
          varying vec2 vAtlasUv;
          varying float vLocalY;
+         varying float vReveal;
          uniform float uProgress;
          uniform float uMaxY;
          uniform float uMinY;
+         uniform float uSink;
          uniform vec3 uAccent;
          uniform float uNight;
          uniform float uCellAccent[ ${CELL_COUNT} ];
@@ -337,11 +218,14 @@ function decorate(material, uniforms) {
       .replace(
         '#include <clipping_planes_fragment>',
         `#include <clipping_planes_fragment>
+         // A piece the progress has not reached yet is simply not there. Zero, which is
+         // what every space base part carries, is always reached.
+         if ( vReveal > uProgress ) discard;
          // Ground level, in the building's own frame, as it sinks. Measured from the
          // geometry's real floor rather than from zero: a few parts of the kit — a rover's
          // wheels, a crate's skids — sit a little proud of it, and testing against zero
          // would cut them off a building that is otherwise finished.
-         float ground = uMinY + ( 1.0 - uProgress ) * ( uMaxY - uMinY );
+         float ground = uMinY + uSink * ( 1.0 - uProgress ) * ( uMaxY - uMinY );
          if ( vLocalY < ground - 0.001 ) discard;
          int cell = atlasCell();`
       )
@@ -367,8 +251,10 @@ function decorate(material, uniforms) {
          // Window strips and trim come on after dark, in the repo's own colour.
          totalEmissiveRadiance += uAccent * uCellAccent[ cell ] * uNight * 1.15;
          // The construction line: a bright band riding just above the ground it rises from.
+         // Only for something that is actually rising — a house is whole from the first
+         // frame, and a glowing stripe along its floor is not a construction line.
          float band = 1.0 - smoothstep( 0.0, 0.22, vLocalY - ground );
-         totalEmissiveRadiance += uAccent * band * ( 1.0 - step( 0.999, uProgress ) ) * 1.5;`
+         totalEmissiveRadiance += uAccent * band * uSink * ( 1.0 - step( 0.999, uProgress ) ) * 1.5;`
       )
   }
   return material
@@ -377,10 +263,11 @@ function decorate(material, uniforms) {
 /**
  * Shadows are rendered with three's own depth material, which knows nothing about the
  * sink — so without this a building at ten percent still casts its finished silhouette from
- * its finished position. The depth pass gets the same offset and the same discard, reading
- * the very same uniform objects.
+ * its finished position. The depth pass gets the same offset and the same discards, reading
+ * the very same uniform objects — including the per-piece reveal, without which a house's
+ * unarrived furniture still throws a shadow on the lawn.
  */
-function depthMaterial(uniforms) {
+export function depthMaterial(uniforms) {
   const mat = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking })
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms)
@@ -390,10 +277,13 @@ function depthMaterial(uniforms) {
         `#include <common>
          attribute float aSpin;
          attribute vec3 aPivot;
+         attribute float aReveal;
          varying float vLocalY;
+         varying float vReveal;
          uniform float uProgress;
          uniform float uMaxY;
          uniform float uMinY;
+         uniform float uSink;
          uniform float uTime;
 
          vec3 botSpin( vec3 p, vec3 hub, float angle ) {
@@ -408,158 +298,26 @@ function depthMaterial(uniforms) {
         `#include <begin_vertex>
          if ( aSpin > 0.0 ) transformed = botSpin( transformed, aPivot, uTime * aSpin );
          vLocalY = transformed.y;
-         transformed.y -= ( 1.0 - uProgress ) * ( uMaxY - uMinY );`
+         vReveal = aReveal;
+         transformed.y -= uSink * ( 1.0 - uProgress ) * ( uMaxY - uMinY );`
       )
     shader.fragmentShader = shader.fragmentShader
       .replace(
         '#include <common>',
         `#include <common>
          varying float vLocalY;
+         varying float vReveal;
          uniform float uProgress;
          uniform float uMaxY;
-         uniform float uMinY;`
+         uniform float uMinY;
+         uniform float uSink;`
       )
       .replace(
         '#include <clipping_planes_fragment>',
         `#include <clipping_planes_fragment>
-         if ( vLocalY < uMinY + ( 1.0 - uProgress ) * ( uMaxY - uMinY ) - 0.001 ) discard;`
+         if ( vReveal > uProgress ) discard;
+         if ( vLocalY < uMinY + uSink * ( 1.0 - uProgress ) * ( uMaxY - uMinY ) - 0.001 ) discard;`
       )
   }
   return mat
-}
-
-/**
- * Build one structure. `seed` is derived from the thread id, so the same session always
- * gets the same building; `kind` can be forced, otherwise the seed picks it.
- *
- * Requires `loadKit()` to have resolved — boot awaits it before the first roster arrives.
- */
-export function createBuilding({ seed = 1, accent = 0xc96442, kind = null } = {}) {
-  const rand = mulberry(seed)
-  const chosen = kind && KINDS[kind] ? kind : KIND_IDS[Math.floor(rand() * KIND_IDS.length)]
-
-  const c = new Composer()
-  const label = KINDS[chosen](c, rand, accent)
-  const geo = c.finish()
-  // Trimmed to fit a slot: the catalogue is authored on the pack's module grid and scaled
-  // once here, so tuning the plot lattice never means re-tuning ten recipes.
-  geo.scale(BUILDING_SCALE, BUILDING_SCALE, BUILDING_SCALE)
-  // `scale()` transforms position and normal and nothing else, so a custom attribute that
-  // holds a *position* has to be taken along by hand. Miss this and a rotor turns about a
-  // hub left behind at the unscaled height — the blades orbit a point below themselves.
-  const pivot = geo.getAttribute('aPivot')
-  if (pivot) {
-    for (let i = 0; i < pivot.count * 3; i++) pivot.array[i] *= BUILDING_SCALE
-    pivot.needsUpdate = true
-  }
-  geo.computeBoundingBox()
-  const height = geo.boundingBox.max.y
-  const footprint = Math.max(
-    Math.abs(geo.boundingBox.max.x),
-    Math.abs(geo.boundingBox.min.x),
-    Math.abs(geo.boundingBox.max.z),
-    Math.abs(geo.boundingBox.min.z)
-  )
-
-  // One uniform block, shared by the surface pass and the shadow pass.
-  const uniforms = {
-    uProgress: { value: 1 },
-    uMaxY: { value: height },
-    uMinY: { value: geo.boundingBox.min.y },
-    uAccent: { value: new THREE.Color(accent) },
-    uNight: buildingUniforms.uNight,
-    uTime: buildingUniforms.uTime,
-    uCellAccent: { value: ACCENT_MASK },
-    uCellRoughness: { value: ROUGHNESS },
-    uCellMetalness: { value: METALNESS },
-  }
-
-  const material = decorate(
-    new THREE.MeshStandardMaterial({
-      map: atlasTexture(),
-      // Roughness and metalness arrive per atlas cell; these are only the fallback values.
-      roughness: 0.6,
-      metalness: 0,
-      emissive: 0x000000, // additions in the shader are the only emission
-      // Single-sided, unlike the procedural buildings this replaced.
-      //
-      // The pack's models are closed solids, so there is nothing to see through — and being
-      // closed is exactly why they must not be drawn double-sided. They are modelled as
-      // stacked boxes, which leaves a floor and the ceiling under it sharing a plane all
-      // over the kit: a landing pad and the lander standing on it put 38 up-facing and 17
-      // down-facing triangles at one height. Drawn double-sided both halves of every such
-      // pair rasterise at identical depth and the winner is decided by floating-point
-      // noise, which is a whole colony of surfaces flickering. Back-face culling throws the
-      // downward half away before it can fight.
-      side: THREE.FrontSide,
-    }),
-    uniforms
-  )
-
-  const mesh = new THREE.Mesh(geo, material)
-  mesh.castShadow = true
-  mesh.receiveShadow = true
-  const depth = depthMaterial(uniforms)
-  depth.side = THREE.BackSide
-  mesh.customDepthMaterial = depth
-
-  mesh.userData.kind = chosen
-  mesh.userData.label = label
-  mesh.userData.height = height
-  mesh.userData.footprint = footprint
-  mesh.userData.uniforms = uniforms
-  mesh.userData.progress = 1
-  mesh.userData.setProgress = (p) => {
-    const v = THREE.MathUtils.clamp(p, 0, 1)
-    mesh.userData.progress = v
-    uniforms.uProgress.value = v
-    mesh.visible = v > 0.02
-  }
-
-  return mesh
-}
-
-/** Scaffolding around anything still going up. One instanced mesh for the whole colony. */
-export class Scaffolds {
-  constructor(scene, capacity = 256) {
-    const geo = new THREE.CylinderGeometry(0.045, 0.045, 1, 5)
-    geo.translate(0, 0.5, 0) // pivot at the foot, so scaling grows it upward
-    this.mesh = new THREE.InstancedMesh(
-      geo,
-      new THREE.MeshStandardMaterial({ color: 0xb08d52, roughness: 0.85, flatShading: true }),
-      capacity
-    )
-    this.mesh.castShadow = true
-    this.mesh.count = 0
-    this.mesh.frustumCulled = false
-    this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
-    scene.add(this.mesh)
-    this.scene = scene
-    this.capacity = capacity
-    this._dummy = new THREE.Object3D()
-  }
-
-  /** `sites` are `{ x, y, z, radius, height }` for every building not yet finished. */
-  update(sites) {
-    const d = this._dummy
-    let n = 0
-    for (const site of sites) {
-      for (let i = 0; i < 4 && n < this.capacity; i++) {
-        const a = (i / 4) * Math.PI * 2 + 0.78
-        d.position.set(site.x + Math.cos(a) * site.radius, site.y, site.z + Math.sin(a) * site.radius)
-        d.rotation.set(0, a, 0)
-        d.scale.set(1, Math.max(0.4, site.height), 1)
-        d.updateMatrix()
-        this.mesh.setMatrixAt(n++, d.matrix)
-      }
-    }
-    this.mesh.count = n
-    this.mesh.instanceMatrix.needsUpdate = true
-  }
-
-  dispose() {
-    this.mesh.geometry.dispose()
-    this.mesh.material.dispose()
-    this.scene.remove(this.mesh)
-  }
 }

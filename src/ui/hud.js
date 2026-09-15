@@ -13,7 +13,7 @@ import { PLOT_PALETTE, hashString } from '../world/plots.js'
  * every setter compares against the last value it wrote and returns early otherwise.
  *
  * The one hard rule is that all of this is optional. Pressing H hides every panel, and the
- * game stays fully readable because status lives above the astronauts' heads in the scene,
+ * game stays fully readable because status lives above the crew's heads in the scene,
  * not in here.
  */
 
@@ -49,7 +49,7 @@ const ICON = {
 }
 
 const STAT_DEFS = [
-  { key: 'working', label: 'building', cls: 'working' },
+  { key: 'working', label: 'moving in', cls: 'working' },
   { key: 'waiting', label: 'need you', cls: 'waiting' },
   { key: 'blocked', label: 'blocked', cls: 'blocked' },
   { key: 'celebrating', label: 'shipped', cls: 'done' },
@@ -88,7 +88,7 @@ export class Hud {
       b.className = `stat ${def.cls}`
       b.type = 'button'
       b.dataset.key = def.key
-      b.title = `Jump to the next ${def.label} astronaut`
+      b.title = def.label === 'crew' ? 'Jump to the next crew member' : `Jump to the next ${def.label} crew member`
       b.innerHTML = `<i class="pip"></i><span class="n">0</span><span class="lbl">${def.label}</span>`
       b.type = 'button'
       b.addEventListener('click', () => this.actions.focusStatus?.(def.key))
@@ -173,6 +173,7 @@ export class Hud {
       this._toggle('Adaptive quality', 'autoQuality', 'Quietly drops render scale if frames get expensive.'),
       this._slider('Scatter', 'scatterDensity', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`),
       this._slider('Max crew', 'maxAgents', 10, 200, 10, (v) => String(v)),
+      this._slider('Colony spacing', 'colonySpacing', 2, 6, 1, (v) => String(v), 'How far apart visiting colonies sit on the map.'),
       this._toggle('Stars', 'stars')
     )
     body.appendChild(perf)
@@ -231,7 +232,8 @@ export class Hud {
       ),
       this._slider('Environment', 'iblIntensity', 0, 2, 0.05, (v) => v.toFixed(2)),
       this._slider('Exposure', 'exposure', 0.4, 2, 0.05, (v) => v.toFixed(2)),
-      this._slider('Bloom', 'bloomStrength', 0, 1.6, 0.02, (v) => v.toFixed(2))
+      this._slider('Bloom', 'bloomStrength', 0, 1.6, 0.02, (v) => v.toFixed(2)),
+      this._slider('Haze', 'haze', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`, 'Drifting atmospheric dust/haze on the map.')
     )
     body.appendChild(light)
 
@@ -268,7 +270,7 @@ export class Hud {
     g.classList.add('network')
     g.insertAdjacentHTML(
       'beforeend',
-      `<p class="note">Share this machine's colony on your intranet, and visit your teammates'. Visiting is always read-only — you see their astronauts, you cannot touch their threads.</p>
+      `<p class="note">Share this machine's colony on your intranet, and visit your teammates'. Visiting is always read-only — you see their crew, you cannot touch their threads.</p>
        <div class="row">
          <div class="label"><span>Colony name</span><span class="hint">How you appear to others.</span></div>
          <input class="net-name text-input" type="text" maxlength="80" spellcheck="false" placeholder="colony">
@@ -291,9 +293,18 @@ export class Hud {
          <p class="note">A colleague reached your colony from an address you have not added — over a VPN this can differ from the one they expect. Add it to let them in.</p>
          <div class="net-list net-refused"></div>
        </div>
-       <div class="net-add">
+       <div class="net-add net-add-neighbor">
          <input class="net-host text-input" type="text" spellcheck="false" placeholder="hostname or IP">
          <input class="net-port text-input" type="text" spellcheck="false" inputmode="numeric" placeholder="5275">
+         <button class="btn net-add-btn" type="button">Add</button>
+       </div>
+       <div class="net-block">
+         <div class="net-head">Allow a screen / hub to read me</div>
+         <p class="note">These addresses can read this colony without being added as a neighbour or visiting back — handy for a hallway screen or a shared team hub.</p>
+         <div class="net-list net-readers"></div>
+       </div>
+       <div class="net-add net-add-reader">
+         <input class="net-host text-input" type="text" spellcheck="false" placeholder="hostname or IP">
          <button class="btn net-add-btn" type="button">Add</button>
        </div>`
     )
@@ -306,8 +317,13 @@ export class Hud {
       this.actions.setShare?.(!now)
       this._refreshNetwork()
     })
-    const host = g.querySelector('.net-host')
-    const port = g.querySelector('.net-port')
+
+    // Scoped to its own container rather than the whole section, so the lookup finds this
+    // form's own input/button even though the reader add-row below reuses the same classes
+    // for styling — matching by DOM order would silently rebind to whichever row is first.
+    const neighborAdd = g.querySelector('.net-add-neighbor')
+    const host = neighborAdd.querySelector('.net-host')
+    const port = neighborAdd.querySelector('.net-port')
     const add = () => {
       const h = host.value.trim()
       const p = Number(port.value.trim()) || 5275
@@ -317,9 +333,21 @@ export class Hud {
       port.value = ''
       this._refreshNetwork()
     }
-    g.querySelector('.net-add-btn').addEventListener('click', add)
+    neighborAdd.querySelector('.net-add-btn').addEventListener('click', add)
     port.addEventListener('keydown', (e) => e.key === 'Enter' && add())
     host.addEventListener('keydown', (e) => e.key === 'Enter' && add())
+
+    const readerAdd = g.querySelector('.net-add-reader')
+    const readerHost = readerAdd.querySelector('.net-host')
+    const addReader = () => {
+      const h = readerHost.value.trim()
+      if (!h) return
+      this.actions.addAllowedReader?.(h)
+      readerHost.value = ''
+      this._refreshNetwork()
+    }
+    readerAdd.querySelector('.net-add-btn').addEventListener('click', addReader)
+    readerHost.addEventListener('keydown', (e) => e.key === 'Enter' && addReader())
     this._net = g
   }
 
@@ -427,6 +455,25 @@ export class Hud {
       })
       rlist.appendChild(row)
     }
+
+    // Addresses allowed to read this colony without being a neighbour or visiting back.
+    const readers = cfg.allowedReaders || []
+    const readerList = g.querySelector('.net-readers')
+    readerList.innerHTML = readers.length
+      ? ''
+      : `<div class="net-empty">None yet. Add one below to let a screen or hub read this colony.</div>`
+    for (const ip of readers) {
+      const row = document.createElement('div')
+      row.className = 'net-item'
+      row.innerHTML =
+        `<span class="net-item-name">${escapeHtml(ip)}</span>` +
+        `<button class="btn icon ghost net-remove" title="Stop allowing">${ICON.close}</button>`
+      row.querySelector('.net-remove').addEventListener('click', () => {
+        this.actions.removeAllowedReader?.(ip)
+        this._refreshNetwork()
+      })
+      readerList.appendChild(row)
+    }
   }
 
   _row(label, hint) {
@@ -510,7 +557,7 @@ export class Hud {
     return row
   }
 
-  /** The little face on the agent card, drawn from the same atlas the astronauts use. */
+  /** The little face on the agent card, drawn from the same atlas the crew uses. */
   _buildAvatar() {
     const canvas = this.$('.thread-pop .avatar canvas')
     canvas.width = 108
@@ -520,7 +567,7 @@ export class Hud {
     this.avatarTmp.width = 108
     this.avatarTmp.height = 108
     this.avatarTmpCtx = this.avatarTmp.getContext('2d')
-    this._avatarState = { frame: -1, color: '' }
+    this._avatarState = { frame: -1 }
   }
 
   _wire() {
@@ -698,7 +745,7 @@ export class Hud {
   /**
    * The project sidebar: what a zone is, and the things you can do to the *repo* rather
    * than to one thread in it. Opened by clicking a zone, its name plate, its legend chip,
-   * or any astronaut standing on it.
+   * or any crew member standing on it.
    */
   setProject(project) {
     const panel = this.$('.side')
@@ -775,7 +822,7 @@ export class Hud {
         (t.worktree ? `<span class="wt">⑂ ${escapeHtml(t.worktree)}</span>` : '')
       b.addEventListener('click', () => this.actions.focusThread?.(t.id))
       list.appendChild(b)
-      // A long repo can hide the astronaut you just clicked in the world. Scrolled by hand
+      // A long repo can hide the crew member you just clicked in the world. Scrolled by hand
       // rather than with `scrollIntoView`, which walks up the ancestors and will happily
       // scroll the *page* — and a page that can scroll at all is one keystroke away from
       // the whole HUD sitting sideways with nothing to put it back.
@@ -797,7 +844,7 @@ export class Hud {
   /**
    * The selected thread, shown inside the zone sidebar rather than in a panel of its own —
    * one thread and its repo are the same context, and splitting them across the screen made
-   * you look in two places to act on one astronaut.
+   * you look in two places to act on one crew member.
    */
   setSelection(agent, thread) {
     const card = this.$('.thread-pop')
@@ -813,10 +860,9 @@ export class Hud {
 
     this.$('.thread-pop .title').textContent = thread.title || 'Untitled thread'
     const status = STATUS_LABEL[agent.status] || agent.status
+    const swatch = hex(STATUS_SWATCH[statusClass(agent.status)])
     const meta = this.$('.thread-pop .meta')
-    const bits = [
-      `<span class="tag"><i class="swatch" style="background:${hex(agent.trim.getHex())}"></i>${escapeHtml(status)}</span>`,
-    ]
+    const bits = [`<span class="tag"><i class="swatch" style="background:${swatch}"></i>${escapeHtml(status)}</span>`]
     // A visiting colony's thread wears its origin, so it is never mistaken for one of yours —
     // and the card's actions are pared back to match, since none of them can reach her machine.
     if (thread.colony) {
@@ -833,9 +879,9 @@ export class Hud {
 
     const pct = Math.round((this.actions.progressFor?.(thread.id) ?? 0) * 100)
     this.$('.thread-pop .progress > i').style.width = `${pct}%`
-    this.$('.thread-pop .progress > i').style.background = hex(agent.trim.getHex())
+    this.$('.thread-pop .progress > i').style.background = swatch
     // Measured once per selection rather than per frame: placing the card beside its
-    // astronaut needs its size sixty times a second, and asking the layout for it that
+    // crew member needs its size sixty times a second, and asking the layout for it that
     // often is how a HUD starts costing frames.
     this._cardSize = { w: card.offsetWidth, h: card.offsetHeight }
     this.$('#btn-open').disabled = thread.canOpen === false
@@ -865,10 +911,10 @@ export class Hud {
   }
 
   /**
-   * Put the thread card beside its own astronaut, in screen space, every frame.
+   * Put the thread card beside its own crew member, in screen space, every frame.
    *
-   * `screen` is where the astronaut is right now, in CSS pixels, or null when it is behind
-   * the camera. The card prefers the astronaut's right, flips to its left rather than slide
+   * `screen` is where the crew member is right now, in CSS pixels, or null when it is behind
+   * the camera. The card prefers the crew member's right, flips to its left rather than slide
    * under the sidebar, and never leaves the window — so it stays reachable at any zoom
    * without ever covering the thing it is describing.
    */
@@ -909,12 +955,12 @@ export class Hud {
       this._cardY = y
       el.style.transform = `translate3d(${x}px, ${y}px, 0)`
     }
-    // The nib points back at the astronaut, so it changes sides with the card.
+    // The nib points back at the crew member, so it changes sides with the card.
     if (flip !== this._cardFlip) {
       this._cardFlip = flip
       el.classList.toggle('flip', flip)
     }
-    // And it tracks the astronaut vertically when the card has been pushed off-centre.
+    // And it tracks the crew member vertically when the card has been pushed off-centre.
     const nib = Math.min(Math.max(14, screen.y - y), size.h - 14)
     if (nib !== this._cardNib) {
       this._cardNib = nib
@@ -927,32 +973,28 @@ export class Hud {
     this._sideWidth = px
   }
 
-  /** Redraw the card's face so it blinks in step with the astronaut it belongs to. */
+  /** Redraw the card's face so it blinks in step with the crew member it belongs to. */
   updateAvatar(faceAtlasCanvas) {
     if (!this.selected || !faceAtlasCanvas) return
     const agent = this.selected.agent
     const frame = agent.faceFrame ?? FACE.idle
-    const color = agent.eye
-    const css = cssFromGlow(color)
-    if (this._avatarState.frame === frame && this._avatarState.color === css) return
-    this._avatarState = { frame, color: css }
+    if (this._avatarState.frame === frame) return
+    this._avatarState = { frame }
 
     const size = 108
     const cell = faceAtlasCanvas.width / FRAME_COLS
     const sx = (frame % FRAME_COLS) * cell
     const sy = Math.floor(frame / FRAME_COLS) * (faceAtlasCanvas.height / FRAME_ROWS)
 
-    // The atlas is an opaque white-on-black mask, so the tint is a `multiply`, not a
-    // `source-in`: black stays black and the white features take the eye colour. Keying on
-    // alpha instead would flood the whole cell, because every pixel in it is opaque.
+    // The atlas is an opaque white-on-black mask. It used to be tinted with the crew
+    // member's own status-driven eye colour here — a `multiply` against white-on-black, so
+    // black stayed black and the white features took the tint — but the owner had that
+    // colour removed (it should read as the pack painted it: plain white on black), so this
+    // is now a straight copy with no tint pass at all.
     const t = this.avatarTmpCtx
     t.globalCompositeOperation = 'source-over'
     t.clearRect(0, 0, size, size)
     t.drawImage(faceAtlasCanvas, sx, sy, cell, cell, 0, 0, size, size)
-    t.globalCompositeOperation = 'multiply'
-    t.fillStyle = css
-    t.fillRect(0, 0, size, size)
-    t.globalCompositeOperation = 'source-over'
 
     const c = this.avatarCtx
     c.fillStyle = '#06070c'
@@ -1031,7 +1073,7 @@ export class Hud {
 
   /**
    * Dismiss everything. This is the mode the game is really meant to be left in — the
-   * colony carries its own state above the astronauts' heads, so the panels are for
+   * colony carries its own state above the crew's heads, so the panels are for
    * setting things up, not for playing.
    */
   toggleUi(force) {
@@ -1086,16 +1128,6 @@ function chips(items, current, onPick, registry) {
 }
 
 const hex = (n) => '#' + (n >>> 0).toString(16).padStart(6, '0').slice(-6)
-/**
- * Eye colours are authored above 1.0 so the bloom pass catches them in the scene. For the
- * card they are normalised by the brightest channel — which keeps the hue the astronaut
- * actually has rather than clipping a 3.0-red down to the same white as a 3.0-blue.
- */
-function cssFromGlow(color) {
-  const peak = Math.max(color.r, color.g, color.b, 1)
-  const enc = (v) => Math.round(Math.pow(Math.min(1, v / peak), 1 / 2.2) * 255)
-  return `rgb(${enc(color.r)},${enc(color.g)},${enc(color.b)})`
-}
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
@@ -1109,6 +1141,15 @@ function statusClass(status) {
   if (status === 'celebrating') return 'done'
   return 'idle'
 }
+
+/**
+ * The same colour family `statusClass` points CSS at (`.side .thread.*` in `styles.css`), as
+ * hex ints for the two inline swatches the selected-thread card paints itself. These used to
+ * be read straight off the crew figure — `agent.trim`, from `astronauts.js`'s `AGENT_LOOK` —
+ * but the owner had that trim colour removed from the 3D scene (it read oddly against the
+ * garments), so this card now carries its own copy of the same palette instead.
+ */
+const STATUS_SWATCH = { working: 0x7fd39a, waiting: 0x8fb4ee, blocked: 0xe88b8b, done: 0xe6c67f, idle: 0x7c7b86 }
 
 /**
  * A path that fits, trimmed from the *left* so the repo end survives — the deep end is the
@@ -1165,7 +1206,7 @@ function ago(ts) {
 const TEMPLATE = `
 <aside class="side panel">
   <header class="brandbar">
-    <div class="brand"><i class="dot"></i>Bot Crossing</div>
+    <div class="brand"><i class="dot"></i>Moving-In Crossing</div>
     <button class="btn icon ghost" id="btn-shot" title="Screenshot (P)">${ICON.camera}</button>
     <button class="btn icon ghost" id="btn-help" title="Help (?)">${ICON.help}</button>
     <button class="btn icon ghost" id="btn-hide" title="Hide all UI (H)">${ICON.eye}</button>
@@ -1213,7 +1254,7 @@ const TEMPLATE = `
 
 <div class="rail panel">
   <button class="btn icon" id="btn-home" title="Reset the view (0)">${ICON.home}</button>
-  <button class="btn icon" id="btn-next" title="Next astronaut waiting on you (N)">${ICON.next}</button>
+  <button class="btn icon" id="btn-next" title="Next crew member waiting on you (N)">${ICON.next}</button>
   <div class="sep"></div>
   <button class="btn icon" id="btn-orbit" title="Orbit mode — sweep around the colony (O)" aria-pressed="false">${ICON.orbit}</button>
   <button class="btn icon" id="btn-planet" title="Change planet (Tab)">${ICON.globe}</button>
@@ -1240,7 +1281,7 @@ const TEMPLATE = `
     <button class="btn primary" id="btn-open" title="Open this thread in the harness it came from (Enter)">${ICON.open} Open</button>
     <button class="btn" id="btn-viewed" title="Stop this thread asking for you until it moves on again (V)">${ICON.eye} Viewed</button>
     <button class="btn" id="btn-share-session" title="Share this one session with the network" hidden>${ICON.share} Share</button>
-    <button class="btn" id="btn-archive" title="Archive — this astronaut walks back to the ship (A)">${ICON.archive} Archive</button>
+    <button class="btn" id="btn-archive" title="Archive — this crew member walks back to the depot (A)">${ICON.archive} Archive</button>
   </div>
 </div>
 
@@ -1250,8 +1291,8 @@ const TEMPLATE = `
 
 <div class="help">
   <div class="sheet panel">
-    <h2>Bot Crossing</h2>
-    <p class="sub">Every coding-agent thread on this machine is an astronaut. They walk out of the ship, claim a plot for their repo, and build. Click one to open its thread; click a zone — its deck or its name — for the repo itself, and start a new conversation there. Hide a repo from that panel if you would rather not see it — its threads stay in your harness, and you can show it again from the list. Navigation works like Google Earth — drag the ground itself, right-drag to tilt, scroll to zoom in on whatever is under the cursor.</p>
+    <h2>Moving-In Crossing</h2>
+    <p class="sub">Every coding-agent thread on this machine is a crew member. They walk out of the depot, claim a plot for their repo, and move in. Click one to open its thread; click a zone — its deck or its name — for the repo itself, and start a new conversation there. Hide a repo from that panel if you would rather not see it — its threads stay in your harness, and you can show it again from the list. Navigation works like Google Earth — drag the ground itself, right-drag to tilt, scroll to zoom in on whatever is under the cursor.</p>
     <div class="cols">
       <div>
         <div class="k"><span>Drag the ground</span><kbd>drag</kbd></div>
@@ -1280,7 +1321,7 @@ const TEMPLATE = `
     <div style="margin-top:16px">
       <div class="legend-row"><i class="badge" style="background:#1a2b46;color:#8fb4ee">?</i> waiting on your reply — click to open the thread</div>
       <div class="legend-row"><i class="badge" style="background:#3d1c1c;color:#e88b8b">!</i> the session hit an error</div>
-      <div class="legend-row"><i class="badge" style="background:#16301f;color:#7fd39a">⚒</i> running right now, building</div>
+      <div class="legend-row"><i class="badge" style="background:#16301f;color:#7fd39a">⚒</i> running right now, moving in</div>
       <div class="legend-row"><i class="badge" style="background:#332b12;color:#e6c67f">✓</i> its pull request landed</div>
       <div class="legend-row"><i class="badge" style="background:#1d1f2e;color:#a9a8c0">z</i> nothing for three days</div>
     </div>

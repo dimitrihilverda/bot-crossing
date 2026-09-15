@@ -60,7 +60,7 @@ const MAX_CELLS = 9
 /** The lattice cell the ship owns. Nothing else may be placed there. */
 const SHIP_CELL = { q: -2, r: 1 }
 
-const HEX_DIRS = [
+export const HEX_DIRS = [
   [1, 0],
   [1, -1],
   [0, -1],
@@ -75,7 +75,7 @@ const HEX_DIRS = [
  */
 const EDGE_TO_DIR = [0, 5, 4, 3, 2, 1]
 
-const key = (q, r) => `${q},${r}`
+export const key = (q, r) => `${q},${r}`
 const ORIGIN = { q: 0, r: 0 }
 
 /** Flat-top axial hex → world. */
@@ -114,7 +114,7 @@ function cubeRound(q, r) {
   return { q: rq, r: rr }
 }
 
-function hexRing(radius) {
+export function hexRing(radius) {
   if (radius === 0) return [{ q: 0, r: 0 }]
   const out = []
   let q = HEX_DIRS[4][0] * radius
@@ -139,14 +139,24 @@ const cellsNeeded = (threadCount) =>
  * deliberate: a district you walk to reads as somebody else's settlement, not as your own
  * colony growing a lobe.
  */
-const ANCHOR_RING = 5
-export function colonyAnchor(name) {
+let ANCHOR_RING = 4
+/** How far visiting colonies are anchored from the centre — driven by the `colonySpacing`
+ *  setting so the wall's colony spacing can be tuned live. Clamped to a sane hex range. */
+export function setColonySpacing(n) {
+  ANCHOR_RING = Math.max(2, Math.min(8, Math.round(Number(n) || 4)))
+}
+export function colonyAnchor(name, index = null, count = null) {
   const ring = hexRing(ANCHOR_RING)
+  // With an index among the colonies, spread them evenly around the ring so they surround the
+  // centre (the Hub) rather than clumping wherever their names happen to hash.
+  if (index != null && count > 0) {
+    return ring[Math.round((index / count) * ring.length) % ring.length]
+  }
   return ring[hashString(`colony:${name}`) % ring.length]
 }
 
 /** Hex distance in axial coordinates: the cube distance, halved. */
-function hexDistance(a, b) {
+export function hexDistance(a, b) {
   return (Math.abs(a.q - b.q) + Math.abs(a.q + a.r - b.q - b.r) + Math.abs(a.r - b.r)) / 2
 }
 
@@ -191,7 +201,7 @@ function hexDistance(a, b) {
  * The ship's cell counts as walkable here even though nobody may claim it: a colony that
  * happens to wrap around the ship is not two colonies.
  */
-function isConnected(out, anchored = new Set()) {
+function isConnected(out, anchored = new Set(), streets = new Set()) {
   const cells = new Map()
   // Anchored zones are *meant* to be islands — a visiting colony's district sits out past
   // the home zones by design — so they neither have to be reached nor count as unreachable.
@@ -201,7 +211,12 @@ function isConnected(out, anchored = new Set()) {
   }
   if (cells.size < 2) return true
   const ship = key(SHIP_CELL.q, SHIP_CELL.r)
-  const passable = new Set([...cells.keys(), ship])
+  // Street cells are stepping stones on exactly the same footing as the ship's cell: they
+  // may be crossed and need not be reached. A ring road runs *through* the colony, so
+  // without this a colony the road divides is judged broken and every plot re-seeds from
+  // the middle on every poll — which is the upheaval `allocateCells` exists to prevent,
+  // arriving by the back door.
+  const passable = new Set([...cells.keys(), ship, ...streets])
   const [start] = cells.keys()
   const seen = new Set([start])
   const queue = [cells.get(start)]
@@ -215,23 +230,25 @@ function isConnected(out, anchored = new Set()) {
       queue.push(n)
     }
   }
+  // Same reasoning as the ship: a stepping stone is not a member.
+  for (const street of streets) seen.delete(street)
   // The ship is a stepping stone, not a member: it does not have to be reached for the colony
   // to be whole, and it does not count toward what has to be.
   seen.delete(ship)
   return seen.size === cells.size
 }
 
-export function allocateCells(projects, previous = new Map()) {
+export function allocateCells(projects, previous = new Map(), streets = new Set()) {
   const anchored = new Set(projects.filter((p) => p.anchor).map((p) => p.id))
-  const laid = layOut(projects, previous)
+  const laid = layOut(projects, previous, streets)
   // Remembering where a zone sat is worth a great deal, right up until it leaves the colony
   // as scattered islands. Then the memory is describing a map that no longer exists, and
   // starting over — compact, from the middle, the way a first run does it — is the lesser
   // upheaval. It only happens when the alternative is visibly broken.
-  return isConnected(laid, anchored) ? laid : layOut(projects, new Map())
+  return isConnected(laid, anchored, streets) ? laid : layOut(projects, new Map(), streets)
 }
 
-function layOut(projects, previous) {
+function layOut(projects, previous, streets = new Set()) {
   const reserved = key(SHIP_CELL.q, SHIP_CELL.r)
   const wanted = projects.map((p) => ({ id: p.id, want: cellsNeeded(p.size), anchor: p.anchor || null }))
   const total = wanted.reduce((n, w) => n + w.want, 0)
@@ -255,7 +272,9 @@ function layOut(projects, previous) {
   for (let ring = 0; (pool.length < total + 30 || ring <= farthest) && ring < ANCHOR_RING + 5; ring++) {
     for (const cell of hexRing(ring)) {
       const k = key(cell.q, cell.r)
-      if (k === reserved) continue
+      // The ship's cell and every street cell are off the market. A street cell in `free`
+      // would be handed to a plot, and the road would then run through a zone.
+      if (k === reserved || streets.has(k)) continue
       pool.push(cell)
       free.add(k)
     }
