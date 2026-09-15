@@ -61,11 +61,31 @@ test('a corner carries the incoming heading — the same one the straight patch 
   // Cell (1, 0) turns from travelling +x (heading 0) to travelling +z (heading PI/2). The
   // corner sits where that bend happens and should carry the heading of the leg leading into
   // it, so its facing edge lines up with the straight tile immediately behind it.
+  //
+  // The expected value is derived from the bend's own cells (prev -> here), not a hand-picked
+  // constant, so the assertion states the *convention* — "incoming direction" — rather than
+  // merely restating whatever number the code happens to produce for this one bend.
+  //
+  // This convention was disputed (task-5-review.md flagged it PLAUSIBLE-wrong, reasoning from
+  // the GLB's raw vertex data, without a live render) and settled by actually rendering the
+  // real `road_corner` asset at ring cell {x:3,z:3} under both this heading and the
+  // incoming-heading-plus-180-degrees alternative (see task-5-report.md's "Settling the
+  // heading dispute" appendix): the incoming heading produced a continuous kerb and lane
+  // markings at both seams, flipping it 180 degrees produced a visibly disconnected corner
+  // tile. If this heading were rotated by 180 degrees, `expected` below would differ from
+  // `corner.heading` by exactly PI, and the assertion would fail.
   const bend = [{ x: 0, z: 0 }, { x: 1, z: 0 }, { x: 1, z: 1 }]
   const points = carriagewayPoints(bend, CELL_SIZE, { placed: new Set() })
   const corner = points.find((p) => p.kind === 'corner')
   assert.ok(corner, 'no corner patch found')
-  assert.ok(Math.abs(corner.heading - 0) < 1e-9, `corner heading ${corner.heading} is not the incoming heading (0)`)
+
+  const [prev, here] = bend
+  const inDir = { x: here.x - prev.x, z: here.z - prev.z }
+  const expected = Math.atan2(inDir.z, inDir.x)
+  assert.ok(
+    Math.abs(corner.heading - expected) < 1e-9,
+    `corner heading ${corner.heading} is not the incoming heading ${expected} (atan2 of prev->here)`
+  )
 })
 
 test('no two patches land on the same spot', () => {
