@@ -17,9 +17,11 @@ Measured from `public/assets/city.glb`: all eight buildings, all six road pieces
 slab are exactly **2 × 2** in plan, and every corner piece turns **90°**. The kit is built for a
 square grid at a 2-unit pitch.
 
-The colony is a hex lattice, so a path along it turns in multiples of 60°. Stage 4 could not
+The colony was a hex lattice, so a path along it turned in multiples of 60°. Stage 4 could not
 resolve that and shipped a stated compromise: a four-armed `road_junction` dropped at every bend,
-with a comment in `src/world/road-mesh.js` saying plainly that the markings do not line up.
+with a comment in `src/world/road-mesh.js` saying plainly that the markings did not line up. Task 5
+of this stage removed both the junction-patch bends and that comment, once every bend on the new
+lattice turned a real 90°.
 
 Squaring the lattice buys three things at once:
 

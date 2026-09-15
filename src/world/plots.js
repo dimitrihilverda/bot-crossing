@@ -43,27 +43,25 @@ export const PLOT_PALETTE = [
  * Task 4 converted `road-path.js` and `streets.js` — two of the original four consumers — onto
  * `grid.js`'s `neighbours`, `distance`, `key` and `ring`. Neither imports `HEX_DIRS`, `hexRing`
  * or `hexDistance` any more, and since no other file ever did either, those three are gone
- * from this file with them. What is actually left, as of Task 4:
+ * from this file with them.
  *
- *  - `PLOT_CELL` — still `road-mesh.js`'s hit-test radius (Task 5) and `colony.js`'s picking
- *    threshold (Task 6), both pre-conversion, frozen at the old hex value.
+ * Task 5 moved `road-mesh.js` onto `grid.js`'s `CELL_SIZE` for its own hit-test radius, so
+ * `PLOT_CELL` lost that caller too. What is actually left, as of Task 5:
+ *
+ *  - `PLOT_CELL` — still `colony.js`'s picking threshold (Task 6), frozen at the old hex value
+ *    until that task moves it onto `CELL_SIZE`.
  *  - `cubeRound` and `worldToHex` — kept together, since the second is the only caller of the
  *    first. Neither has a caller anywhere in the app any more: `colony.js` had already moved
- *    every call site onto `worldToCell` before this task started. Deleting them isn't Task 4's
- *    to do — road-path.js and streets.js never imported either — but the comment that used to
- *    sit on `worldToHex` claiming `colony.js` "still calls this" was false by the time this
- *    task read it, and has been corrected here rather than carried forward unchecked.
+ *    every call site onto `worldToCell` before Task 4 started. Deleting them isn't this task's
+ *    to do either — road-mesh.js never imported them — but they are genuinely dead code, free
+ *    for whichever task gets to them first.
  *
- * Delete this whole block once `road-mesh.js` (Task 5) and `colony.js` (Task 6) stop needing
- * `PLOT_CELL`. `cubeRound` and `worldToHex` could go any time before that — they are unused
- * already — but removing genuinely dead code that isn't blocking anything is whichever task
- * gets to it first, not specifically this one's.
+ * Delete this whole block once `colony.js` (Task 6) stops needing `PLOT_CELL`.
  */
 /**
- * Hex size, centre to corner — `road-mesh.js`'s hit-test radius and `colony.js`'s picking
- * threshold, both still measuring in hex units until Tasks 5 and 6 move them onto `CELL_SIZE`.
- * Frozen at the old hex value on purpose: the Plot class's own geometry below is square now
- * and no longer derives this number.
+ * Hex size, centre to corner — `colony.js`'s picking threshold, still measuring in hex units
+ * until Task 6 moves it onto `CELL_SIZE`. Frozen at the old hex value on purpose: the Plot
+ * class's own geometry below is square now and no longer derives this number.
  */
 export const PLOT_CELL = 7.6
 function cubeRound(q, r) {

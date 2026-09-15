@@ -1,23 +1,22 @@
 import * as THREE from 'three'
 import { atlasTexture, hasPart } from './kit.js'
 import { Composer } from './buildings.js'
-import { DECK_TOP, PLOT_CELL } from './plots.js'
+import { CELL_SIZE } from './grid.js'
+import { DECK_TOP } from './plots.js'
 
 /**
  * The street surface: a carriageway down the middle of each street cell, and the kit's own
  * furniture along the verge.
  *
- * A street cell is not a paved cell. A hex cell is 13.16 across — twenty-one car widths —
- * so paving one would read as a plaza. The carriageway is 2.5 wide and the rest is verge.
+ * A street cell is not a paved cell. A cell is 12 units across — far wider than the 2.5-wide
+ * carriageway needs — so paving one edge to edge would read as a plaza. The carriageway runs
+ * down the middle and the rest is verge.
  *
- * **The 120 degree problem, stated plainly.** A path along the hex lattice turns in
- * multiples of 60 degrees. Every corner piece in the kit turns 90. There is no combination
- * of the six road pieces that makes a correct 120 degree bend, so at each bend this lays a
- * `road_junction` as a patch of carriageway and lets the two straights run into it. A
- * four-armed tile sits where two arms meet and the extra arms read as short stubs. That is
- * a visible compromise, it is not fixable with the parts in the pack, and no comment in
- * this file claims the markings line up. At the colony's resting camera distance of about
- * 36 units the stubs are a few pixels; that is the whole of the mitigation.
+ * Every bend on this square lattice is a right angle (see `grid.js`), so a bend gets a real
+ * `road_corner` tile, turned to face the way the road actually bends, instead of the
+ * four-armed `road_junction` patch a 120 degree hex bend used to need. `road_junction` is
+ * kept for cells where road runs genuinely meet three or four ways — not produced by this
+ * module yet, but the town a later stage builds will need it.
  */
 
 /** Every road piece in the kit is a 2 x 2 square tile, 0.1 thick, centred on the origin. */
@@ -69,15 +68,12 @@ export function carriagewayHeight(groundY, lift = ROAD_SURFACE_LIFT) {
   return groundY + lift
 }
 
-/** How many tiles are laid along one cell-to-cell hop. */
-const TILES_PER_HOP = Math.ceil((PLOT_CELL * Math.sqrt(3)) / CARRIAGEWAY_WIDTH)
-
 /**
  * Where each patch of carriageway goes, and what kind it is.
  *
  * Pure: plain numbers in, plain numbers out, so the geometry decisions are testable without
- * a renderer. `radius` is the hex size, passed in rather than imported so a test can use 1
- * and read the arithmetic directly.
+ * a renderer. `cellSize` is the lattice pitch, passed in rather than imported so a test can
+ * read the arithmetic directly against whatever value it hands in.
  *
  * Two things a caller must say explicitly, because this function cannot guess them from
  * `cells` alone:
@@ -93,19 +89,22 @@ const TILES_PER_HOP = Math.ceil((PLOT_CELL * Math.sqrt(3)) / CARRIAGEWAY_WIDTH)
  *   of them, or a spur's chain — which ends *on* the ring cell it joins — lays a second,
  *   exactly coincident patch on top of the ring's.
  *
- * @param cells the street cells, in the order the road runs through them
- * @param radius hex size, centre to corner
+ * @param cells the street cells (`{x, z}`), in the order the road runs through them
+ * @param cellSize world units per cell — the lattice pitch a hop spans
  * @param options.closed true for a closed loop (the ring); false (default) for an open run
  * @param options.placed the cross-call dedup set; defaults to a fresh one for this call only
- * @returns one entry per patch: `{ x, z, kind, heading }` — `kind` is `'straight'` or
- *   `'junction'`, `heading` is the direction of travel through that patch in radians, as
- *   `Math.atan2(dz, dx)` over the hop the patch belongs to
+ * @returns one entry per patch: `{ x, z, kind, heading }` — `kind` is `'straight'`,
+ *   `'corner'` or `'junction'`, `heading` is the direction a tile is turned to face, in
+ *   radians. For a straight patch that is the direction of travel over the hop it belongs
+ *   to (`Math.atan2(dz, dx)`); for a corner it is the incoming direction — the same heading
+ *   the straight patch just before it carries, so the two tiles' facing edges line up.
  */
-export function carriagewayPoints(cells, radius, { closed = false, placed = new Set() } = {}) {
-  const world = cells.map((c) => {
-    const w = { x: radius * 1.5 * c.q, z: radius * Math.sqrt(3) * (c.r + c.q / 2) }
-    return w
-  })
+export function carriagewayPoints(cells, cellSize, { closed = false, placed = new Set() } = {}) {
+  const world = cells.map((c) => ({ x: c.x * cellSize, z: c.z * cellSize }))
+  // How many carriageway-width tiles span one cell-to-cell hop. On this square lattice every
+  // hop is exactly `cellSize` long and axis-aligned, so — unlike the old hex hop — no
+  // trigonometric factor is needed to turn it into a tile count.
+  const tilesPerHop = Math.max(1, Math.ceil(cellSize / CARRIAGEWAY_WIDTH))
 
   const out = []
   const push = (x, z, kind, heading) => {
@@ -135,8 +134,8 @@ export function carriagewayPoints(cells, radius, { closed = false, placed = new 
     const b = world[bi]
     const heading = Math.atan2(b.z - a.z, b.x - a.x)
     lastHeading = heading
-    for (let t = 0; t < TILES_PER_HOP; t++) {
-      const f = t / TILES_PER_HOP
+    for (let t = 0; t < tilesPerHop; t++) {
+      const f = t / tilesPerHop
       push(a.x + (b.x - a.x) * f, a.z + (b.z - a.z) * f, 'straight', heading)
     }
   }
@@ -153,12 +152,15 @@ export function carriagewayPoints(cells, radius, { closed = false, placed = new 
     push(last.x, last.z, 'straight', lastHeading)
   }
 
-  // Bends. A cell whose incoming and outgoing directions differ is a bend, and a bend gets
-  // a junction patch on its centre, replacing whatever straight was laid there. An open run's
-  // endpoints have no "other side" (a spur starts at a plot and ends on the cell it joins),
-  // so only its interior cells are checked. A closed run has no endpoints — every cell,
-  // including what would otherwise be index 0 and the last, sits between two neighbours —
-  // so every index is checked, wrapping around the loop.
+  // Bends. A cell whose incoming and outgoing directions differ is a bend. On this lattice
+  // every hop runs along one of the four square-lattice axes, so the incoming and outgoing
+  // directions at a bend are always exactly perpendicular — never the 120 degree turn the
+  // hex lattice used to produce — and a real `road_corner` tile fits every one of them. The
+  // corner replaces whatever straight patch was laid on its centre, the same way a junction
+  // patch used to. An open run's endpoints have no "other side" (a spur starts at a plot and
+  // ends on the cell it joins), so only its interior cells are checked. A closed run has no
+  // endpoints — every cell, including what would otherwise be index 0 and the last, sits
+  // between two neighbours — so every index is checked, wrapping around the loop.
   const n = cells.length
   const bendIndices = closed
     ? Array.from({ length: n }, (_, i) => i)
@@ -167,18 +169,23 @@ export function carriagewayPoints(cells, radius, { closed = false, placed = new 
     const prev = cells[(i - 1 + n) % n]
     const here = cells[i]
     const next = cells[(i + 1) % n]
-    const inDir = { q: here.q - prev.q, r: here.r - prev.r }
-    const outDir = { q: next.q - here.q, r: next.r - here.r }
-    if (inDir.q === outDir.q && inDir.r === outDir.r) continue
+    const inDir = { x: here.x - prev.x, z: here.z - prev.z }
+    const outDir = { x: next.x - here.x, z: next.z - here.z }
+    if (inDir.x === outDir.x && inDir.z === outDir.z) continue
     const w = world[i]
-    const nextWorld = world[(i + 1) % n]
     const k = `${w.x.toFixed(4)},${w.z.toFixed(4)}`
     const existing = out.find((p) => `${p.x.toFixed(4)},${p.z.toFixed(4)}` === k)
-    // A junction tile is four-armed and rotationally symmetric every 90 degrees, so which
-    // heading it carries barely matters visually — but every patch gets one regardless of
-    // kind, so this still assigns the outgoing direction rather than leaving it undefined.
-    if (existing) existing.kind = 'junction'
-    else push(w.x, w.z, 'junction', Math.atan2(nextWorld.z - w.z, nextWorld.x - w.x))
+    // The incoming direction, not the outgoing one: `road_corner`'s modelled entrance sits
+    // on the same local axis `road_straight`'s lane markings run along, so turning it to the
+    // incoming heading — exactly what the straight patch just behind it already carries —
+    // keeps that shared edge lined up. The mesh's own bend then carries the lane on to
+    // whichever of its two perpendicular ports the model bakes in; which of the four ways a
+    // corner can face is what `heading` picks, not which way within the piece it turns.
+    const heading = Math.atan2(inDir.z, inDir.x)
+    if (existing) {
+      existing.kind = 'corner'
+      existing.heading = heading
+    } else push(w.x, w.z, 'corner', heading)
   }
 
   return out
@@ -188,6 +195,7 @@ export function carriagewayPoints(cells, radius, { closed = false, placed = new 
 
 /** The pieces this module draws, all from the city atlas. */
 const STRAIGHT_PART = 'road_straight'
+const CORNER_PART = 'road_corner'
 const JUNCTION_PART = 'road_junction'
 const LAMP_PART = 'streetlight'
 
@@ -210,7 +218,13 @@ const LAMP_PART = 'streetlight'
 export function createRoads({ streets, groundAt }) {
   const group = new THREE.Group()
   group.userData.dispose = () => {}
-  if (!streets || !hasPart(STRAIGHT_PART, 'city') || !hasPart(JUNCTION_PART, 'city')) return group
+  if (
+    !streets ||
+    !hasPart(STRAIGHT_PART, 'city') ||
+    !hasPart(CORNER_PART, 'city') ||
+    !hasPart(JUNCTION_PART, 'city')
+  )
+    return group
 
   const spurRuns = [...streets.spurs.values()].filter((run) => run && run.length)
   const hasRing = streets.ring && streets.ring.length
@@ -218,8 +232,10 @@ export function createRoads({ streets, groundAt }) {
 
   const scale = roadTileScale()
   const straights = new Composer({ kit: 'city' })
+  const corners = new Composer({ kit: 'city' })
   const junctions = new Composer({ kit: 'city' })
   let straightCount = 0
+  let cornerCount = 0
   let junctionCount = 0
 
   // One dedup set shared across the ring and every spur: a spur's chain ends *on* the ring
@@ -228,13 +244,15 @@ export function createRoads({ streets, groundAt }) {
   const placed = new Set()
   // Computed once and reused below for the streetlights, so that second pass doesn't ask
   // `carriagewayPoints` to lay patches onto an already-fully-`placed` set and get nothing back.
-  const ringPatches = hasRing ? carriagewayPoints(streets.ring, PLOT_CELL, { closed: true, placed }) : []
-  const runs = [ringPatches, ...spurRuns.map((run) => carriagewayPoints(run, PLOT_CELL, { placed }))]
+  const ringPatches = hasRing ? carriagewayPoints(streets.ring, CELL_SIZE, { closed: true, placed }) : []
+  const runs = [ringPatches, ...spurRuns.map((run) => carriagewayPoints(run, CELL_SIZE, { placed }))]
+
+  const PART_BY_KIND = { straight: STRAIGHT_PART, corner: CORNER_PART, junction: JUNCTION_PART }
 
   for (const patches of runs) {
     for (const patch of patches) {
-      const composer = patch.kind === 'junction' ? junctions : straights
-      const name = patch.kind === 'junction' ? JUNCTION_PART : STRAIGHT_PART
+      const composer = patch.kind === 'corner' ? corners : patch.kind === 'junction' ? junctions : straights
+      const name = PART_BY_KIND[patch.kind]
       // The carriageway always sits on bare terrain, never on a deck: `planStreets` only
       // takes cells no plot claims (`streets.js`), and the deck is exactly the claimed
       // cells, so no street cell is ever part of it. That's why this follows the ground
@@ -256,16 +274,20 @@ export function createRoads({ streets, groundAt }) {
       // the geometry about Y before it is placed, and turning the local +Z axis to point
       // along `heading` takes ry = PI/2 - heading (the local Z axis (0,0,1) rotated by that
       // angle lands on (cos(heading), sin(heading)), i.e. the world direction atan2 was
-      // built from). A junction tile's heading barely matters — see `carriagewayPoints` —
-      // but every patch, straight or junction, still gets rotated to it.
+      // built from). A junction tile's heading barely matters — four-armed and rotationally
+      // symmetric every 90 degrees, see `carriagewayPoints` — but a corner's heading is
+      // exactly what turns it to face its bend, and every patch, whatever its kind, still
+      // gets rotated to the heading it carries.
       composer.add(name, { s: scale, x: patch.x, y, z: patch.z, ry: Math.PI / 2 - patch.heading })
-      if (patch.kind === 'junction') junctionCount++
+      if (patch.kind === 'corner') cornerCount++
+      else if (patch.kind === 'junction') junctionCount++
       else straightCount++
     }
   }
 
   const meshes = []
   if (straightCount) meshes.push(new THREE.Mesh(straights.finish(), roadMaterial()))
+  if (cornerCount) meshes.push(new THREE.Mesh(corners.finish(), roadMaterial()))
   if (junctionCount) meshes.push(new THREE.Mesh(junctions.finish(), roadMaterial()))
 
   if (hasPart(LAMP_PART, 'city') && ringPatches.length) {

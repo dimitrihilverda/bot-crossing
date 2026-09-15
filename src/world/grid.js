@@ -63,17 +63,39 @@ export const neighbours = (cell) => DIRS.map(([dx, dz]) => ({ x: cell.x + dx, z:
 /** Manhattan distance: the number of four-neighbour steps between two cells. */
 export const distance = (a, b) => Math.abs(a.x - b.x) + Math.abs(a.z - b.z)
 
-/** The square outline of cells at Chebyshev distance `radius`. `8 * radius` cells, or one at 0. */
+/**
+ * The square outline of cells at Chebyshev distance `radius`. `8 * radius` cells, or one at 0.
+ *
+ * Walked, not merely listed: consecutive cells are genuine four-neighbours, and the last
+ * cell is a neighbour of the first, so the whole thing is a closed loop a road can actually
+ * follow. That property is load-bearing, not decorative — `streets.js` hands this straight to
+ * `road-mesh.js`'s `carriagewayPoints` as `streets.ring` with `closed: true`, which lays a
+ * straight patch of carriageway between each pair of consecutive entries and a corner
+ * wherever the direction into one differs from the direction out of it. Two cells that merely
+ * share the same outline but sit far apart in the array would turn that hop into a long
+ * diagonal streak of paving across the middle of the colony instead of a ring road, and every
+ * "bend" the walk found would be measuring the wrong thing.
+ */
 export function ring(radius) {
   if (radius <= 0) return [{ x: 0, z: 0 }]
+  // Walk the four edges clockwise, starting at the top-right corner, `2 * radius` steps per
+  // edge — the corner shared with the next edge is that edge's first step, so it is never
+  // pushed twice. `4 * (2 * radius)` is `8 * radius`, matching the doc above.
+  const edges = [
+    [0, 1], // down the right edge
+    [-1, 0], // across the bottom edge
+    [0, -1], // up the left edge
+    [1, 0], // across the top edge, back to the start
+  ]
+  let x = radius
+  let z = -radius
   const out = []
-  for (let x = -radius; x <= radius; x++) {
-    out.push({ x, z: -radius })
-    out.push({ x, z: radius })
-  }
-  for (let z = -radius + 1; z <= radius - 1; z++) {
-    out.push({ x: -radius, z })
-    out.push({ x: radius, z })
+  for (const [dx, dz] of edges) {
+    for (let step = 0; step < 2 * radius; step++) {
+      out.push({ x, z })
+      x += dx
+      z += dz
+    }
   }
   return out
 }
