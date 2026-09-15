@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync, existsSync } from 'node:fs'
 import { SKIN_TONES, skinToneIndexFor } from '../src/agents/skin.js'
 import { HAIR_TONES, hairToneFor, hairToneIndexFor } from '../src/agents/hair.js'
+import { BRAND, GARMENT_CELLS, luminanceOf, recolorByLuminance } from '../src/agents/atlas-cells.js'
 
 const SRC = readFileSync('src/agents/astronauts.js', 'utf8')
 
@@ -259,4 +260,126 @@ test('the face does not glow past 1.0 any more', () => {
   assert.match(SRC, /uGlow = \{ value: 1\.0 \}/, 'uGlow is not set to 1.0')
   assert.doesNotMatch(SRC, /uGlow = \{ value: 1\.85 \}/, 'uGlow is still pushed past 1.0')
   assert.doesNotMatch(SRC, /face\.setColorAt\(i, agent\.eye\)/, 'the face still repaints from the removed agent.eye')
+})
+
+// ── moving-in-crew-garments: the ranger and rogue tunics and trousers move to the
+// Moving-In brand palette. Garment colour is per *set*, not per agent, so it lives in
+// uniforms `_recolorGarment` builds from `GARMENT_CELLS`, not in a third instanced
+// attribute alongside `aSkin`/`aHair` — the two tests below on `_recolorGarment` itself
+// check that the per-set wiring is actually there, and the luminance test after them
+// checks the one thing that needed care: that the recolour cannot flatten a gradient.
+
+test('the five brand hex values match the company colour sheet exactly', () => {
+  // The sheet's own hex column is the authority — see the comment on BRAND in
+  // atlas-cells.js for why the RGB columns for Mid Gray and Light Gray are not it.
+  assert.equal(BRAND.darkBlue, 0x1f262f)
+  assert.equal(BRAND.leafGreen, 0x8dc63f)
+  assert.equal(BRAND.white, 0xffffff)
+  assert.equal(BRAND.midGray, 0x637184)
+  assert.equal(BRAND.lightGray, 0xeff3fa)
+})
+
+test('each named garment cell maps to the colour the brief asked for', () => {
+  const ranger = Object.fromEntries(GARMENT_CELLS.ranger.map((c) => [c.part, c]))
+  const rogue = Object.fromEntries(GARMENT_CELLS.rogue.map((c) => [c.part, c]))
+
+  assert.equal(ranger.tunic.cell, 7)
+  assert.equal(ranger.tunic.target, BRAND.leafGreen)
+  assert.equal(ranger.trousers.cell, 19)
+  assert.equal(ranger.trousers.target, BRAND.darkBlue)
+
+  assert.equal(rogue.tunic.cell, 8)
+  assert.equal(rogue.tunic.target, BRAND.darkBlue)
+  assert.equal(rogue.trousers.cell, 19)
+  // Mid Gray, not Dark Blue: the owner's literal first ask would put both the rogue's
+  // tunic and trousers at the same near-black colour, which reads as one silhouette that
+  // disappears at night. See the comment on GARMENT_CELLS in atlas-cells.js.
+  assert.equal(rogue.trousers.target, BRAND.midGray)
+})
+
+test('_recolorGarment takes the garment set and gives each material its own garment uniforms', () => {
+  // Garment colour is per set, not per agent, so it must be wired as uniforms rather than
+  // as a third instanced attribute riding alongside aSkin/aHair — and setRig must hand the
+  // set through so _recolorGarment knows which set's uniforms to build.
+  assert.match(SRC, /_recolorGarment\(material,\s*set\.id\)/, 'setRig no longer passes the set into _recolorGarment')
+  assert.match(SRC, /_recolorGarment\(material,\s*setId\)/, '_recolorGarment no longer takes the set id')
+  assert.match(SRC, /GARMENT_CELLS\[setId\]/, '_recolorGarment no longer reads GARMENT_CELLS for its set')
+  assert.doesNotMatch(SRC, /attachColorAttribute\(geo,\s*['"]aGarment/, 'garment colour was wired as an instanced attribute instead of a uniform')
+})
+
+test('the garment recolour uses luminance, not the skin/hair ratio, and never touches the untouched cells', () => {
+  assert.match(SRC, /repaintByLuminance/, 'astronauts.js lost the luminance-preserving garment recolour')
+  // The measured, nearly-clipping case this task exists to avoid: the ratio path is used
+  // for skin and hair only.
+  assert.match(SRC, /uSkinBase,\s*vSkin/, 'skin no longer uses the ratio path')
+  assert.match(SRC, /uHairBase,\s*vHair/, 'hair no longer uses the ratio path')
+})
+
+// The luminance arithmetic itself, as a pure function both this test and the shader agree
+// on (`recolorByLuminance`/`luminanceOf` in atlas-cells.js; the GLSL in `_recolorGarment`
+// is a hand-kept mirror of it, since GLSL cannot call into JS — see the comment there).
+//
+// Darkest, mid and lightest texels below are measured off the source
+// `assets-src/KayKit_Adventurers_2.0_FREE/Characters/gltf/{Ranger,Rogue}.glb` atlases, at
+// the same three points `tools/atlas-cells.mjs` samples a cell at (its vertical middle) plus
+// the top and bottom of the opaque gradient — not guessed. Ranger cell 7's mid and lightest
+// match this task's own report (mid (126,90,73), lightest (159,116,89)) to within a rounding
+// step.
+const GRADIENTS = {
+  'ranger tunic (cell 7 -> Leaf Green)': {
+    darkest: [93, 65, 57],
+    mid: [126, 91, 73],
+    lightest: [159, 116, 89],
+    target: BRAND.leafGreen,
+  },
+  'ranger trousers (cell 19 -> Dark Blue)': {
+    darkest: [93, 65, 57],
+    mid: [126, 91, 73],
+    lightest: [159, 116, 89],
+    target: BRAND.darkBlue,
+  },
+  'rogue tunic (cell 8 -> Dark Blue)': {
+    darkest: [11, 54, 58],
+    mid: [9, 98, 83],
+    lightest: [6, 143, 109],
+    target: BRAND.darkBlue,
+  },
+  'rogue trousers (cell 19 -> Mid Gray)': {
+    darkest: [125, 61, 44],
+    mid: [155, 90, 69],
+    lightest: [178, 112, 82],
+    target: BRAND.midGray,
+  },
+}
+
+const to01 = (rgb255) => rgb255.map((v) => v / 255)
+const hexTo01 = (hex) => [((hex >> 16) & 255) / 255, ((hex >> 8) & 255) / 255, (hex & 255) / 255]
+
+for (const [label, { darkest, mid, lightest, target }] of Object.entries(GRADIENTS)) {
+  test(`recolorByLuminance keeps ${label} in light-to-dark order and in range`, () => {
+    const midLum = luminanceOf(to01(mid))
+    const targetRgb = hexTo01(target)
+    const outputs = [darkest, mid, lightest].map((texel) => recolorByLuminance(to01(texel), midLum, targetRgb))
+
+    // No channel exceeds 1.0 (the ratio path's failure mode: ranger cell 7's lightest texel
+    // through it lands the green channel exactly on 255).
+    for (const out of outputs) {
+      for (const channel of out) assert.ok(channel <= 1.0 + 1e-9, `channel ${channel} exceeds 1.0`)
+      for (const channel of out) assert.ok(channel >= 0, `channel ${channel} is negative`)
+    }
+
+    // The cell's own light-to-dark ordering survives: the recoloured darkest texel is still
+    // darker than the recoloured mid, which is still darker than the recoloured lightest.
+    const [darkOut, midOut, lightOut] = outputs.map(luminanceOf)
+    assert.ok(darkOut < midOut, `darkest (${darkOut}) is not below mid (${midOut}) after recolouring`)
+    assert.ok(midOut < lightOut, `mid (${midOut}) is not below lightest (${lightOut}) after recolouring`)
+  })
+}
+
+test('recolorByLuminance guards a near-zero mid luminance the way the ratio path guards its base', () => {
+  const out = recolorByLuminance([0.01, 0.01, 0.01], 0, [1, 0, 0])
+  for (const channel of out) {
+    assert.ok(Number.isFinite(channel), `channel ${channel} is not finite`)
+    assert.ok(channel <= 1.0 + 1e-9, `channel ${channel} exceeds 1.0`)
+  }
 })

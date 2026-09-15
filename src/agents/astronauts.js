@@ -6,7 +6,7 @@ import { hairToneFor } from './hair.js'
 import { GARMENT_SETS, garmentSetIndexFor } from './garment-sets.js'
 import { SUIT_TONES } from './workwear.js'
 import { skinToneFor } from './skin.js'
-import { CELL_BASE, CELL_HAIR, CELL_SKIN, cellRect } from './atlas-cells.js'
+import { CELL_BASE, CELL_HAIR, CELL_SKIN, GARMENT_CELLS, cellRect } from './atlas-cells.js'
 
 /**
  * Every astronaut in the colony, drawn in a handful of draw calls.
@@ -332,7 +332,7 @@ export class Astronauts {
         new THREE.MeshStandardMaterial({ map: set.texture, roughness: 0.68, metalness: 0.04 }),
         this.crewUniforms
       )
-      this._recolorGarment(material)
+      this._recolorGarment(material, set.id)
 
       const mesh = new THREE.InstancedMesh(geo, material, this.capacity)
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
@@ -482,10 +482,17 @@ export class Astronauts {
   }
 
   /**
-   * Patch a garment material's shader to repaint two cells of its own atlas per instance:
-   * skin and hair (`CELL_SKIN`/`CELL_HAIR`, see `atlas-cells.js`). The third cell that atlas
-   * module documents — eyes and brows — is deliberately left unrepainted; see its own comment
-   * there for why.
+   * Patch a garment material's shader to repaint several cells of its own atlas: skin and
+   * hair (`CELL_SKIN`/`CELL_HAIR`, see `atlas-cells.js`) per *instance*, from the `aSkin`/
+   * `aHair` attributes, plus this set's own garment cells (`GARMENT_CELLS[setId]` — the
+   * tunic and trousers, moved to the Moving-In brand palette) per *set*, from uniforms. The
+   * third cell `atlas-cells.js` documents — eyes and brows — is deliberately left
+   * unrepainted; see its own comment there for why.
+   *
+   * Garment colour is per set, not per agent — every Ranger's tunic is the same Leaf Green —
+   * so unlike skin and hair it has no reason to be an instanced attribute. It is one uniform
+   * pair (base, target) per garment cell instead, set once when this material is built for
+   * `setId`'s `GARMENT_CELLS` entry and shared by every instance drawn with this material.
    *
    * Applied on top of `decorateSkinned` — called after it in `setRig`, so this always wraps a
    * material whose `onBeforeCompile` already carries the skinning patch — rather than folded
@@ -501,7 +508,7 @@ export class Astronauts {
    * file: uniforms assigned onto `shader.uniforms`, chunks found and replaced by their
    * `#include` marker, comments explaining *why* each anchor was chosen.
    */
-  _recolorGarment(material) {
+  _recolorGarment(material, setId) {
     const skinned = material.onBeforeCompile
     const skinRect = cellRect(CELL_SKIN)
     const hairRect = cellRect(CELL_HAIR)
@@ -512,6 +519,15 @@ export class Astronauts {
       `( ${uv}.x >= ${r.u0.toFixed(6)} && ${uv}.x < ${r.u1.toFixed(6)} && ` +
       `${uv}.y >= ${r.v0.toFixed(6)} && ${uv}.y < ${r.v1.toFixed(6)} )`
 
+    // This set's own garment cells — tunic and trousers, both sets — and the uniform names
+    // each gets, one base/target pair apiece. Built from the `part` string rather than
+    // hand-listed twice, so a set with a different number of repainted cells (there is none
+    // today) would not need this method rewritten.
+    const garmentCells = GARMENT_CELLS[setId] || []
+    const cap = (s) => s[0].toUpperCase() + s.slice(1)
+    const baseUniform = (part) => `u${cap(part)}Base`
+    const targetUniform = (part) => `u${cap(part)}Target`
+
     material.onBeforeCompile = (shader) => {
       skinned(shader)
       // The two base colours the ratio substitution divides by. Passed in from `CELL_BASE`
@@ -519,12 +535,20 @@ export class Astronauts {
       // apart.
       shader.uniforms.uSkinBase = { value: new THREE.Color(CELL_BASE[CELL_SKIN]) }
       shader.uniforms.uHairBase = { value: new THREE.Color(CELL_BASE[CELL_HAIR]) }
+      // One base/target uniform pair per garment cell this set repaints, read straight from
+      // `GARMENT_CELLS` rather than typed into the GLSL below — same reasoning as the skin
+      // and hair bases above.
+      for (const { part, base, target } of garmentCells) {
+        shader.uniforms[baseUniform(part)] = { value: new THREE.Color(base) }
+        shader.uniforms[targetUniform(part)] = { value: new THREE.Color(target) }
+      }
 
       // Vertex: carry the two per-instance colours through to the fragment stage. Three's
       // `MeshStandardMaterial` already declares `vMapUv` for us (via `USE_MAP`, since every
       // garment material has a `map`), so only the two new varyings need declaring here —
       // verified against the installed three 0.185's own `uv_pars_fragment.glsl.js` rather
-      // than assumed.
+      // than assumed. The garment colours need no varying: they are per set, not per
+      // instance, so the uniforms declared below are read straight in the fragment stage.
       shader.vertexShader = shader.vertexShader
         .replace(
           '#include <uv_pars_vertex>',
@@ -541,12 +565,31 @@ export class Astronauts {
            vHair = aHair;`
         )
 
+      const garmentUniformDecls = garmentCells
+        .map(({ part }) => `uniform vec3 ${baseUniform(part)};\n           uniform vec3 ${targetUniform(part)};`)
+        .join('\n           ')
+
+      // One `else if` branch per garment cell, chained onto the skin/hair pair below. Built
+      // from `GARMENT_CELLS[setId]` rather than hand-written per set, so ranger and rogue
+      // share this one code path and a change to the mapping in `atlas-cells.js` cannot
+      // drift out of step with the shader that reads it — the same discipline `inRect`
+      // follows for the rectangle bounds themselves.
+      const garmentBranches = garmentCells
+        .map(
+          ({ cell, part }) =>
+            ` else if ${inRect('vMapUv', cellRect(cell))} {
+               diffuseColor.rgb = repaintByLuminance( texel, ${baseUniform(part)}, ${targetUniform(part)} );
+             }`
+        )
+        .join('')
+
       shader.fragmentShader = shader.fragmentShader
         .replace(
           '#include <common>',
           `#include <common>
            uniform vec3 uSkinBase;
            uniform vec3 uHairBase;
+           ${garmentUniformDecls}
            varying vec3 vSkin;
            varying vec3 vHair;
 
@@ -554,8 +597,39 @@ export class Astronauts {
            // gradient, and flattening it to one colour throws away the shading that makes
            // these models read as cloth. Dividing by the cell's own mid colour and
            // multiplying by the target keeps the gradient and moves only the hue.
+           //
+           // Used for skin and hair only. It is nearly but not quite safe for the garment
+           // cells below too — measured on the built atlas, ranger cell 7's lightest texel
+           // through this path lands the green channel exactly on 255 on its way to Leaf
+           // Green, flattening the top of that one gradient — so the garments use
+           // \`repaintByLuminance\` instead, which never runs a channel past the target
+           // colour's own.
            vec3 repaint( vec3 texel, vec3 base, vec3 target ) {
              return texel * ( target / max( base, vec3( 0.02 ) ) );
+           }
+
+           // Luminance-preserving recolour for the garment cells. Mirrors \`luminanceOf\` and
+           // \`recolorByLuminance\` in atlas-cells.js weight for weight and step for step —
+           // GLSL cannot call that function directly, so this is the hand-kept copy of it;
+           // \`test/crew-look.test.mjs\` exercises the JS original against the atlas's own
+           // measured darkest/mid/lightest texels for every one of these cells. Takes the
+           // texel's own luminance as a fraction of the cell's mid luminance and scales the
+           // *brand* colour by that fraction, rather than scaling the texel by a target/base
+           // ratio — the cell keeps its full light-to-dark ramp, and every channel of the
+           // result is bounded by the brand colour's own, so it cannot run past 1.0 the way
+           // the ratio above can.
+           //
+           // Named \`garmentLuma\`, not \`luminance\`: three's own \`common.glsl.js\` chunk
+           // already declares a \`float luminance( const in vec3 rgb )\` — this material
+           // includes it too, and a same-named redeclaration here fails to compile
+           // ("function already has a body"), which is a mistake that only shows up once the
+           // shader is actually linked, not by reading the string.
+           float garmentLuma( vec3 c ) {
+             return dot( c, vec3( 0.2126, 0.7152, 0.0722 ) );
+           }
+           vec3 repaintByLuminance( vec3 texel, vec3 base, vec3 target ) {
+             float frac = garmentLuma( texel ) / max( garmentLuma( base ), 0.02 );
+             return target * frac;
            }`
         )
         .replace(
@@ -564,20 +638,21 @@ export class Astronauts {
            // Re-sample the raw atlas texel here rather than trust \`diffuseColor\`: the
            // \`#include <color_fragment>\` line just above has already multiplied it by this
            // instance's own garment tint (\`agent.suit\`, an unrelated per-agent colour
-           // written in \`_writeMatrices\`). Skin and hair are the mover's own identity, not
-           // the cloth it is wearing, so they must not be muddied by a tint that has nothing
-           // to do with them — each branch below overrides \`diffuseColor.rgb\` outright from
-           // a fresh sample rather than building on whatever the tint left. The eyes-and-brows
-           // cell is left out of this test entirely: it is not repainted, so the atlas texel
-           // already sampled by \`#include <color_fragment>\` above is exactly what the pack
-           // painted, tinted only by the garment's own suit colour like the rest of the cloth.
+           // written in \`_writeMatrices\`). Skin, hair and the brand garment cells are none of
+           // them that tint, so they must not be muddied by it — each branch below overrides
+           // \`diffuseColor.rgb\` outright from a fresh sample rather than building on whatever
+           // the tint left. The eyes-and-brows cell, and every cell not listed in
+           // \`GARMENT_CELLS\` (belts, buckles, boots, straps, trims), are left out of this
+           // chain entirely: for them, the atlas texel already sampled by
+           // \`#include <color_fragment>\` above is exactly what the pack painted, tinted only
+           // by the garment's own suit colour like the rest of the cloth.
            {
              vec3 texel = texture2D( map, vMapUv ).rgb;
              if ${inRect('vMapUv', skinRect)} {
                diffuseColor.rgb = repaint( texel, uSkinBase, vSkin );
              } else if ${inRect('vMapUv', hairRect)} {
                diffuseColor.rgb = repaint( texel, uHairBase, vHair );
-             }
+             }${garmentBranches}
            }`
         )
     }
