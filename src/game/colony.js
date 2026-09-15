@@ -1263,7 +1263,7 @@ export class Colony {
     if (!route) {
       const house = houses[vehicle.addressSeed % houses.length]
       const houseCell = worldToCell(house.mesh.position.x, house.mesh.position.z)
-      const points = roadCells(SHIP_CELL_FOR_STREETS, houseCell, this.streets?.all).map((c) => cellWorld(c.q, c.r))
+      const points = roadCells(SHIP_CELL_FOR_STREETS, houseCell, this.streets?.all).map((c) => cellWorld(c.x, c.z))
       route = { points, length: pathLength(points) }
       this._trafficRoutes.set(key, route)
     }
@@ -1308,7 +1308,7 @@ export class Colony {
     // The cell sequence is the only thing the streets change. Everything below — the kerb
     // pull-back, the cache key, the route object — is stage 2's, verified by hand over 600
     // frames, and is deliberately left alone.
-    const points = roadCells(start, end, this.streets?.all).map((c) => cellWorld(c.q, c.r))
+    const points = roadCells(start, end, this.streets?.all).map((c) => cellWorld(c.x, c.z))
 
     // The last cell centre is not the address: parking on it leaves the car a half-cell short
     // of the house it was sent to, or sitting in a neighbour's garden. The house's own centre

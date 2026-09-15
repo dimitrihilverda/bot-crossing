@@ -270,17 +270,13 @@ test('the cells the allocator hands back are read as x/z, not q/r', () => {
   assert.match(src, /deckedCells\?\.get\(`\$\{cell\.x\},\$\{cell\.z\}`\)/, 'groundAt still looks deckedCells up by q/r')
 })
 
-test('roadCells output is now {x, z}, but colony.js still reads it as q/r until Task 6', () => {
-  // The other side of the same boundary: roadCells (src/world/road-path.js) is Task 4's file,
-  // and after Task 4 it returns {x, z} cells like everything else on this lattice. colony.js is
-  // Task 6's file and has not moved these two reads yet, so today they read undefined off a
-  // real object and turn a route into two cells of NaN -- a live bug now, not a harmless
-  // mismatch, until Task 6 renames them to .x/.z. Fixing them here would not help -- colony.js
-  // is not this task's file to edit -- so this test only pins their count, for Task 6 to know
-  // exactly how many call sites need changing.
+test('roadCells output is now {x, z}, and colony.js reads it correctly', () => {
+  // The other side of the same boundary: roadCells (src/world/road-path.js) returns {x, z}
+  // cells like everything else on this lattice, and colony.js now reads them correctly as
+  // .x/.z instead of the old hexagonal .q/.r fields.
   const src = readFileSync('src/game/colony.js', 'utf8')
   const reads = src.match(/cellWorld\(c\.q, c\.r\)/g) || []
-  assert.equal(reads.length, 2, `expected 2 untouched roadCells reads, found ${reads.length}`)
+  assert.equal(reads.length, 0, `expected 0 old-style roadCells reads, found ${reads.length}`)
 })
 
 test('the persisted layout shape is still an array of two integers', () => {
@@ -326,4 +322,13 @@ test('worldToCell . cellWorld round-trips every cell, -0 included', () => {
       assert.equal(`${back.x},${back.z}`, `${x},${z}`, 'the string key differs even where deepEqual would not')
     }
   }
+})
+
+test('colony.js reads square cells, never the old axial fields', () => {
+  // The lattice went from hexagonal to square, so cells are { x, z }. A surviving `.q`/`.r`
+  // read yields undefined, cellWorld returns NaN, and every route becomes a NaN polyline --
+  // which no unit test catches, because the routing underneath is perfectly correct.
+  const src = readFileSync('src/game/colony.js', 'utf8')
+  assert.doesNotMatch(src, /cellWorld\([^)]*\.q\b/, 'a cellWorld call still reads .q')
+  assert.doesNotMatch(src, /\bc\.q\b|\bc\.r\b|\bcell\.q\b|\bcell\.r\b/, 'a cell field is still read as .q/.r')
 })
