@@ -6,10 +6,14 @@ traffic (4), crew garments (5) and the square lattice (6).
 
 > **This spec was written before the colony's lattice was squared, and assumes a hexagonal
 > colony.** Its content stands — the 2 × 2 module, the derived-layer rule, the flattened
-> ground, the budget — but two things in it are now wrong and must be revisited before it is
-> planned: the town no longer needs its own grid separate from the colony's, and the "join
+> ground, the budget — but three things in it are now wrong and must be revisited before it is
+> planned: the town no longer needs its own grid separate from the colony's; the "join
 > between the two road networks" it names as a known unfinished edge does not exist, because
-> there is only one network. See
+> there is only one network; and the two passages saying the colony's own streets "keep their
+> 120° compromise" and that "the markings do not line up" (under "What the packs actually
+> contain" and again under "Explicitly not doing") are no longer true — that compromise was
+> removed in the square-lattice stage, and every bend on the colony's streets is now a real
+> right angle, laid with the kit's own corner piece. See
 > `docs/superpowers/specs/2026-09-15-moving-in-square-lattice-design.md`.
 **Preceding specs:** `docs/superpowers/specs/2026-09-10-moving-in-streets-and-traffic-design.md`,
 `docs/superpowers/specs/2026-09-11-moving-in-crew-garments-design.md`

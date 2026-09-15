@@ -190,3 +190,67 @@ exists to answer, so an early task should put it on screen before the rest is bu
   `server/`, and a client-side scheme would add a field to a file a colleague's merge logic
   owns. One rearrangement is the accepted cost.
 - **No change to `server/`, to Dimitri's Hub, or to his installer.**
+
+## What actually happened
+
+Verified against the code at HEAD (`f9ca2e3`), not copied from the recommendation above.
+
+**Pitch and slots: the plan's recommendation, taken as written.** `src/world/grid.js` sets
+`CELL_SIZE = 12`; `src/world/plots.js` sets `SLOTS_PER_CELL = 9` in the 3 × 3 arrangement this
+spec recommended, at 4.0 world units between slot centres (`CELL_SIZE / 3`), leaving **1.1** of
+clearance around a 2.9-wide house — tighter than the hex lattice's 1.47, as this spec expected.
+The 18-unit alternative was not taken. The tightness was looked at on screen, as the "it has to
+be looked at" section demanded, and kept on purpose: `grid.js`'s own comment on `CELL_SIZE`
+records the reasoning — it reads as urban density rather than crowding, and the finer growth
+curve (`cellsNeeded(threads) = ceil(threads / 9)`) beats the lumpier one 18 would give. `plots.js`
+still separately freezes `MAX_CELLS = 9`, unrelated to and unchanged by the `SLOTS_PER_CELL`
+rename from 7.
+
+**`SHIP_CELL` became `{ x: -2, z: 0 }`.** `src/world/plots.js` picks it as the square cell
+nearest the depot's old hex position (`{ q: -2, r: 1 }`, world `(-22.8, 0)`):
+`worldToCell(-22.8, 0)` rounds to `(-2, 0)`, and the comment above the constant says so.
+
+**`DETOUR_MARGIN` held, and stayed at 8.** This spec only asked whether it still held under
+Manhattan distances; `src/world/road-path.js` answers with a measurement, not an assumption —
+run over every depot-to-plot and a sampled plot-to-plot pair on generated colonies from 5 to
+288 plots (ring sizes up to 72 cells), a margin of 0 always sufficed for reachability, and the
+comment derives why: the set of cells within budget of the goal is a Manhattan ball, connected
+under four-neighbour adjacency, so it always contains the origin once the budget is non-negative.
+8 was kept anyway, unchanged from the hex lattice's value, as working room for the search to
+prefer street cells — not because reachability needed it.
+
+**`merge-state.js` survived untouched.** `git log -- src/game/merge-state.js` shows no commit
+in this stage touches it; its last change predates the stage entirely. `colonyAnchor`'s
+even-spacing behaviour carries over exactly as this spec required: it still calls `ring` off the
+square lattice and hands `merge-state.js` the same opaque cell values it always did.
+
+**Where an implementer ruled differently from this plan:**
+
+- **`ring()` had to be a walkable loop, not merely the right set of cells — and the first cut
+  of it wasn't.** This spec's testing section only asked for `ring(n)` to return `8n` cells at
+  Chebyshev distance `n`; it does not mention order. The first square `ring()`, in the commit
+  that introduced `grid.js` itself, listed cells row by row and was not a loop of four-neighbour
+  steps. That was silently wrong for two consumers that need to *walk* the
+  result — the road ring in `road-mesh.js`'s `carriagewayPoints`, and `colonyAnchor`, which
+  indexes into the ring proportionally to spread visiting colonies evenly — because a
+  non-adjacent jump between consecutive entries reads as a long diagonal streak of paving, or
+  as a colony landing on the wrong ground. It was corrected, in the same stage, to walk the
+  four edges in order so consecutive cells are genuine neighbours and the last closes back to
+  the first; `grid.js`'s current `ring()` comment states the requirement explicitly so it is
+  not lost again.
+- **The corner heading convention (incoming direction, not outgoing) was settled by rendering,
+  not by argument.** A review pass flagged `road-mesh.js`'s choice of the incoming direction as
+  plausibly 180° wrong, reasoning from the GLB's raw vertex data. Rather than resolve that by
+  more reasoning about vertices neither side could fully trust, the dispute was settled by
+  building all three candidate headings (incoming, outgoing, incoming+180) at one real bend and
+  looking at the seams up close: incoming produced a continuous kerb and lane markings at both
+  seams; the other two showed a visible kink or a detached corner tile. No production code
+  changed — the original choice was already correct — but the test pinning it was strengthened
+  to derive the expected heading from the bend's own cells instead of hardcoding the constant
+  the code happened to produce, so a future 180° regression fails instead of passing quietly.
+- **Real corner pieces landed as a distinct step, once every bend was a genuine 90°.** The
+  four-armed `road_junction` patch this spec's "Why" section describes is gone; a bend now gets
+  a real `road_corner` tile at the incoming heading, replacing the straight patch that would
+  otherwise sit on its centre.
+
+`npm test`: 279 passing, 0 failing. `npm run build`: succeeds. `git diff -- server/`: empty.
