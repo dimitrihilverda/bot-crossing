@@ -104,18 +104,19 @@ test('a colony whose plots are separated by street cells is still connected', ()
   // Two plots two cells apart, with the cell between them a street. Without street
   // passability this layout is judged disconnected and re-seeded from the middle on
   // every poll — the exact upheaval `allocateCells` exists to prevent.
+  // Plots deliberately avoid the depot's cell at { x: -2, z: 0 }.
   const previous = new Map([
-    ['a', [{ x: -2, z: 0 }]],
-    ['b', [{ x: 2, z: 0 }]],
+    ['a', [{ x: -2, z: 2 }]],
+    ['b', [{ x: 2, z: 2 }]],
   ])
   const projects = [
     { id: 'a', size: 1 },
     { id: 'b', size: 1 },
   ]
-  const streets = new Set(['-1,0', '0,0', '1,0'])
+  const streets = new Set(['-1,2', '0,2', '1,2'])
   const out = allocateCells(projects, previous, streets)
-  assert.deepEqual(out.get('a'), [{ x: -2, z: 0 }], 'plot a moved')
-  assert.deepEqual(out.get('b'), [{ x: 2, z: 0 }], 'plot b moved')
+  assert.deepEqual(out.get('a'), [{ x: -2, z: 2 }], 'plot a moved')
+  assert.deepEqual(out.get('b'), [{ x: 2, z: 2 }], 'plot b moved')
 })
 
 test('a genuinely scattered colony is still re-seeded', () => {
@@ -160,15 +161,16 @@ test('a layout re-allocated from its own memory does not move', () => {
 })
 
 test('a colony split only by street cells is still connected', () => {
+  // Plots deliberately avoid the depot's cell at { x: -2, z: 0 }.
   const previous = new Map([
-    ['a', [{ x: -2, z: 0 }]],
-    ['b', [{ x: 2, z: 0 }]],
+    ['a', [{ x: -2, z: 2 }]],
+    ['b', [{ x: 2, z: 2 }]],
   ])
   const projects = [{ id: 'a', size: 1 }, { id: 'b', size: 1 }]
-  const streets = new Set(['-1,0', '0,0', '1,0'])
+  const streets = new Set(['-1,2', '0,2', '1,2'])
   const out = allocateCells(projects, previous, streets)
-  assert.deepEqual(out.get('a'), [{ x: -2, z: 0 }], 'plot a moved')
-  assert.deepEqual(out.get('b'), [{ x: 2, z: 0 }], 'plot b moved')
+  assert.deepEqual(out.get('a'), [{ x: -2, z: 2 }], 'plot a moved')
+  assert.deepEqual(out.get('b'), [{ x: 2, z: 2 }], 'plot b moved')
 })
 
 test('a genuinely scattered colony is still re-seeded (wide split)', () => {
