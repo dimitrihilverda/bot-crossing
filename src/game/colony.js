@@ -28,6 +28,7 @@ import {
 import { planStreets } from '../world/streets.js'
 import { roadCells } from '../world/road-path.js'
 import { createRoads } from '../world/road-mesh.js'
+import { createTown } from '../world/town-mesh.js'
 import { Deliveries, CAR_SPEED } from '../world/deliveries.js'
 import { TrafficCars } from '../world/traffic-cars.js'
 import { MAX_TRAFFIC, newVehicle, stepVehicle, trafficCount } from '../world/traffic.js'
@@ -488,6 +489,19 @@ export class Colony {
     this.roadGroup = createRoads({ streets: this.streets, groundAt: (x, z) => this.groundAt(x, z) })
     this.worldGroup.add(this.roadGroup)
     const layout = allocateCells(projectList, this.plotCells, this.streets.all)
+
+    // Every cell the colony itself occupies: every plot's cells, plus the depot's own —
+    // `townPlan` skips these so a town building never lands on ground the colony already
+    // claims. Built from `layout`, not `this.plotCells`, so a zone that just vanished frees
+    // its block on the same poll rather than a tick later.
+    const claimed = new Set([key(SHIP_CELL_FOR_STREETS.x, SHIP_CELL_FOR_STREETS.z)])
+    for (const cells of layout.values()) {
+      for (const cell of cells) claimed.add(key(cell.x, cell.z))
+    }
+    this.townGroup?.userData.dispose?.()
+    if (this.townGroup) this.worldGroup.remove(this.townGroup)
+    this.townGroup = createTown({ streets: this.streets.all, claimed, groundAt: (x, z) => this.groundAt(x, z) })
+    this.worldGroup.add(this.townGroup)
 
     // Remembered, not replaced: a project that has just lost its last thread keeps its
     // ground on the books, and the oldest entries fall off the end.
@@ -1399,6 +1413,7 @@ export class Colony {
     this.deliveries.dispose()
     this.traffic.dispose()
     this.roadGroup?.userData.dispose?.()
+    this.townGroup?.userData.dispose?.()
     disposeTree(this.worldGroup)
     disposeTree(this.plotGroup)
     disposeTree(this.labelGroup)
