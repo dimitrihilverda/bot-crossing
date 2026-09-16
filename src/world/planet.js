@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { atlasTexture, hasPart, part } from './kit.js'
-export { mulberry } from './rng.js'
+import { mulberry } from './rng.js'
+export { mulberry }
 
 /**
  * The three worlds you can put the colony on, and the terrain generator that draws them.
@@ -71,6 +72,17 @@ export const PLANETS = {
 const GROUND_SIZE = 340
 /** Everything inside this radius is the buildable colony, and is kept nearly flat. */
 export const COLONY_RADIUS = 46
+/**
+ * Everything inside this radius is the town, and is kept flat.
+ *
+ * `TOWN_CELL_RADIUS` (8) cells at `CELL_SIZE` (12) reaches 96 units to the outermost cell
+ * centre, plus half a cell for its far edge: 102. 104 gives the outline a little slack.
+ *
+ * Widening this **moves the hills outward**, which changes the look of the whole world and
+ * not only the town's. That is deliberate: a street network laid over a hill field would ride
+ * up and down it, and the kit's road tiles are flat slabs that cannot follow a slope.
+ */
+export const TOWN_RADIUS = 104
 const DETAIL_SEGMENTS = { low: 72, medium: 128, high: 190 }
 
 /**
@@ -101,7 +113,7 @@ export function createTerrain(planet, detail, seed = 1337) {
 
     // Flat where the colony lives, then hills that ramp in over the next forty metres —
     // so nothing ever builds on a slope but the horizon still has shape to it.
-    const outside = THREE.MathUtils.smoothstep(dist, COLONY_RADIUS - 6, COLONY_RADIUS + 40)
+    const outside = THREE.MathUtils.smoothstep(dist, TOWN_RADIUS - 6, TOWN_RADIUS + 40)
     const gentle = fbm(noise, x * 0.035, z * 0.035, 3) * 0.5
     const hills = fbm(noise, x * 0.012, z * 0.012, 4) * 9 + fbm(noise, x * 0.05, z * 0.05, 2) * 1.4
     let y = gentle * planet.roughness * (1 - outside) + hills * outside * planet.roughness
@@ -152,7 +164,7 @@ export function createTerrain(planet, detail, seed = 1337) {
 
 function sampleHeight(x, z, noise, craters, planet) {
   const dist = Math.hypot(x, z)
-  const outside = THREE.MathUtils.smoothstep(dist, COLONY_RADIUS - 6, COLONY_RADIUS + 40)
+  const outside = THREE.MathUtils.smoothstep(dist, TOWN_RADIUS - 6, TOWN_RADIUS + 40)
   const gentle = fbm(noise, x * 0.035, z * 0.035, 3) * 0.5
   const hills = fbm(noise, x * 0.012, z * 0.012, 4) * 9 + fbm(noise, x * 0.05, z * 0.05, 2) * 1.4
   let y = gentle * planet.roughness * (1 - outside) + hills * outside * planet.roughness
@@ -172,7 +184,7 @@ function makeCraters(count, seed) {
   const out = []
   for (let i = 0; i < count; i++) {
     const a = rand() * Math.PI * 2
-    const d = COLONY_RADIUS + 14 + rand() * 110
+    const d = TOWN_RADIUS + 14 + rand() * 50
     const r = 4 + rand() * 16
     out.push({ x: Math.cos(a) * d, z: Math.sin(a) * d, r, depth: r * (0.18 + rand() * 0.16) })
   }
@@ -302,7 +314,7 @@ export function createScatter(planet, density, keepClear = [], seed = 4242) {
     if (slot >= mesh.instanceMatrix.count) continue
 
     // Far-field props are allowed to be much bigger, which reads as distance.
-    const far = THREE.MathUtils.smoothstep(d, COLONY_RADIUS, 130)
+    const far = THREE.MathUtils.smoothstep(d, TOWN_RADIUS, 200)
     const [lo, hi] = kind.size
     const s = (lo + rand() * (hi - lo)) * (1 + far * 1.9)
 
