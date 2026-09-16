@@ -115,18 +115,27 @@ function slice(rect, rand, add) {
   }
 }
 
+/** Does the cell list `segment` pass through any `PROTECTED_CELLS` entry? */
+function crossesProtectedCell(segment) {
+  return segment.find((c) => PROTECTED_CELLS.some((p) => p.x === c.x && p.z === c.z))
+}
+
 /**
- * Join anything the slicing left stranded.
+ * Join anything the slicing left stranded — without paving over a protected cell.
  *
  * Two cuts on the same axis in sibling rectangles run parallel and never meet, and a jog or a
  * dead end can break the join a child's cut would otherwise make on its parent's. Rather than
  * argue those cases cannot happen — that argument was wrong twice while this plan was being
  * written — this measures the components and connects them, and the test asserts the result.
  *
- * Deterministic: components are walked in the cells' sorted order, and the pair chosen is the
- * first at the smallest Manhattan distance in that order.
+ * Deterministic: components are walked in the cells' sorted order, and among the candidate
+ * pairs whose joining `line()` crosses no `PROTECTED_CELLS` entry, the pair chosen is the
+ * first at the smallest Manhattan distance in that order — exactly the old selection rule,
+ * just applied only to pairs that qualify. If every pair between the two largest components
+ * would cross a protected cell, this throws instead of paving over one: a loud failure at
+ * generation time beats a street silently landing on the depot or the origin.
  */
-function connect(cells) {
+function connect(cells, seed) {
   const keys = new Set(cells.map((c) => key(c.x, c.z)))
   const all = [...cells]
   for (;;) {
@@ -155,11 +164,27 @@ function connect(cells) {
 
     components.sort((a, b) => b.length - a.length)
     let best = null
+    // The smallest-distance pair rejected for crossing a protected cell, kept only to name the
+    // blocked cell in the error if no pair ever qualifies.
+    let nearestBlocked = null
     for (const a of components[1]) {
       for (const b of components[0]) {
         const d = Math.abs(a.x - b.x) + Math.abs(a.z - b.z)
-        if (!best || d < best.d) best = { a, b, d }
+        if (best && d >= best.d) continue
+        const segment = line(a.x, a.z, b.x, b.z)
+        const blocker = crossesProtectedCell(segment)
+        if (blocker) {
+          if (!nearestBlocked || d < nearestBlocked.d) nearestBlocked = { d, cell: blocker }
+          continue
+        }
+        best = { a, b, d }
       }
+    }
+    if (!best) {
+      const at = nearestBlocked ? `{${nearestBlocked.cell.x}, ${nearestBlocked.cell.z}}` : 'a protected cell'
+      throw new Error(
+        `planStreetCells(${seed}): every way to connect the street network crosses protected cell ${at}`
+      )
     }
     for (const c of line(best.a.x, best.a.z, best.b.x, best.b.z)) {
       const k = key(c.x, c.z)
@@ -181,5 +206,5 @@ export function planStreetCells(seed = STREET_SEED, radius = TOWN_CELL_RADIUS) {
   slice({ x0: -radius, z0: -radius, x1: radius, z1: radius }, rand, (x, z) =>
     found.set(key(x, z), { x, z })
   )
-  return connect([...found.values()]).sort((a, b) => a.x - b.x || a.z - b.z)
+  return connect([...found.values()], seed).sort((a, b) => a.x - b.x || a.z - b.z)
 }

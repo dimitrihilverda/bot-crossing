@@ -21,6 +21,21 @@ test('the depot and the origin are never streets', () => {
   }
 })
 
+test('no protected cell is ever a street, across many seeds', () => {
+  // `connect()` stitches disconnected components with `line()`, independently of `slice()`'s
+  // own protected-cell check — a defect there would not show up at the default seed alone.
+  // Seed 44 was the first seed found (out of 0-4999) to pave `{0,0}` before that check existed.
+  // A smaller radius keeps this fast without weakening it: the seed count is what gives this
+  // test its power, not the town's size.
+  const radius = 4
+  for (let seed = 0; seed < 1000; seed++) {
+    const seedKeys = new Set(planStreetCells(seed, radius).map((c) => key(c.x, c.z)))
+    for (const p of PROTECTED_CELLS) {
+      assert.equal(seedKeys.has(key(p.x, p.z)), false, `seed ${seed}: ${p.x},${p.z} is a street`)
+    }
+  }
+})
+
 test('the street network is one connected whole', () => {
   const seen = new Set([key(cells[0].x, cells[0].z)])
   const queue = [cells[0]]
