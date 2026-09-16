@@ -97,12 +97,12 @@ export function blockContent(cell, streetKeys) {
       part: BUILDING_PARTS[Math.floor(rand() * BUILDING_PARTS.length)],
       x: cx + d.x * SET_BACK,
       z: cz + d.z * SET_BACK,
-      // Measured (Task 5 Step 1, on building_A..D): one atlas cell — the door/window band —
-      // sits only on the model's local +Z face, spanning most of its width, never mirrored
-      // to -Z and never pinned to an X face. So a kit building does have a front, and it
-      // faces local +Z. `atan2(d.x, d.z)` is the rotation that turns that local +Z to point
-      // along `d`, the direction from this cell toward the street cell it fronts — so the
-      // door ends up facing the street, not the block's interior.
+      // Measured (Task 5 Step 1, on all eight parts building_A..H): one atlas cell — the
+      // door/window band — sits only on the model's local +Z face, spanning most of its
+      // width, never mirrored to -Z and never pinned to an X face. So a kit building does
+      // have a front, and it faces local +Z. `atan2(d.x, d.z)` is the rotation that turns
+      // that local +Z to point along `d`, the direction from this cell toward the street
+      // cell it fronts — so the door ends up facing the street, not the block's interior.
       ry: Math.atan2(d.x, d.z),
       scale: BUILDING_SCALE,
     })
