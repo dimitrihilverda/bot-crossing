@@ -13,14 +13,16 @@ import { blockContent, inTown } from './town-plan.js'
  */
 
 /**
- * The most geometry the town may add, in vertices — the colony's own count, measured in
+ * The most geometry the town may add, in vertices — a full colony's own count, measured in
  * Task 6 Step 1. Measured: a 40-project colony (`test/route-on-street.test.mjs`'s spread,
  * seeded `mulberry(40 * 7919)`, each project 1-4 threads) places 100 houses in total. Each
  * house (`src/world/houses.js`) draws one shell, picked uniformly from three `_withoutBase`
  * city-kit parts (819 + 1236 + 1581, mean 1212 vertices), plus the same fixed set of eight
  * furniture-kit pieces every house gets regardless of progress (48 + 712 + 600 + 260 + 458 +
  * 1341 + 632 + 304 = 4355 vertices — `aReveal` only discards fragments, it does not remove
- * vertices). 100 * (1212 + 4355) = 556,700, rounded down to 550,000.
+ * vertices). 100 * (1212 + 4355) = 556,700, rounded down to 550,000. A small colony draws far
+ * less — three threads is 16,701 — so this ceiling only bounds the town against a full one;
+ * a young colony's fixed town-plus-street cost outweighs its own houses by a wide margin.
  *
  * The spec's rule is that the scenery must not outweigh the thing it surrounds. If a later
  * change pushes past this, the levers, in order of fewest side effects: the frontage-gap
@@ -51,6 +53,22 @@ export function townPlan({ streets, claimed = new Set() }) {
     }
   }
   return out
+}
+
+/**
+ * The stamp `Colony` compares to decide whether the town needs rebuilding.
+ *
+ * `createTown`'s output is a pure function of three things: the street set, the claimed set,
+ * and `groundAt`. The first two are already carried by `streetStamp` and `claimedStamp`; the
+ * third — `groundAt` — falls through to `terrainHeight(x, z, planet)` for every cell the town
+ * actually queries (it never asks about a claimed cell, so the colony's own deck heights never
+ * enter into it), and `terrainHeight` varies only with `planet.id` among the colony's own
+ * per-poll state. So the stamp is incomplete, and the rebuild guard stale, unless `planetId` is
+ * folded in here too — pulled out as its own function so that fact is testable without a
+ * renderer.
+ */
+export function townStamp(streetStamp, claimedStamp, planetId) {
+  return `${streetStamp}::${claimedStamp}::${planetId}`
 }
 
 /**
@@ -96,7 +114,6 @@ export function createTown({ streets, claimed, groundAt }) {
     for (const mesh of meshes) {
       mesh.geometry.dispose()
       mesh.material.dispose()
-      mesh.customDepthMaterial?.dispose()
     }
   }
   return group

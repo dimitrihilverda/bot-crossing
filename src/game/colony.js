@@ -28,7 +28,7 @@ import {
 import { planStreets } from '../world/streets.js'
 import { roadCells } from '../world/road-path.js'
 import { createRoads } from '../world/road-mesh.js'
-import { createTown } from '../world/town-mesh.js'
+import { createTown, townStamp } from '../world/town-mesh.js'
 import { Deliveries, CAR_SPEED } from '../world/deliveries.js'
 import { TrafficCars } from '../world/traffic-cars.js'
 import { MAX_TRAFFIC, newVehicle, stepVehicle, trafficCount } from '../world/traffic.js'
@@ -498,10 +498,23 @@ export class Colony {
     for (const cells of layout.values()) {
       for (const cell of cells) claimed.add(key(cell.x, cell.z))
     }
-    this.townGroup?.userData.dispose?.()
-    if (this.townGroup) this.worldGroup.remove(this.townGroup)
-    this.townGroup = createTown({ streets: this.streets.all, claimed, groundAt: (x, z) => this.groundAt(x, z) })
-    this.worldGroup.add(this.townGroup)
+    // The town is a pure function of the street plan, the claimed cells, and `groundAt` — and
+    // `groundAt` resolves to `terrainHeight(x, z, this.planet)` for every cell the town ever
+    // queries, so the planet counts as an input too. A poll that moved none of the three
+    // leaves the town identical — rebuilding it anyway is ~150k+ vertices of merge-and-dispose
+    // churn for no visible change. `_streetStamp` already stamps the street plan for exactly
+    // this purpose; `townStamp()` folds `claimed` and `this.planet.id` in alongside it, so a
+    // planet switch (the UI's picker, or the HUD's Tab shortcut) is not missed the way it was
+    // before this stamp covered it — see `src/world/town-mesh.js`.
+    const claimedStamp = [...claimed].sort().join('|')
+    const stamp = townStamp(this._streetStamp, claimedStamp, this.planet.id)
+    if (stamp !== this._townStamp) {
+      this.townGroup?.userData.dispose?.()
+      if (this.townGroup) this.worldGroup.remove(this.townGroup)
+      this.townGroup = createTown({ streets: this.streets.all, claimed, groundAt: (x, z) => this.groundAt(x, z) })
+      this.worldGroup.add(this.townGroup)
+      this._townStamp = stamp
+    }
 
     // Remembered, not replaced: a project that has just lost its last thread keeps its
     // ground on the books, and the oldest entries fall off the end.

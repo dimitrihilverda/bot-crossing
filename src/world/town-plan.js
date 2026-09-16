@@ -47,7 +47,7 @@ const OUTLINE = (() => {
 /** The town's radius, in cells, in the direction `angle`. */
 export function townRadiusAt(angle) {
   let f = 1
-  for (const h of OUTLINE) f -= h.amp * (1 - Math.sin(h.n * angle + h.phase))
+  for (const h of OUTLINE) f -= (h.amp * (1 - Math.sin(h.n * angle + h.phase))) / 2
   return TOWN_CELL_RADIUS * f
 }
 
