@@ -251,6 +251,22 @@ function fallbackShapes(isFlora) {
   return shapes.map((geo) => ({ geo, sink: 0.25, size: [0.28, 0.83], tint: true, upright: false }))
 }
 
+/**
+ * Is world point `(x, z)` inside a `keepClear` entry?
+ *
+ * Two shapes, because one placement problem needs the other: `{x, z, r}` is a circle — right
+ * for a plot or the ship, which are round-ish footprints planted well inside open ground — and
+ * `{x, z, half}` is an axis-aligned square, right for a grid cell whose *edges* matter, such
+ * as a street or a town block. A circle can only approximate a cell: drawn small enough to fit
+ * inside it, it leaves the corners open; drawn large enough to cover the corners, it bleeds
+ * into the neighbouring cell. A square doesn't have that trade-off, which is the whole reason
+ * this shape was added — see `town-plan.js`'s `keepClearCells`.
+ */
+function inKeepClear(x, z, p) {
+  if (p.half != null) return Math.abs(x - p.x) < p.half && Math.abs(z - p.z) < p.half
+  return Math.hypot(x - p.x, z - p.z) < p.r
+}
+
 export function createScatter(planet, density, keepClear = [], seed = 4242) {
   const group = new THREE.Group()
   group.name = 'scatter'
@@ -305,7 +321,7 @@ export function createScatter(planet, density, keepClear = [], seed = 4242) {
     const d = 9 + Math.sqrt(rand()) * 150
     const x = Math.cos(a) * d
     const z = Math.sin(a) * d
-    if (keepClear.some((p) => Math.hypot(x - p.x, z - p.z) < p.r)) continue
+    if (keepClear.some((p) => inKeepClear(x, z, p))) continue
 
     const which = pickKind()
     const kind = kinds[which]

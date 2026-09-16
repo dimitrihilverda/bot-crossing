@@ -29,6 +29,7 @@ import { planStreets } from '../world/streets.js'
 import { roadCells } from '../world/road-path.js'
 import { createRoads } from '../world/road-mesh.js'
 import { createTown, townStamp } from '../world/town-mesh.js'
+import { keepClearCells } from '../world/town-plan.js'
 import { Deliveries, CAR_SPEED } from '../world/deliveries.js'
 import { TrafficCars } from '../world/traffic-cars.js'
 import { MAX_TRAFFIC, newVehicle, stepVehicle, trafficCount } from '../world/traffic.js'
@@ -259,13 +260,19 @@ export class Colony {
   }
 
   /**
-   * Ground scatter, placed to miss every tile of every plot and the ship's apron.
+   * Ground scatter, placed to miss every tile of every plot, the ship's apron, and — since
+   * the owner reported trees and rocks landing on the carriageway — every street and built
+   * cell of the town. Green blocks are the one part of the town left open, which is what
+   * plants them: the same wild-scatter pass that dresses the countryside also seeds them,
+   * because nothing there is fenced off.
    *
    * Kept separate from the terrain because of *when* it has to run: the world is built
    * before the first roster arrives, so at that point there are no plots to avoid, and
    * boulders and trees end up under decks that are laid on top of them afterwards — poking
    * through in fragments. So this runs again whenever a zone's footprint changes, which is
-   * cheap next to rebuilding the terrain mesh alongside it.
+   * cheap next to rebuilding the terrain mesh alongside it. The town is not known yet either,
+   * on that same first build — `this.streets` only exists once `_syncPlots` has run once —
+   * so the town fence is added only when it does.
    */
   _buildScatter() {
     if (this.scatterGroup) {
@@ -280,9 +287,17 @@ export class Colony {
     }
     const ship = shipPosition()
     clear.push({ x: ship.x, z: ship.z, r: 7.5 })
+    if (this.streets) {
+      clear.push(...keepClearCells({ streets: this.streets.all, claimed: this._claimedCells || new Set() }))
+    }
     this.scatterGroup = createScatter(this.planet, this.settings.get('scatterDensity'), clear)
     this.worldGroup.add(this.scatterGroup)
     this._scatterFootprint = this._plotFootprint()
+    // Whether this build knew the streets — so a colony with no plots yet (footprint stays
+    // empty across the first `_syncPlots`) still gets its scatter fenced off the town the
+    // moment the street plan exists, rather than waiting on a footprint change that may never
+    // come.
+    this._scatterHadStreets = !!this.streets
     // The crew routes around scatter, so a new scatter is a new navigation grid.
     if (this.nav) this._rebuildNavigation()
   }
@@ -498,6 +513,9 @@ export class Colony {
     for (const cells of layout.values()) {
       for (const cell of cells) claimed.add(key(cell.x, cell.z))
     }
+    // Scatter's own rebuild (`_buildScatter`, triggered below by a footprint change) runs
+    // later in this same poll and wants the same claimed set the town was just built from.
+    this._claimedCells = claimed
     // The town is a pure function of the street plan, the claimed cells, and `groundAt` — and
     // `groundAt` resolves to `terrainHeight(x, z, this.planet)` for every cell the town ever
     // queries, so the planet counts as an input too. A poll that moved none of the three
@@ -578,7 +596,8 @@ export class Colony {
     this.plotOrder = [...this.plots.values()]
     this._syncColonyBanners()
     // Zones that just moved, appeared or grew are zones the scatter does not know about.
-    if (this.scatterGroup && this._plotFootprint() !== this._scatterFootprint) this._buildScatter()
+    if (this.scatterGroup && (this._plotFootprint() !== this._scatterFootprint || (this.streets && !this._scatterHadStreets)))
+      this._buildScatter()
     // Which cells are decked. Ground height is asked for once per moving agent per
     // frame, so it wants to be a lookup rather than a scan over every plot's every tile.
     // Cell → the deck's top height there, so the crew stands on a sunk district's deck rather

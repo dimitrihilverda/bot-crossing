@@ -30,6 +30,15 @@ export const BUILDING_SCALE = 3.5
 /** How much of the block frontage is left as green rather than built. */
 export const GREEN_SHARE = 0.32
 
+/** Half a block cell's extent, in world units — the fence `keepClearCells` puts around a
+ *  street or built cell so scatter cannot reach across the kerb into it. */
+const CELL_HALF = CELL_SIZE / 2
+
+/** How far a green block's own planting radius reaches — a little under half a cell (`5`
+ *  against a `CELL_HALF` of `6`), so planted props stay off the kerb even when the block is
+ *  otherwise empty. */
+const GREEN_PLANT_RADIUS = 5
+
 /** How far a building's centre sits from its cell's centre, toward the street it faces.
  *  A kit building is 2 units across, so `BUILDING_SCALE * 2` is its world width. */
 const SET_BACK = CELL_SIZE / 2 - (BUILDING_SCALE * 2) / 2 - 0.6
@@ -108,4 +117,85 @@ export function blockContent(cell, streetKeys) {
     })
   }
   return { kind: 'built', buildings }
+}
+
+/**
+ * Every in-town, non-street, non-claimed cell, classified by `blockContent`. The same sweep
+ * `townPlan` runs — same bounds, same order, same `inTown`/street/claimed tests — kept in one
+ * place so `greenBlocks` and `keepClearCells` can never disagree with each other, or with the
+ * buildings `townPlan` actually draws, about which cell is which.
+ */
+function* sweepBlocks({ streets, claimed = new Set() }) {
+  for (let x = -TOWN_CELL_RADIUS; x <= TOWN_CELL_RADIUS; x++) {
+    for (let z = -TOWN_CELL_RADIUS; z <= TOWN_CELL_RADIUS; z++) {
+      const k = `${x},${z}`
+      const cell = { x, z }
+      if (!inTown(cell)) continue
+      if (streets.has(k)) {
+        yield { cell, kind: 'street' }
+        continue
+      }
+      if (claimed.has(k)) {
+        yield { cell, kind: 'claimed' }
+        continue
+      }
+      yield { cell, kind: blockContent(cell, streets).kind }
+    }
+  }
+}
+
+/**
+ * The town's green blocks, as planting sites for `createScatter`: world-space centres with a
+ * radius a little under half a cell, so nothing planted there reaches the kerb.
+ *
+ * @param streets the street membership set (`planStreets().all`)
+ * @param claimed the cells the colony occupies, as `"x,z"` keys — a claimed cell is the
+ *   colony's own ground, never the town's, so it is never offered as a planting site even if
+ *   `blockContent` would have called it green
+ * @returns `[{x, z, radius}]`
+ */
+export function greenBlocks({ streets, claimed = new Set() }) {
+  const out = []
+  for (const { cell, kind } of sweepBlocks({ streets, claimed })) {
+    if (kind !== 'green') continue
+    out.push({ x: cell.x * CELL_SIZE, z: cell.z * CELL_SIZE, radius: GREEN_PLANT_RADIUS })
+  }
+  return out
+}
+
+/**
+ * Every town cell the wild scatter (`createScatter`'s countryside rocks and flora) must stay
+ * off: every street cell — the owner's report was trees and rocks landing on the carriageway
+ * — every built block, so a boulder never sprouts between two houses, and every cell the
+ * colony has claimed for itself. Green blocks are the one kind of town cell left out, because
+ * they are exactly where this planting is meant to land: the same call that dresses the
+ * countryside seeds them too, since nothing there is fenced off.
+ *
+ * A per-cell fence, not a radius: the town's outline is not a circle (see `townRadiusAt`), so
+ * a single circular `keepClear` entry either misses the corners of the true outline or eats
+ * into the countryside well past it — and either way a circle drawn at cell granularity from a
+ * random radial sample can still let a prop land inside the true wavy edge, on a street cell,
+ * which is the defect this exists to close.
+ *
+ * Streets are fenced off wherever `streets` actually says one is, not wherever `inTown` agrees
+ * — `road-mesh.js` draws a carriageway tile on every cell in `streets`, regardless of whether
+ * that cell falls inside the town's own (wavy) outline, so gating the fence on `inTown` would
+ * leave the street network's own fringe cells undefended. Built and claimed cells, by
+ * contrast, only ever exist where `inTown` is true — `blockContent` is never asked about a
+ * cell outside it — so `sweepBlocks` is the right source for those two.
+ *
+ * @returns `[{x, z, half}]` — world-space cell centres and half-extents, in `createScatter`'s
+ *   `keepClear` shape (see `planet.js`)
+ */
+export function keepClearCells({ streets, claimed = new Set() }) {
+  const out = []
+  for (const k of streets) {
+    const [x, z] = k.split(',').map(Number)
+    out.push({ x: x * CELL_SIZE, z: z * CELL_SIZE, half: CELL_HALF })
+  }
+  for (const { cell, kind } of sweepBlocks({ streets, claimed })) {
+    if (kind === 'street' || kind === 'green') continue
+    out.push({ x: cell.x * CELL_SIZE, z: cell.z * CELL_SIZE, half: CELL_HALF })
+  }
+  return out
 }
