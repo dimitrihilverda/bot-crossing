@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { atlasTexture, hasPart, part } from './kit.js'
+export { mulberry } from './rng.js'
 
 /**
  * The three worlds you can put the colony on, and the terrain generator that draws them.
@@ -359,18 +360,6 @@ function sampleY(x, z, planet, seed) {
 }
 
 // ── noise ─────────────────────────────────────────────────────────────────────────────
-
-/** Small deterministic PRNG — same seed, same world, every reload. */
-export function mulberry(seed) {
-  let a = seed >>> 0
-  return function () {
-    a = (a + 0x6d2b79f5) >>> 0
-    let t = a
-    t = Math.imul(t ^ (t >>> 15), t | 1)
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
 
 /** Value noise on a hashed lattice with smoothstep interpolation — cheap and smooth enough. */
 function makeNoise(seed) {
