@@ -8,22 +8,25 @@ import { DECK_TOP } from './plots.js'
  * The street surface: a carriageway down the middle of each street cell, and the kit's own
  * furniture along the verge.
  *
- * A street cell is not a paved cell. A cell is 12 units across — far wider than the 2.5-wide
- * carriageway needs — so paving one edge to edge would read as a plaza. The carriageway runs
- * down the middle and the rest is verge.
+ * A street cell is not a paved cell. A cell is 12 units across — far wider than the
+ * 2.4-wide carriageway needs — so paving one edge to edge would read as a plaza. The
+ * carriageway runs down the middle and the rest is verge.
  *
  * Every bend on this square lattice is a right angle (see `grid.js`), so a bend gets a real
- * `road_corner` tile, turned to face the way the road actually bends, instead of the
- * four-armed `road_junction` patch a 120 degree hex bend used to need. `road_junction` is
- * kept for cells where road runs genuinely meet three or four ways — not produced by this
- * module yet, but the town a later stage builds will need it.
+ * `road_corner` tile, and a three- or four-way meeting gets `road_tsplit` or `road_junction`.
+ * Which piece a cell needs, and which way it is turned, comes from `tileFor` — a function of
+ * that cell's own street neighbours, not of any path walked through them.
  */
 
 /** Every road piece in the kit is a 2 x 2 square tile, 0.1 thick, centred on the origin. */
 export const ROAD_TILE_SIZE = 2
 
-/** How wide the driving surface is. The spec's number; a car is 0.61 wide. */
-export const CARRIAGEWAY_WIDTH = 2.5
+/**
+ * How wide the driving surface is. 12 / 5 = 2.4 divides a cell exactly, which is what makes
+ * neighbouring tiles meet with no overlap and no gap; 2.5 does not, and would force either
+ * coincident slabs at every cell boundary or a break in the road. A car is 0.61 wide.
+ */
+export const CARRIAGEWAY_WIDTH = 2.4
 
 /** What a kit road tile has to be scaled by to become one carriageway width. */
 export const roadTileScale = () => CARRIAGEWAY_WIDTH / ROAD_TILE_SIZE
@@ -68,127 +71,109 @@ export function carriagewayHeight(groundY, lift = ROAD_SURFACE_LIFT) {
   return groundY + lift
 }
 
+/** A cell is this many carriageway tiles across. */
+export const SUBGRID = 5
+
+const DIR_KEY = (d) => `${d.x},${d.z}`
+/** One quarter turn about +Y, matching how three.js rotates (x, z). */
+const rot = (d) => ({ x: d.z, z: -d.x })
+const rotN = (d, k) => {
+  let r = d
+  for (let i = 0; i < k; i++) r = rot(r)
+  return r
+}
+const sameSet = (a, b) =>
+  a.length === b.length && a.map(DIR_KEY).sort().join(' ') === b.map(DIR_KEY).sort().join(' ')
+
+const S = { x: 0, z: 1 }
+const N = { x: 0, z: -1 }
+const E = { x: 1, z: 0 }
+const W = { x: -1, z: 0 }
+
 /**
- * Where each patch of carriageway goes, and what kind it is.
+ * The directions each piece's road leaves through, in its unrotated form. Measured from
+ * `city.glb` and pinned by `road-corner-glb.test.mjs`: `road_straight` runs along its own Z,
+ * and `road_corner` joins its +Z edge to its +X edge.
  *
- * Pure: plain numbers in, plain numbers out, so the geometry decisions are testable without
- * a renderer. `cellSize` is the lattice pitch, passed in rather than imported so a test can
- * read the arithmetic directly against whatever value it hands in.
- *
- * Two things a caller must say explicitly, because this function cannot guess them from
- * `cells` alone:
- *
- * - `closed` — whether `cells` is a loop (the last cell connects back to the first) or an
- *   open-ended run (a spur, which starts at a plot and ends on the cell it joins, or one of
- *   the open arcs `streets.ringRuns` splits the ring into wherever a claimed cell breaks it
- *   — see `streets.js`'s `ringRuns`). A closed run gets an extra hop laid from its last cell
- *   back to its first, and its first and last cells are treated as interior — each has both
- *   an incoming and an outgoing direction — so either can be a bend too.
- * - `placed` — the dedup set. It defaults to a fresh `Set` per call, so a single run is
- *   still deduplicated against itself exactly as before. Callers that lay more than one run
- *   onto the same surface (the ring, then every spur) must pass one shared `Set` across all
- *   of them, or a spur's chain — which ends *on* the ring cell it joins — lays a second,
- *   exactly coincident patch on top of the ring's.
- *
- * @param cells the street cells (`{x, z}`), in the order the road runs through them
- * @param cellSize world units per cell — the lattice pitch a hop spans
- * @param options.closed true for a closed loop (the ring); false (default) for an open run
- * @param options.placed the cross-call dedup set; defaults to a fresh one for this call only
- * @returns one entry per patch: `{ x, z, kind, heading }` — `kind` is `'straight'`,
- *   `'corner'` or `'junction'`, `heading` is the direction a tile is turned to face, in
- *   radians. For a straight patch that is the direction of travel over the hop it belongs
- *   to (`Math.atan2(dz, dx)`); for a corner it is the incoming direction — the same heading
- *   the straight patch just before it carries, so the two tiles' facing edges line up.
+ * This is the fact the previous implementation guessed. It turned a corner by the *incoming*
+ * heading alone, which cannot work — a bend is defined by two directions, and four headings
+ * cannot name eight bends. Here the arms are the input, so the rotation is determined rather
+ * than inferred.
  */
-export function carriagewayPoints(cells, cellSize, { closed = false, placed = new Set() } = {}) {
-  const world = cells.map((c) => ({ x: c.x * cellSize, z: c.z * cellSize }))
-  // How many carriageway-width tiles span one cell-to-cell hop. On this square lattice every
-  // hop is exactly `cellSize` long and axis-aligned, so — unlike the old hex hop — no
-  // trigonometric factor is needed to turn it into a tile count.
-  const tilesPerHop = Math.max(1, Math.ceil(cellSize / CARRIAGEWAY_WIDTH))
+const STRAIGHT_ARMS = [N, S]
+const CORNER_ARMS = [S, E]
+const TSPLIT_ARMS = [N, S, E]
 
+/**
+ * Which piece a street cell needs, and how far to turn it, from the directions its street
+ * neighbours lie in.
+ *
+ * @param arms the directions of this cell's street neighbours, as unit `{x, z}`
+ * @returns `{ part, k }` — the kit part, and how many quarter turns about +Y to apply
+ */
+export function tileFor(arms) {
+  if (arms.length >= 4 || arms.length === 0) return { part: 'road_junction', k: 0 }
+  const opposite = arms.length === 2 && arms[0].x === -arms[1].x && arms[0].z === -arms[1].z
+  const base =
+    arms.length === 3
+      ? { part: 'road_tsplit', arms: TSPLIT_ARMS }
+      : arms.length === 1 || opposite
+        ? { part: 'road_straight', arms: STRAIGHT_ARMS }
+        : { part: 'road_corner', arms: CORNER_ARMS }
+  // A dead end has one arm and gets a straight laid along it: only the axis matters, so its
+  // single arm is widened to the full port pair before matching.
+  const want = arms.length === 1 ? [arms[0], { x: -arms[0].x, z: -arms[0].z }] : arms
+  for (let k = 0; k < 4; k++) {
+    if (sameSet(base.arms.map((d) => rotN(d, k)), want)) return { part: base.part, k }
+  }
+  // Unreachable on a square lattice: every arm set of 1-4 axis directions is some rotation of
+  // one of the three bases above. Falling through would place a silently wrong tile — exactly
+  // the failure this module is being rewritten to end — so it throws instead.
+  throw new Error(`no rotation of ${base.part} fits arms ${want.map(DIR_KEY).join(' ')}`)
+}
+
+/**
+ * Where every carriageway tile goes.
+ *
+ * A cell is `SUBGRID` x `SUBGRID` tiles. The carriageway is the middle row, the middle column,
+ * or both: the centre tile carries the piece the cell's arms call for, and each arm gets the
+ * tiles between the centre and that edge. Every tile lies strictly inside its own cell, so a
+ * cell's tiles meet its neighbour's edge to edge — no dedup set, no shared `placed`, and no
+ * coincident slabs.
+ *
+ * Order-free by construction: a cell's tiles depend only on its own four neighbours, never on
+ * a walk order. That is what retired `ringRuns` and the `closed` flag.
+ *
+ * @param streetCells every street cell, `{x, z}`
+ * @param cellSize world units per cell
+ * @returns `[{x, z, part, ry}]` — world position, kit part, and Y rotation in radians
+ */
+export function carriagewayTiles(streetCells, cellSize) {
+  const keys = new Set(streetCells.map((c) => `${c.x},${c.z}`))
+  const step = cellSize / SUBGRID
+  const armsOf = (c) => [N, S, E, W].filter((d) => keys.has(`${c.x + d.x},${c.z + d.z}`))
   const out = []
-  const push = (x, z, kind, heading) => {
-    const k = `${x.toFixed(4)},${z.toFixed(4)}`
-    if (placed.has(k)) return
-    placed.add(k)
-    out.push({ x, z, kind, heading })
-  }
-
-  if (world.length === 1) {
-    // A single-cell run has no hop to take a direction from, and this patch is always laid
-    // as a junction tile — four-armed and rotationally symmetric every 90 degrees — so any
-    // heading looks the same as any other here. 0 is as good as a computed one.
-    push(world[0].x, world[0].z, 'junction', 0)
-    return out
-  }
-
-  // Hops between consecutive cells, plus — for a closed run — the extra hop that bridges
-  // the last cell back to the first, so a ring is actually a ring and not a horseshoe.
-  const hops = []
-  for (let i = 1; i < world.length; i++) hops.push([i - 1, i])
-  if (closed) hops.push([world.length - 1, 0])
-
-  let lastHeading = 0
-  for (const [ai, bi] of hops) {
-    const a = world[ai]
-    const b = world[bi]
-    const heading = Math.atan2(b.z - a.z, b.x - a.x)
-    lastHeading = heading
-    for (let t = 0; t < tilesPerHop; t++) {
-      const f = t / tilesPerHop
-      push(a.x + (b.x - a.x) * f, a.z + (b.z - a.z) * f, 'straight', heading)
+  for (const c of streetCells) {
+    const cx = c.x * cellSize
+    const cz = c.z * cellSize
+    const arms = armsOf(c)
+    const centre = tileFor(arms)
+    out.push({ x: cx, z: cz, part: centre.part, ry: (centre.k * Math.PI) / 2 })
+    for (const d of arms) {
+      // Along an arm: the tiles between the centre tile and the cell edge. With SUBGRID 5
+      // that is exactly two, at one and two steps out, and the second ends flush with the
+      // edge, where the neighbouring cell's own second tile begins.
+      const along = tileFor([d, { x: -d.x, z: -d.z }])
+      for (let i = 1; i <= (SUBGRID - 1) / 2; i++) {
+        out.push({
+          x: cx + d.x * step * i,
+          z: cz + d.z * step * i,
+          part: along.part,
+          ry: (along.k * Math.PI) / 2,
+        })
+      }
     }
   }
-  // The last cell centre, which no hop's loop reaches because each stops short of its end.
-  // A closed run doesn't need this: its closing hop's own t=0 tile already lands exactly
-  // there, as the start of the hop back to the first cell.
-  //
-  // This patch sits at the join of two hops (the one that ends here, and — for an interior
-  // cell reached this way in an open run — none that starts here, since the run stops). It
-  // only has an incoming hop, so it takes that hop's heading; there is no outgoing one to
-  // choose instead.
-  if (!closed) {
-    const last = world[world.length - 1]
-    push(last.x, last.z, 'straight', lastHeading)
-  }
-
-  // Bends. A cell whose incoming and outgoing directions differ is a bend. On this lattice
-  // every hop runs along one of the four square-lattice axes, so the incoming and outgoing
-  // directions at a bend are always exactly perpendicular — never the 120 degree turn the
-  // hex lattice used to produce — and a real `road_corner` tile fits every one of them. The
-  // corner replaces whatever straight patch was laid on its centre, the same way a junction
-  // patch used to. An open run's endpoints have no "other side" (a spur starts at a plot and
-  // ends on the cell it joins), so only its interior cells are checked. A closed run has no
-  // endpoints — every cell, including what would otherwise be index 0 and the last, sits
-  // between two neighbours — so every index is checked, wrapping around the loop.
-  const n = cells.length
-  const bendIndices = closed
-    ? Array.from({ length: n }, (_, i) => i)
-    : Array.from({ length: Math.max(0, n - 2) }, (_, i) => i + 1)
-  for (const i of bendIndices) {
-    const prev = cells[(i - 1 + n) % n]
-    const here = cells[i]
-    const next = cells[(i + 1) % n]
-    const inDir = { x: here.x - prev.x, z: here.z - prev.z }
-    const outDir = { x: next.x - here.x, z: next.z - here.z }
-    if (inDir.x === outDir.x && inDir.z === outDir.z) continue
-    const w = world[i]
-    const k = `${w.x.toFixed(4)},${w.z.toFixed(4)}`
-    const existing = out.find((p) => `${p.x.toFixed(4)},${p.z.toFixed(4)}` === k)
-    // The incoming direction, not the outgoing one: `road_corner`'s modelled entrance sits
-    // on the same local axis `road_straight`'s lane markings run along, so turning it to the
-    // incoming heading — exactly what the straight patch just behind it already carries —
-    // keeps that shared edge lined up. The mesh's own bend then carries the lane on to
-    // whichever of its two perpendicular ports the model bakes in; which of the four ways a
-    // corner can face is what `heading` picks, not which way within the piece it turns.
-    const heading = Math.atan2(inDir.z, inDir.x)
-    if (existing) {
-      existing.kind = 'corner'
-      existing.heading = heading
-    } else push(w.x, w.z, 'corner', heading)
-  }
-
   return out
 }
 
@@ -203,10 +188,11 @@ const LAMP_PART = 'streetlight'
 /**
  * Build the street surface for one street plan.
  *
- * One merged geometry for the carriageway and one for the lamps, so the whole street
- * network is two draw calls however large the colony grows. Merging is what the city
- * atlas is for: every piece in the kit UVs into a single 1024px gradient atlas, which is
- * the only reason a whole street can collapse into one mesh.
+ * One merged geometry per kit part (`road_straight`, `road_corner`, `road_tsplit`,
+ * `road_junction`), so the whole street network is at most four draw calls however large
+ * the colony grows — a fourth part costs no new code, only one more entry in `composers`.
+ * Merging is what the city atlas is for: every piece in the kit UVs into a single 1024px
+ * gradient atlas, which is the only reason a whole street can collapse into one mesh per part.
  *
  * Verge planting is **not** here. Trees, bushes and grasses live in `forest.glb`, a
  * different atlas, and a merged geometry carries one material — so they cannot join these
@@ -221,99 +207,34 @@ export function createRoads({ streets, groundAt }) {
   group.userData.dispose = () => {}
   if (
     !streets ||
+    !streets.cells?.length ||
     !hasPart(STRAIGHT_PART, 'city') ||
     !hasPart(CORNER_PART, 'city') ||
     !hasPart(JUNCTION_PART, 'city')
   )
     return group
 
-  const spurRuns = [...streets.spurs.values()].filter((run) => run && run.length)
-  const ringRuns = (streets.ringRuns || []).filter((run) => run.cells && run.cells.length)
-  if (!ringRuns.length && !spurRuns.length) return group
-
   const scale = roadTileScale()
-  const straights = new Composer({ kit: 'city' })
-  const corners = new Composer({ kit: 'city' })
-  const junctions = new Composer({ kit: 'city' })
-  let straightCount = 0
-  let cornerCount = 0
-  let junctionCount = 0
-
-  // One dedup set shared across every ring run and every spur: a spur's chain ends *on* the
-  // ring cell it joins, so without a shared set that pass and the ring's own would each lay
-  // an identical, exactly coincident patch there.
-  const placed = new Set()
-  // Computed once and reused below for the streetlights, so that second pass doesn't ask
-  // `carriagewayPoints` to lay patches onto an already-fully-`placed` set and get nothing back.
-  //
-  // One call per run, each with its own `closed` flag — never one call across the
-  // concatenation of every run's cells, which would treat two unrelated arcs as one
-  // continuous walk and reintroduce exactly the gapped-ring bug `ringRuns` exists to avoid.
-  const ringPatches = ringRuns.flatMap((run) =>
-    carriagewayPoints(run.cells, CELL_SIZE, { closed: run.closed, placed })
-  )
-  const patchRuns = [ringPatches, ...spurRuns.map((run) => carriagewayPoints(run, CELL_SIZE, { placed }))]
-
-  const PART_BY_KIND = { straight: STRAIGHT_PART, corner: CORNER_PART, junction: JUNCTION_PART }
-
-  for (const patches of patchRuns) {
-    for (const patch of patches) {
-      const composer = patch.kind === 'corner' ? corners : patch.kind === 'junction' ? junctions : straights
-      const name = PART_BY_KIND[patch.kind]
-      // The carriageway always sits on bare terrain, never on a deck: `planStreets` only
-      // takes cells no plot claims (`streets.js`), and the deck is exactly the claimed
-      // cells, so no street cell is ever part of it. That's why this follows the ground
-      // directly (`carriagewayHeight`, a small lift above `groundAt`) with no
-      // `Math.max(DECK_TOP, ...)` clamp — unlike the streetlights below, where the clamp is
-      // correct: a lamp on the verge must not sink under a deck it stands beside. If a
-      // future change ever put a street cell onto a deck, this patch would sink into it —
-      // nothing here would catch that.
-      //
-      // The tile itself stays flat — it is not tilted to the local slope. That would need a
-      // surface normal per patch, and it would open seams between neighbouring tiles
-      // wherever two of them picked a slightly different tilt. So this follows the terrain's
-      // height, not its slope.
-      const y = groundAt ? carriagewayHeight(groundAt(patch.x, patch.z)) : DECK_TOP
-      // `road_straight`'s dashed lane markings are modelled along the tile's own local Z
-      // axis (confirmed by dumping the part's vertices out of city.glb: the marking strips
-      // are narrow bands of X spaced across the tile and subdivided many times along Z, the
-      // shape of a dashed line running lengthwise) — not along X. Composer's `ry` rotates
-      // the geometry about Y before it is placed, and turning the local +Z axis to point
-      // along `heading` takes ry = PI/2 - heading (the local Z axis (0,0,1) rotated by that
-      // angle lands on (cos(heading), sin(heading)), i.e. the world direction atan2 was
-      // built from). A junction tile's heading barely matters — four-armed and rotationally
-      // symmetric every 90 degrees, see `carriagewayPoints` — but a corner's heading is
-      // exactly what turns it to face its bend, and every patch, whatever its kind, still
-      // gets rotated to the heading it carries.
-      composer.add(name, { s: scale, x: patch.x, y, z: patch.z, ry: Math.PI / 2 - patch.heading })
-      if (patch.kind === 'corner') cornerCount++
-      else if (patch.kind === 'junction') junctionCount++
-      else straightCount++
+  const tiles = carriagewayTiles(streets.cells, CELL_SIZE)
+  const composers = new Map()
+  for (const tile of tiles) {
+    if (!hasPart(tile.part, 'city')) continue
+    let composer = composers.get(tile.part)
+    if (!composer) {
+      composer = new Composer({ kit: 'city' })
+      composers.set(tile.part, composer)
     }
+    // The carriageway sits on bare terrain, never on a deck: a plot never claims a street
+    // cell (`allocateCells` refuses them), so this follows the ground directly with no
+    // `Math.max(DECK_TOP, ...)` clamp. That clamp is the bug this replaced — it pinned every
+    // patch to DECK_TOP, because no street cell is ever decked.
+    //
+    // The tile stays flat rather than tilting to the local slope: a per-patch tilt would open
+    // seams wherever two neighbouring tiles picked slightly different normals.
+    const y = groundAt ? carriagewayHeight(groundAt(tile.x, tile.z)) : DECK_TOP
+    composer.add(tile.part, { s: scale, x: tile.x, y, z: tile.z, ry: tile.ry })
   }
-
-  const meshes = []
-  if (straightCount) meshes.push(new THREE.Mesh(straights.finish(), roadMaterial()))
-  if (cornerCount) meshes.push(new THREE.Mesh(corners.finish(), roadMaterial()))
-  if (junctionCount) meshes.push(new THREE.Mesh(junctions.finish(), roadMaterial()))
-
-  if (hasPart(LAMP_PART, 'city') && ringPatches.length) {
-    const lamps = new Composer({ kit: 'city' })
-    let lampCount = 0
-    // One lamp every fourth patch along the ring, on the verge rather than the carriageway:
-    // half a carriageway plus a little, out from the centre line. Reuses `ringPatches` from
-    // above rather than calling `carriagewayPoints` on `streets.ringRuns` again — with a
-    // shared `placed` set, a second pass would find every one of the ring's coordinates
-    // already taken and return nothing.
-    const offset = CARRIAGEWAY_WIDTH * 0.5 + 0.6
-    for (let i = 0; i < ringPatches.length; i += 4) {
-      const p = ringPatches[i]
-      const y = groundAt ? Math.max(DECK_TOP, groundAt(p.x + offset, p.z)) : DECK_TOP
-      lamps.add(LAMP_PART, { s: 1.6, x: p.x + offset, y, z: p.z })
-      lampCount++
-    }
-    if (lampCount) meshes.push(new THREE.Mesh(lamps.finish(), roadMaterial()))
-  }
+  const meshes = [...composers.values()].map((c) => new THREE.Mesh(c.finish(), roadMaterial()))
 
   for (const mesh of meshes) {
     mesh.receiveShadow = true
