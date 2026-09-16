@@ -27,6 +27,16 @@ test('a corner is turned so its ports land on its actual arms', () => {
   }
 })
 
+test('a tsplit is turned so its ports land on its actual arms', () => {
+  // road_tsplit's modelled ports, pinned by road-corner-glb.test.mjs: arms -Z, +Z and +X.
+  const base = [N, S, E]
+  for (const arms of [[N, S, E], [N, E, W], [N, S, W], [S, E, W]]) {
+    const { part, k } = tileFor(arms)
+    assert.equal(part, 'road_tsplit', `${asKeys(arms)} should be a tsplit`)
+    assert.equal(asKeys(base.map((d) => rot(d, k))), asKeys(arms), `${asKeys(arms)} got k=${k}`)
+  }
+})
+
 test('a straight is turned along its arms', () => {
   assert.deepEqual(tileFor([N, S]), { part: 'road_straight', k: 0 })
   assert.deepEqual(tileFor([W, E]), { part: 'road_straight', k: 1 })

@@ -5,8 +5,10 @@ import { CELL_SIZE } from './grid.js'
 import { DECK_TOP } from './plots.js'
 
 /**
- * The street surface: a carriageway down the middle of each street cell, and the kit's own
- * furniture along the verge.
+ * The street surface: a carriageway down the middle of each street cell. `createRoads` places
+ * no verge furniture today — the streetlight pass was removed here and nothing replaces it yet;
+ * a later task rebuilds lighting (and other verge furniture) along the whole network instead of
+ * per ring patch.
  *
  * A street cell is not a paved cell. A cell is 12 units across — far wider than the
  * 2.4-wide carriageway needs — so paving one edge to edge would read as a plaza. The
@@ -182,7 +184,10 @@ export function carriagewayTiles(streetCells, cellSize) {
 /** The pieces this module draws, all from the city atlas. */
 const STRAIGHT_PART = 'road_straight'
 const CORNER_PART = 'road_corner'
+const TSPLIT_PART = 'road_tsplit'
 const JUNCTION_PART = 'road_junction'
+// Unused until a later task rebuilds verge lighting along the whole network; kept rather than
+// deleted so that task has a name to reach for instead of re-discovering the kit part.
 const LAMP_PART = 'streetlight'
 
 /**
@@ -210,6 +215,7 @@ export function createRoads({ streets, groundAt }) {
     !streets.cells?.length ||
     !hasPart(STRAIGHT_PART, 'city') ||
     !hasPart(CORNER_PART, 'city') ||
+    !hasPart(TSPLIT_PART, 'city') ||
     !hasPart(JUNCTION_PART, 'city')
   )
     return group
