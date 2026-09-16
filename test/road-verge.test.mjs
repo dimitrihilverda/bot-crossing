@@ -8,6 +8,8 @@ import {
   VERGE_LIFT,
   SUBGRID,
   TRAFFIC_LIGHT_PARTS,
+  ROAD_TILE_SIZE,
+  roadTileScale,
 } from '../src/world/road-mesh.js'
 import { planStreets } from '../src/world/streets.js'
 import { inTown } from '../src/world/town-plan.js'
@@ -418,4 +420,52 @@ test('the pavement turns every corner with no gap — no bare notch where two pe
     }
   }
   assert.ok(checked > 0, 'no perpendicular arm pair found in the real network to test corner pavement against')
+})
+
+// ── density revision: the verge is paved all the way to the street cell's own boundary,
+// not just its inner half (see road-mesh.js's own doc comment on vergeFurniture) ─────────────
+
+test('the paved verge reaches the street cell\'s own boundary, with no grass beyond it', () => {
+  // The owner's screenshot showed grey paving slabs sitting as detached islands in grass: the
+  // pavement used to stop at the inner sub-grid step (perpendicular offset 1, tile outer edge
+  // at 3.6 of a 6.0 half-cell), leaving a 2.4-unit ribbon of bare terrain between it and the
+  // neighbouring block's own edge. This pins the fix two ways — a tile exists at the outer
+  // sub-grid step, and that tile's own far edge lands exactly on the cell boundary — so a
+  // future change that only widens the *inner* band, or that shrinks the tile's own scale
+  // back down, cannot silently reopen the gap.
+  const paving = of('base')
+  const step = CELL_SIZE / SUBGRID
+  const tileHalfWidth = (ROAD_TILE_SIZE * roadTileScale()) / 2
+  let checked = 0
+  for (const c of streets.cells) {
+    if (!bordersTown(c)) continue
+    for (const d of armsOf(c)) {
+      const perp = { x: d.z, z: -d.x }
+      for (const side of [1, -1]) {
+        for (const i of [1, 2]) {
+          const x = c.x * CELL_SIZE + d.x * step * i + side * perp.x * step * 2
+          const z = c.z * CELL_SIZE + d.z * step * i + side * perp.z * step * 2
+          const tile = paving.find((p) => Math.abs(p.x - x) < 1e-6 && Math.abs(p.z - z) < 1e-6)
+          assert.ok(
+            tile,
+            `no outer-verge pavement tile at ${x},${z} (arm ${JSON.stringify(d)}, side ${side}, i ${i}` +
+              ` of cell ${c.x},${c.z}) — the verge stops short of the cell boundary again`
+          )
+          checked++
+
+          // The outer edge of this tile — its centre plus half its own width, on the
+          // perpendicular axis, toward the cell boundary — has to land exactly on it.
+          const perpAxis = perp.x !== 0 ? 'x' : 'z'
+          const centreOnPerpAxis = perpAxis === 'x' ? c.x * CELL_SIZE : c.z * CELL_SIZE
+          const farEdge = Math.abs(tile[perpAxis] - centreOnPerpAxis) + tileHalfWidth
+          assert.ok(
+            Math.abs(farEdge - CELL_SIZE / 2) < 1e-6,
+            `outer-verge tile at ${tile.x},${tile.z} reaches only ${farEdge} of the cell's own` +
+              ` half-width ${CELL_SIZE / 2} — grass remains between the pavement and the boundary`
+          )
+        }
+      }
+    }
+  }
+  assert.ok(checked > 50, `only checked ${checked} outer-verge tiles`)
 })

@@ -13,43 +13,84 @@ import { blockContent, inTown } from './town-plan.js'
  */
 
 /**
- * The most geometry the town may add, in vertices — a full colony's own count, measured in
- * Task 6 Step 1. Measured: a 40-project colony (`test/route-on-street.test.mjs`'s spread,
- * seeded `mulberry(40 * 7919)`, each project 1-4 threads) places 100 houses in total. Each
- * house (`src/world/houses.js`) draws one shell, picked uniformly from three `_withoutBase`
- * city-kit parts (819 + 1236 + 1581, mean 1212 vertices), plus the same fixed set of eight
- * furniture-kit pieces every house gets regardless of progress (48 + 712 + 600 + 260 + 458 +
- * 1341 + 632 + 304 = 4355 vertices — `aReveal` only discards fragments, it does not remove
- * vertices). 100 * (1212 + 4355) = 556,700, rounded down to 550,000. A small colony draws far
- * less — three threads is 16,701 — so this ceiling only bounds the town against a full one;
- * a young colony's fixed town-plus-street cost outweighs its own houses by a wide margin.
+ * The most geometry the town may add, in vertices — the *complete* draw of a full colony,
+ * re-measured in this revision against the ruling that the original figure (Task 6 Step 1,
+ * houses alone) undercounted it: the colony also renders plot decks, kerbs, clutter props,
+ * the ship, the crew and the labels, none of which was in the old 550,000 number. Raising
+ * this measurement is not the same move as raising the ceiling above a measurement — the
+ * spec forbids only the second, and this is the first: the honest figure for what the colony
+ * itself already puts on screen.
+ *
+ * Every part below uses the same 40-project, 100-thread spread `test/route-on-street.test.mjs`
+ * seeds (`mulberry(40 * 7919)`, each project 1-4 threads), the same spread the old figure was
+ * measured against, run through `allocateCells` for real: every one of the 40 projects needs
+ * `ceil(size / 9) = 1` cell (`cellsNeeded` in `plots.js`, since no project here exceeds the
+ * 9-thread-per-cell `SLOTS_PER_CELL`), so this is a 40-plot, 100-thread colony, one cell per
+ * plot. Vertex counts for kit parts are read directly off the shipped `.glb` files with
+ * `@gltf-transform/core`'s `NodeIO`, summing `POSITION` attribute entries over every mesh
+ * under a named node — the same method, and the same files, Task 6 and Task 3 both used.
+ *
+ * 1. **Houses** (`src/world/houses.js`, Task 6's own figure, unchanged by this revision — the
+ *    module was not touched): one shell per thread, picked uniformly from three `_withoutBase`
+ *    city-kit parts (819 + 1236 + 1581, mean 1212 vertices), plus the same fixed set of eight
+ *    furniture-kit pieces every house gets regardless of progress (48 + 712 + 600 + 260 + 458 +
+ *    1341 + 632 + 304 = 4355 vertices — `aReveal` only discards fragments, never vertices).
+ *    100 * (1212 + 4355) = **556,700**.
+ * 2. **Plots** (`src/world/plots.js`), for the same 40 plots (one cell each):
+ *    - *Deck*: one `TILE`-square box prism per cell, `BufferGeometryUtils.mergeGeometries`
+ *      preserving each box's own 24 vertices — 40 * 24 = 960.
+ *    - *Kerb border*: one box per *exterior* cell edge; a lone-cell plot has all four edges
+ *      exterior, so 40 * 4 = 160 boxes * 24 vertices = 3,840.
+ *    - *Lamp posts*: one pole (a `BoxGeometry`, 24 vertices) plus one lamp head (a
+ *      `SphereGeometry(0.14, 8, 6)`, 63 vertices) per cell — 40 * (24 + 63) = 3,480.
+ *    - *Clutter*: `_buildClutter`'s own per-cell `mulberry(hashString(id) + 17)` stream,
+ *      replayed exactly (the same candidate-then-accept draw over the two vertical and two
+ *      horizontal channels, then one `rand()` for the prop name and one for its rotation per
+ *      accepted spot, in that order) against the real 40 plot ids: **196** props placed,
+ *      summing each one's own base-kit vertex count (`containers_A..D` 396 each, `cargo_A`/
+ *      `cargo_B` 164 each, `cargo_A_packed`/`cargo_B_packed` 228 each, `lights` 504) —
+ *      **60,180** vertices.
+ *    - Plot subtotal: 960 + 3,840 + 3,480 + 60,180 = **68,460**.
+ * 3. **The ship** (`src/world/ship.js`) — one fixed structure, not per-thread: the shell
+ *    (`building_G_withoutBase`, 1,955 vertices), five yard containers (`containers_A`, 396
+ *    each = 1,980), the dock plate (a box, 24), four lane-marking boxes (24 each = 96), two
+ *    edge-strip boxes (24 each = 48), the roof beacon (`SphereGeometry(0.14, 10, 8)`, 99),
+ *    eight floodlights (`SphereGeometry(0.11, 8, 6)`, 63 each = 504), and the apron
+ *    (`CircleGeometry(r, 32)`, 34). Total: **4,740**.
+ * 4. **The crew** (`src/agents/astronauts.js`): one instanced, GPU-skinned figure per thread —
+ *    100 for this spread, the whole roster at once (the crew count is capped at
+ *    `min(capacity, settings.maxAgents)`, and the highest preset's `maxAgents` is 200, so a
+ *    100-thread roster is fully on screen at that preset; this measures against that, since a
+ *    lower preset only draws *less*). Each agent wears one of two garment sets
+ *    (`GARMENT_SETS` in `src/agents/garment-sets.js`), chosen by a roughly even hash
+ *    (`garmentSetIndexFor`), and each set is its own six merged body parts (`Body`, `ArmLeft`,
+ *    `ArmRight`, `LegLeft`, `LegRight`, `Head`) read straight off `public/assets/crew.glb`:
+ *    Ranger 3224 + 668 + 668 + 780 + 780 + 1172 = 7,292; Rogue 1369 + 653 + 653 + 780 + 780 +
+ *    2131 = 6,366. Mean **6,829** per agent (the same "mean across a uniformly-chosen variant"
+ *    method the house shell figure above already uses). 100 * 6,829 = **682,900**. (The
+ *    hammer/cabinet/box props and the status badge are status-gated, small — a few hundred to
+ *    low thousands of vertices each — and drawn for only a subset of agents at once, so they
+ *    are not part of this always-present figure; the delivery fleet and the ambient traffic
+ *    cars are the same kind of variable, status-driven draw and are excluded for the same
+ *    reason, not because they were unread — see `src/world/deliveries.js`.)
+ * 5. **Labels** (`createLabel` in `plots.js`): one billboard `PlaneGeometry` per plot, 4
+ *    vertices each — 40 * 4 = **160**. (District banners, `createBanner`, are the same shape
+ *    again and add nothing here — this spread has no visiting colonies.)
+ *
+ * 556,700 + 68,460 + 4,740 + 682,900 + 160 = **1,312,960**, rounded down to the nearest
+ * round figure (10,000), the same convention the old 556,700 -> 550,000 rounding used.
  *
  * The spec's rule is that the scenery must not outweigh the thing it surrounds. If a later
  * change pushes past this, the levers, in order of fewest side effects: the frontage-gap
  * probability in `blockContent` (`town-plan.js`), the kit's `_withoutBase` building variants,
  * `GREEN_SHARE`, and last `TOWN_CELL_RADIUS` — which redraws the street network too, since
- * `street-plan.js` shares it.
- *
- * **Pulled in Task 5 Step 2**, when `blockContent` moved from one building per street-facing
- * side to a full terrace at the kit's own scale (`BUILDING_SCALE`, `SLOTS_PER_SIDE` in
- * `town-plan.js`): the naive version — every slot filled, `GREEN_SHARE` at its old 0.32 —
- * measured 1,000,251 vertices, almost double this ceiling.
- *   1. `GAP_SHARE` raised from 0.18 to 0.25 — as far as it usefully went; past there the
- *      measured rate of isolated single buildings (a kept slot with both neighbours empty)
- *      climbed faster than the vertex total fell.
- *   2. The `_withoutBase` variants were measured and disqualified: their local `minY` is
- *      `0.1`, against `0.000` for the parts with a base, on every one of the eight buildings
- *      (`building_A..H`) — so swapping in a `_withoutBase` shell at the same placement Y
- *      leaves it floating `0.1 * BUILDING_SCALE` above the ground it should stand on. Not
- *      used.
- *   3. `GREEN_SHARE` raised from 0.32 to 0.55, well inside `test/town-plan.test.mjs`'s
- *      `> 0.15` / `< 0.6` bounds.
- * Measured with both applied, and with the corner fix `blockContent`'s own doc comment
- * describes (two rows meeting at a street corner no longer both claim the same ground): 222
- * buildings, 515,877 vertices — a 6.2% margin under this ceiling. `TOWN_CELL_RADIUS` was not
- * touched.
+ * `street-plan.js` shares it. None of them was needed by this revision: with `GREEN_SHARE`
+ * brought down from 0.55 to 0.3 (see its own doc comment in `town-plan.js` — the opposite of
+ * a cut, spending the headroom this re-measurement opened up on a denser town), the real
+ * network places 327 buildings for **750,285** vertices — comfortably under this ceiling,
+ * with 559,715 to spare.
  */
-export const TOWN_VERTEX_BUDGET = 550000
+export const TOWN_VERTEX_BUDGET = 1310000
 
 /**
  * Every building the town wants to place.

@@ -241,30 +241,34 @@ function isFurnished(cell, streetKeys) {
  * Gated by `isFurnished` (R11) — a cell that fails it contributes nothing here, so the
  * network's country-lane stretches stay bare carriageway with no kerb, lamp or light.
  *
- * - **Pavement.** For each arm, two `base` tiles per side, at the same two sub-grid steps
- *   `carriagewayTiles` lays along that arm, offset one sub-grid step perpendicular so no tile
- *   lands on the carriageway itself — this alone lays an unbroken band the full length of the
- *   arm, from flush with the centre tile (perpendicular offset 1 step's inner edge sits at
- *   the carriageway's own edge, 1 step's outer edge meets 2 step's inner edge) out to flush
- *   with the cell boundary (2 step's outer edge lands exactly on it).
+ * - **Pavement.** The whole verge, not just its inner half: for each arm, `base` tiles at
+ *   *both* sub-grid steps `carriagewayTiles` lays along that arm (1 and 2 — the same two the
+ *   carriageway itself uses) crossed with *both* sub-grid steps perpendicular to it (1 and 2
+ *   as well), on each side. Perpendicular step 1 is flush with the carriageway's own edge (its
+ *   inner edge sits exactly on it, at 1.2 world units off the centre line); step 2 is flush
+ *   with the cell's own boundary (its outer edge lands exactly on it, at 6.0 — half the
+ *   12-unit cell). Together the two perpendicular steps tile the full 4.8-unit verge with no
+ *   gap between them (step 1 spans 1.2..3.6, step 2 spans 3.6..6.0) — the owner's screenshot
+ *   showed grass in exactly that 2.4-unit band beyond the old pavement's outer edge, and this
+ *   is what closes it: the paved corridor now reaches the street cell's own boundary, meeting
+ *   the neighbouring block's edge with nothing green between.
  *
- *   That band alone still breaks at a turn: where two perpendicular arms meet, each arm's own
- *   strip stops one step short of the cell's true corner, leaving a notch in the outer
- *   quadrant between them (the "verspringing" the reference render never shows — its kerb runs
- *   straight around every corner). This closes it: for every pair of this cell's own arms that
- *   are perpendicular to each other (their dot product is 0 — opposite arms, dot −1, get no
- *   corner tile, since a straight run has no notch to close), one more `base` tile is laid at
- *   2 steps out on each of their two axes at once — the shared outer corner both arms' own
- *   strips fall just short of. That tile is flush with both arms' own outer (2-step) tiles and
- *   with the cell boundary on both axes, so the band now runs continuously along every arm and
- *   turns every corner with no gap, meeting the next street cell's own pavement edge to edge
- *   (or, diagonally across an intersection, corner to corner) with nothing missing between.
+ *   This alone also turns every corner with no separate tile needed. Take one arm's own
+ *   four-tile block (both along-arm steps by both perpendicular steps, on one side): it forms
+ *   a solid 4.8 x 4.8 square flush with both the cell's own boundary (the outer perpendicular
+ *   step) and the arm's own far edge (the outer along-arm step) — which is to say, it already
+ *   reaches the cell's true outer corner on that side, by itself, with no notch left over for
+ *   a second tile to close. (An earlier revision laid only the inner perpendicular step and
+ *   patched the resulting notch with one extra tile per pair of perpendicular arms; widening
+ *   the band to both steps makes that patch tile land exactly where the band already reaches,
+ *   so it was removed rather than kept as a dead-weight duplicate.)
  *
- *   A cell with two perpendicular arms (a corner, a T-junction or a crossing) has more than
- *   one arm claim the same tile at points where their strips or corners coincide (the classic
- *   case: two perpendicular arms' inner sub-grid-step tiles are the same tile) — deduplicated
- *   below, or the count would overstate the vertex cost and this module's own "no coincident
- *   slabs" claim would be false.
+ *   A cell with two perpendicular arms (a corner, a T-junction or a crossing) has each arm's
+ *   own four-tile block reach into the shared corner square from its own side, so the two
+ *   claim the same tiles there (the classic case: two perpendicular arms' inner-step tiles are
+ *   the same tile, and now their outer-step tiles are too) — deduplicated below, or the count
+ *   would overstate the vertex cost and this module's own "no coincident slabs" claim would be
+ *   false.
  * - **Streetlights.** One per arm, standing on the kerb rather than beyond it: 1.5 sub-grid
  *   steps out along the arm (between the pavement's two along-arm tiles, at the seam where
  *   they meet) and exactly 1 sub-grid step off the centre line — the pavement band's own
@@ -355,12 +359,14 @@ export function vergeFurniture(streetCells, cellSize) {
       const perp = rot(d)
       for (let i = 1; i <= (SUBGRID - 1) / 2; i++) {
         for (const side of [1, -1]) {
-          const x = cx + d.x * step * i + side * perp.x * step
-          const z = cz + d.z * step * i + side * perp.z * step
-          const key = posKey(x, z)
-          if (pavementSeen.has(key)) continue
-          pavementSeen.add(key)
-          out.push({ part: PAVEMENT_PART, x, z, ry: 0, scale, lift: VERGE_LIFT })
+          for (let p = 1; p <= (SUBGRID - 1) / 2; p++) {
+            const x = cx + d.x * step * i + side * perp.x * step * p
+            const z = cz + d.z * step * i + side * perp.z * step * p
+            const key = posKey(x, z)
+            if (pavementSeen.has(key)) continue
+            pavementSeen.add(key)
+            out.push({ part: PAVEMENT_PART, x, z, ry: 0, scale, lift: VERGE_LIFT })
+          }
         }
       }
       // v: unit direction from the lamp back to this arm's own centre line, i.e. the
@@ -377,26 +383,6 @@ export function vergeFurniture(streetCells, cellSize) {
         scale: 1.6,
         lift: VERGE_LIFT,
       })
-    }
-
-    // Corner pavement: where two of this cell's own arms are perpendicular to each other, the
-    // strip each one lays (above) stops one sub-grid step short of the true outer corner
-    // between them — see the doc comment. Laying one more tile there, 2 steps out on each of
-    // both arms' own axes at once, closes that notch so the band turns the corner with no gap.
-    // Opposite arms (dot product -1, a straight run) get no corner tile — there is no notch to
-    // close there, since the two strips run parallel rather than meeting at a corner.
-    for (let i = 0; i < arms.length; i++) {
-      for (let j = i + 1; j < arms.length; j++) {
-        const d1 = arms[i]
-        const d2 = arms[j]
-        if (d1.x * d2.x + d1.z * d2.z !== 0) continue
-        const x = cx + (d1.x + d2.x) * step * 2
-        const z = cz + (d1.z + d2.z) * step * 2
-        const key = posKey(x, z)
-        if (pavementSeen.has(key)) continue
-        pavementSeen.add(key)
-        out.push({ part: PAVEMENT_PART, x, z, ry: 0, scale, lift: VERGE_LIFT })
-      }
     }
 
     if (arms.length >= 3) {

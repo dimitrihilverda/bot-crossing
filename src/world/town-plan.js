@@ -35,17 +35,26 @@ export const BUILDING_SCALE = 1.2
 /**
  * How much of the block frontage is left as green rather than built.
  *
- * Raised from 0.32 to 0.55 in this revision (Task 5 Step 2's third lever, reached after the
- * first — `GAP_SHARE` — stopped paying its way and the second — the kit's `_withoutBase`
- * building variants — was measured and disqualified; see `TOWN_VERTEX_BUDGET`'s doc comment
- * in `town-mesh.js` for both). A kit building at its correct scale is a third the width of the
- * old one, so many more stand per frontage, and `TOWN_VERTEX_BUDGET` must not move to fit
- * them — so fewer blocks are built at all instead. The measured green fraction of the town's
- * own blocks lands near 0.46 at this value (the two do not coincide exactly, since a block is
- * a coin flip against this share, not a quota) — comfortably inside the `> 0.15` and `< 0.6`
- * bounds `test/town-plan.test.mjs` already checks.
+ * Brought back down from 0.55 to 0.3 in this revision. 0.55 was never a design choice — it
+ * was forced there in the previous revision purely to fit the town under `TOWN_VERTEX_BUDGET`
+ * (`town-mesh.js`) as that constant stood then, and it meant more than half of every block was
+ * empty, which was a large part of why the owner reported the town reading as "verspreid en
+ * ver uit elkaar" (spread out and far apart) rather than a place with occasional parks. That
+ * budget has since been re-measured to the colony's own *complete* draw rather than its houses
+ * alone (see `TOWN_VERTEX_BUDGET`'s own doc comment for the derivation) — a legitimate
+ * correction to what was being measured, not a raised ceiling — and the headroom it opened up
+ * is spent here first, exactly as the spec's ruling on that re-measurement directs: a green
+ * block should read as an occasional park, not the default.
+ *
+ * Measured against the real street network: 0.3 gives a green fraction of **0.239** (17 green
+ * of 71 blocks) — comfortably inside `test/town-plan.test.mjs`'s `> 0.15` / `< 0.6` bounds —
+ * and the town it produces places 327 buildings for 750,285 vertices, well under the
+ * re-measured budget (see `TOWN_VERTEX_BUDGET`'s own doc comment for the exact figure and the
+ * margin). No other lever — the frontage-gap probability, the kit's `_withoutBase` variants,
+ * `TOWN_CELL_RADIUS` — needed pulling to reach this; the budget's own headroom already covers
+ * it.
  */
-export const GREEN_SHARE = 0.55
+export const GREEN_SHARE = 0.3
 
 /** How many buildings stand in a row along one street-facing side of a block cell — the same
  *  count the road tiles themselves tile a cell at (`SUBGRID` in `road-mesh.js`), so a
@@ -106,10 +115,39 @@ const GREEN_PLANT_RADIUS = 5
  * its own to set back *from* except its own edge: a building may stand right up to it, the way
  * the reference render's terraces stand right against the pavement with no front yard.
  *
- * Half the building's own depth (`BUILDING_SCALE`, since a part is 2 units deep and scale
- * halves that to one factor: `BUILDING_SCALE * 2 / 2 = BUILDING_SCALE`) short of the cell edge
- * (`CELL_HALF`) puts its street-facing wall exactly flush with that edge:
- * `CELL_HALF - BUILDING_SCALE` = `6 - 1.2` = `4.8`.
+ * Measured (this revision), against `public/assets/city.glb`: every one of `building_A..H`'s
+ * local footprint spans `-1..1` on both its own X and Z, so at `BUILDING_SCALE` the half-depth
+ * facing the street is exactly `BUILDING_SCALE` (a part is 2 units deep before scale, and
+ * scale halves that to one factor: `BUILDING_SCALE * 2 / 2 = BUILDING_SCALE`).
+ *
+ * `CELL_HALF - BUILDING_SCALE` = `6 - 1.2` = `4.8` puts the street-facing wall's own outer
+ * face exactly on the cell edge — flush, not short of it. That is deliberate and unchanged by
+ * the verge revision that widened `road-mesh.js`'s pavement to reach the same edge (see
+ * `vergeFurniture`'s doc comment there): now that the pavement also reaches this coordinate,
+ * "flush" is what makes the façade stand *against* the pavement rather than short of it with a
+ * strip of grass between, which was the owner's actual complaint (traced to the pavement's own
+ * width, not this formula — see the same doc comment).
+ *
+ * No clearance margin is subtracted to pull the wall back off that edge. A margin was tried
+ * and measured to be the wrong fix: pulling every row's centre line in by even a small amount
+ * shifts *every* building on every side by the same amount toward the cell's centre, and two
+ * perpendicular rows' near-corner slots — one row's second-to-outermost slot and the other's
+ * second slot, the pair immediately inside the corner two rows' own skip logic already leaves
+ * empty (see `blockContent`'s own doc comment) — are exactly tangent at this formula's value
+ * (both `SET_BACK` and `SLOT_OFFSETS`' own extreme both equal `4.8`, which is what makes every
+ * terrace tile edge-to-edge with no overlap). Shrinking `SET_BACK` by any amount breaks that
+ * exact tangency and reintroduces a genuine corner clip between those two slots — measured
+ * directly: at `SET_BACK = 4.78` (a 0.02 clearance), `blockContent({x:-5,z:4}, ...)` on the
+ * real street set places `building_G` at `(-64.78, 50.4)` and `building_H` at
+ * `(-62.4, 52.78)`, whose 2.4-unit-square footprints overlap by `0.02 x 0.02` at their shared
+ * corner — caught immediately by `test/town-plan.test.mjs`'s own no-overlap assertion.
+ *
+ * A wall meeting a pavement tile's edge at the same coordinate is not the z-fighting
+ * configuration the "avoid z-fighting" guidance in the brief for this change was written
+ * against, either: a wall is a vertical face and the pavement's top is a horizontal one, so
+ * even landing on the identical world X or Z they do not share a plane the way two coincident
+ * horizontal slabs (the bug `VERGE_LIFT` exists to prevent, see its own doc comment) would —
+ * they meet at a seam, not a competing surface. So flush is the correct, and the safe, answer.
  */
 export const SET_BACK = CELL_HALF - BUILDING_SCALE
 
