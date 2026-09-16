@@ -1,6 +1,11 @@
 # A Town Around the Colony — Stage 6 of the Moving-In theme
 
-**Status:** approved 2026-09-15. **Renumbered and pending revision** — see below.
+**Status:** SUPERSEDED on 2026-09-16 by
+`docs/superpowers/specs/2026-09-16-moving-in-streets-and-town-design.md`. **Do not implement
+this document.** Its measurements of the art packs, the ground-flattening mechanism and the
+geometry budget were carried forward intact; its architecture — a ring road around the colony
+and a separate square town outside it — was replaced after the ring proved to carry no traffic
+at all. Kept as the record of what was decided and why it changed.
 **Stage:** 7, following the world (1), the delivery drive (2), the crew (3), streets and
 traffic (4), crew garments (5) and the square lattice (6).
 
