@@ -3,99 +3,24 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { planStreets } from '../src/world/streets.js'
 import { allocateCells, colonyAnchor, shipPosition, worldToCell, cellWorld } from '../src/world/plots.js'
-import { distance, ring } from '../src/world/grid.js'
+import { distance } from '../src/world/grid.js'
+import { PROTECTED_CELLS } from '../src/world/street-plan.js'
 
-const SHIP = { x: -2, z: 1 }
 const k = (c) => `${c.x},${c.z}`
-const opts = (anchored = []) => ({ ship: SHIP, anchored: new Set(anchored) })
 
-test('a one-cell colony gets a ring around it', () => {
-  const layout = new Map([['a', [{ x: 0, z: 0 }]]])
-  const { ring, all } = planStreets(layout, opts())
-  assert.ok(ring.length > 0, 'no ring was planned')
-  for (const cell of ring) {
-    assert.ok(all.has(k(cell)), 'a ring cell is missing from `all`')
+test("planStreets()'s membership set matches its cells", () => {
+  const { all, cells } = planStreets()
+  assert.equal(all.size, cells.length, '`all` and `cells` disagree on how many street cells there are')
+  for (const cell of cells) {
+    assert.ok(all.has(k(cell)), `cell ${k(cell)} is in \`cells\` but missing from \`all\``)
   }
 })
 
-test('no street cell is ever a plot cell', () => {
-  const layout = new Map([
-    ['a', [{ x: 0, z: 0 }, { x: 1, z: 0 }, { x: 0, z: 1 }]],
-    ['b', [{ x: 2, z: -1 }, { x: 2, z: 0 }]],
-  ])
-  const { all } = planStreets(layout, opts())
-  for (const cells of layout.values()) {
-    for (const cell of cells) {
-      assert.ok(!all.has(k(cell)), `street cell ${k(cell)} is also a plot cell`)
-    }
+test('a protected cell is never a street', () => {
+  const { all } = planStreets()
+  for (const cell of PROTECTED_CELLS) {
+    assert.ok(!all.has(k(cell)), `protected cell ${k(cell)} was paved over`)
   }
-})
-
-test('no street cell is an anchored district cell', () => {
-  const layout = new Map([['a', [{ x: 0, z: 0 }]]])
-  // A ring-5 district, which is where `colonyAnchor` puts a visiting colony.
-  const district = [{ x: 5, z: -5 }, { x: 5, z: -4 }]
-  const { all } = planStreets(layout, opts(district.map(k)))
-  for (const cell of district) {
-    assert.ok(!all.has(k(cell)), `street cell ${k(cell)} belongs to a district`)
-  }
-})
-
-test('the ring sits outside every home plot cell', () => {
-  const layout = new Map([['a', [{ x: 0, z: 0 }, { x: 1, z: 0 }, { x: 2, z: 0 }]]])
-  const { ring } = planStreets(layout, opts())
-  // Chebyshev distance from the origin of the furthest plot cell is 2 — the same metric
-  // `ring` itself is built from — so every ring cell must be further out than that.
-  const chebyshev = (c) => Math.max(Math.abs(c.x), Math.abs(c.z))
-  for (const cell of ring) {
-    assert.ok(chebyshev(cell) > 2, `ring cell ${k(cell)} is not outside the colony`)
-  }
-})
-
-test('every spur is a chain of adjacent cells reaching the ring', () => {
-  const layout = new Map([['a', [{ x: 0, z: 0 }]]])
-  const { ring, spurs } = planStreets(layout, opts())
-  const onRing = new Set(ring.map(k))
-  const spur = spurs.get('a')
-  assert.ok(spur && spur.length > 0, 'the plot got no spur')
-  for (let i = 1; i < spur.length; i++) {
-    const a = spur[i - 1]
-    const b = spur[i]
-    const step = Math.abs(b.x - a.x) + Math.abs(b.z - a.z)
-    assert.equal(step, 1, `spur step ${i} jumps ${step} cells`)
-  }
-  assert.ok(onRing.has(k(spur[spur.length - 1])), 'the spur does not end on the ring')
-})
-
-test('the depot always gets a spur', () => {
-  const layout = new Map([['a', [{ x: 0, z: 0 }]]])
-  const { spurs } = planStreets(layout, opts())
-  const spur = spurs.get('__ship__')
-  assert.ok(spur && spur.length > 0, 'the depot got no spur')
-})
-
-test('a plot with no unclaimed neighbour gets no spur', () => {
-  // `b` sits at the origin, walled in on all four sides by `a`. There is no free cell
-  // adjacent to it, so no road can reach it — which is expected, not an error: the
-  // vehicle drives the last stretch over the deck, exactly as it did before stage 4.
-  const DIRS = [[1, 0], [0, 1], [-1, 0], [0, -1]]
-  const layout = new Map([
-    ['b', [{ x: 0, z: 0 }]],
-    ['a', DIRS.map(([dx, dz]) => ({ x: dx, z: dz }))],
-  ])
-  const { spurs } = planStreets(layout, opts())
-  assert.ok(!spurs.has('b'), 'a walled-in plot was given a spur it cannot have')
-})
-
-test('planning is stable: the same layout gives the same streets', () => {
-  const layout = new Map([
-    ['a', [{ x: 0, z: 0 }, { x: 1, z: 0 }]],
-    ['b', [{ x: -1, z: 0 }]],
-  ])
-  const first = planStreets(layout, opts())
-  const second = planStreets(layout, opts())
-  assert.deepEqual([...first.all].sort(), [...second.all].sort())
-  assert.deepEqual(first.ring, second.ring)
 })
 
 test('a colony whose plots are separated by street cells is still connected', () => {
@@ -279,10 +204,12 @@ test('the dead hex shim is gone from plots.js', () => {
 
 test('the cells the allocator hands back are read as x/z, not q/r', () => {
   const src = readFileSync('src/game/colony.js', 'utf8')
-  // The three spots that read straight off allocateCells' output (firstPass / layout), which
-  // is where the hang actually lived: valid {x, z} cells misread as {q, r} turn into NaN the
-  // moment streets.js or road-path.js does arithmetic on them.
-  assert.match(src, /anchored\.add\(`\$\{cell\.x\},\$\{cell\.z\}`\)/, 'the anchored-district set still keys on q/r')
+  // The spots that read straight off allocateCells' output (`layout`), which is where the
+  // hang actually lived: valid {x, z} cells misread as {q, r} turn into NaN the moment
+  // streets.js or road-path.js does arithmetic on them. (A third spot, an anchored-district
+  // cell-key set built for the old two-pass `planStreets(layout, { ship, anchored })` call,
+  // was removed along with that call in the streets-and-town stage — `planStreets()` no
+  // longer takes a layout at all, so there is nothing left there to misread.)
   assert.match(src, /cells\.map\(\(c\) => `\$\{c\.x\},\$\{c\.z\}`\)/, 'the plot signature still keys on q/r')
   assert.match(src, /cellWorld\(cells\[0\]\.x, cells\[0\]\.z\)/, "a plot's root cell is still read as q/r")
   // deckedCells and its lookup in groundAt.

@@ -477,20 +477,7 @@ export class Colony {
           : null,
       }
     })
-    // Streets are planned from the layout, then fed back in so no plot sits on one. Two
-    // passes rather than one because the ring's radius depends on where the plots ended up:
-    // the first pass says how far the colony reaches, the second keeps the plots off the
-    // road it implies. A third pass would be chasing its own tail — the ring can only move
-    // outward between the two, never inward, so the second pass is stable.
-    const firstPass = allocateCells(projectList, this.plotCells)
-    // The cell keys of every visiting colony's district: `planStreets` keeps the road off
-    // them, the same way it keeps the road off the depot and off every home plot.
-    const anchored = new Set()
-    for (const p of projectList) {
-      if (!p.anchor) continue
-      for (const cell of firstPass.get(p.id) || []) anchored.add(`${cell.x},${cell.z}`)
-    }
-    this.streets = planStreets(firstPass, { ship: SHIP_CELL_FOR_STREETS, anchored })
+    this.streets = planStreets()
     // A route cached before the ring moved would drive the old road. Stamping the plan and
     // comparing it is cheaper than diffing two cell sets on every house on every frame.
     this._streetStamp = [...this.streets.all].sort().join('|')
