@@ -197,12 +197,11 @@ export const TRAFFIC_LIGHT_PARTS = Object.freeze(['trafficlight_A', 'trafficligh
  * How far the pavement's kerb stands above the carriageway. `base` and the road surface UV
  * into the same atlas swatch (cell 2, `#818c91`) — the same grey — so a kerb cannot read as a
  * colour change, only as a height step and the shadow it casts. Streetlights and traffic
- * lights use the same figure for their own lift, even though — see the offsets below — they
- * do not stand on the pavement itself: they stand 1.2 units beyond its outer edge, on bare
- * terrain (pavement's own outer edge is at 1 sub-grid step out plus its own half-width; the
- * lamp/signal corner is 2 steps out — `2 * step - (step + roadTileScale())` = 1.2 at
- * `cellSize` 12). Pinned by a test: swapping this for `ROAD_SURFACE_LIFT` (kerb flush with
- * the carriageway) must fail it.
+ * lights use the same figure for their own lift: both now stand within the pavement's own
+ * footprint (the lamp on the kerb band's centre line, the signal on the corner tile near the
+ * junction — see the offsets in `vergeFurniture`'s own doc comment below), not out on bare
+ * terrain beyond it, so sharing the pavement's lift reads correctly for all three. Pinned by
+ * a test: swapping this for `ROAD_SURFACE_LIFT` (kerb flush with the carriageway) must fail it.
  */
 export const VERGE_LIFT = ROAD_SURFACE_LIFT * 8
 
@@ -244,13 +243,38 @@ function isFurnished(cell, streetKeys) {
  *
  * - **Pavement.** For each arm, two `base` tiles per side, at the same two sub-grid steps
  *   `carriagewayTiles` lays along that arm, offset one sub-grid step perpendicular so no tile
- *   lands on the carriageway itself. A cell with two perpendicular arms (a corner or a
- *   junction) has both arms claim the same inner-diagonal tile — deduplicated below, or the
- *   count would overstate the vertex cost and this module's own "no coincident slabs" claim
- *   would be false.
- * - **Streetlights.** One per arm, at the outer sub-grid step, two steps off the centre line
- *   — on the verge, behind the pavement. Which side alternates with the parity of
- *   `cell.x + cell.z`, so a street does not grow lamps down one side only.
+ *   lands on the carriageway itself — this alone lays an unbroken band the full length of the
+ *   arm, from flush with the centre tile (perpendicular offset 1 step's inner edge sits at
+ *   the carriageway's own edge, 1 step's outer edge meets 2 step's inner edge) out to flush
+ *   with the cell boundary (2 step's outer edge lands exactly on it).
+ *
+ *   That band alone still breaks at a turn: where two perpendicular arms meet, each arm's own
+ *   strip stops one step short of the cell's true corner, leaving a notch in the outer
+ *   quadrant between them (the "verspringing" the reference render never shows — its kerb runs
+ *   straight around every corner). This closes it: for every pair of this cell's own arms that
+ *   are perpendicular to each other (their dot product is 0 — opposite arms, dot −1, get no
+ *   corner tile, since a straight run has no notch to close), one more `base` tile is laid at
+ *   2 steps out on each of their two axes at once — the shared outer corner both arms' own
+ *   strips fall just short of. That tile is flush with both arms' own outer (2-step) tiles and
+ *   with the cell boundary on both axes, so the band now runs continuously along every arm and
+ *   turns every corner with no gap, meeting the next street cell's own pavement edge to edge
+ *   (or, diagonally across an intersection, corner to corner) with nothing missing between.
+ *
+ *   A cell with two perpendicular arms (a corner, a T-junction or a crossing) has more than
+ *   one arm claim the same tile at points where their strips or corners coincide (the classic
+ *   case: two perpendicular arms' inner sub-grid-step tiles are the same tile) — deduplicated
+ *   below, or the count would overstate the vertex cost and this module's own "no coincident
+ *   slabs" claim would be false.
+ * - **Streetlights.** One per arm, standing on the kerb rather than beyond it: 1.5 sub-grid
+ *   steps out along the arm (between the pavement's two along-arm tiles, at the seam where
+ *   they meet) and exactly 1 sub-grid step off the centre line — the pavement band's own
+ *   centre (the band runs from 1 to 2 steps off centre; 1 step is its inner edge, flush with
+ *   the carriageway, so this stands mid-band, clear of the road and still visibly at the
+ *   roadside rather than out on the open verge beyond the band's outer edge). No sub-grid
+ *   placement this module makes ever lands at 1.5 steps along an arm, so a lamp never
+ *   coincides with a pavement tile, a crossing, or the traffic light below. Which side
+ *   alternates with the parity of `cell.x + cell.z`, so a street does not grow lamps down one
+ *   side only.
  *
  *   `streetlight` has a front: measured from `city.glb`, its cantilever arm reaches along
  *   local −X (to x −0.239) and the lit lens sits at that tip, while the mast itself is only
@@ -260,7 +284,9 @@ function isFurnished(cell, streetKeys) {
  *   direction) lands on `(−cosθ, sinθ)`. Let `v` be the unit direction from the lamp toward
  *   the carriageway it should overhang — here, back across the pavement toward this arm's own
  *   centre line, i.e. `-lampSide * perp`. Setting `(−cosθ, sinθ) = v` gives
- *   `cosθ = −v.x, sinθ = v.z`, so `θ = atan2(v.z, −v.x)`.
+ *   `cosθ = −v.x, sinθ = v.z`, so `θ = atan2(v.z, −v.x)`. This derivation does not depend on
+ *   the lamp's exact distance from the centre line, only on which side it stands, so moving
+ *   the lamp onto the kerb leaves the facing formula itself unchanged.
  * - **Zebra crossings.** On a furnished cell with three or four arms (R7), one arm is chosen
  *   deterministically by `cellHash` and its outermost carriageway tile is replaced by
  *   `road_straight_crossing` at that tile's own position, scale and rotation — the same
@@ -268,14 +294,18 @@ function isFurnished(cell, streetKeys) {
  *   is what actually drops the plain tile there; this only names where the crossing goes.
  * - **Traffic lights.** One on every furnished cell with three or four arms (R7), facing the
  *   same arm the crossing on that cell governs — the sign for the crossing it stands beside.
- *   It sits two sub-grid steps out along that arm (flush with the crossing) and 1.5 steps to
- *   one side, perpendicular — a half sub-grid step *closer* to the centre line than a
- *   streetlight stands (2 steps), not beyond it.
- *   Every other piece here sits at a whole number of sub-grid steps on both axes; landing on
- *   a half step is what keeps a traffic light off every streetlight, pavement tile and
- *   crossing this module can ever place, on this cell or any other, without having to track
- *   what has already been placed — a coincident post and signal (see the 15-collision defect
- *   this replaced) cannot arise from two axis-aligned integer offsets and one half-integer.
+ *   It stands at the corner of the junction rather than out by the crossing: 0.75 sub-grid
+ *   steps out along the governed arm and 0.75 steps to one side, perpendicular — inside the
+ *   pavement's own footprint near the inner corner nearest the carriageway (a real light does
+ *   stand on the corner of the sidewalk, not out on the open verge), and clear of the
+ *   carriageway itself, whose half-width (1.2) is exactly half a sub-grid step: 0.75 steps
+ *   (1.8 units) leaves 0.6 units of clearance past the carriageway's own edge.
+ *   No other placement in this module ever lands at 0.75 sub-grid steps on an axis — every
+ *   pavement tile, streetlight and crossing sits at 1, 1.5 or 2 steps — so a traffic light
+ *   can never coincide with any of them, on this cell or any other, without having to track
+ *   what has already been placed (a coincident post and signal — see the 15-collision defect
+ *   an earlier round of this module shipped — cannot arise from one feature's positions never
+ *   sharing a step value with any other's).
  *
  *   `trafficlight_A` and `_B` both carry their three lens groups (red/amber/green) pinned to
  *   the model's own +Z face. Local +Z maps to `(sinθ, cosθ)` under the same rotation, so
@@ -285,18 +315,17 @@ function isFurnished(cell, streetKeys) {
  *   approaches the junction.
  *
  *   `trafficlight_C` — the same head on a gantry arm reaching to local x = −0.764 (measured
- *   from `city.glb`) — is **not** in `TRAFFIC_LIGHT_PARTS`, and is never placed. Under the
- *   rotation above, local −X maps to `(−cosθ, sinθ) = (−v.z, v.x)`, which is this arm's own
- *   `−perp` — the *same* side the pole itself is already offset toward, not the opposite one.
- *   So a `_C` gantry swings further out over open verge, away from the road, never back across
- *   it; an earlier version of this comment had that sign backwards. Even corrected, the arm
- *   still could not reach: the pole stands 1.5 steps (3.6 units) off the centre line, the
- *   carriageway's own half-width is 1.2, and the pavement tile at this arm's outer step
- *   occupies every offset from 1.2 to 3.6 with no gap — so the only pole offset a 0.764-unit
- *   arm could reach the carriageway from also stands the pole inside that pavement tile. A
- *   gantry arm hanging over open verge instead of the carriageway would read as broken, so
- *   `_C` is left out of the pool rather than placed wrong; `_A`/`_B`, plain pole signals, are
- *   correct as they stand.
+ *   from `city.glb`) — stays out of `TRAFFIC_LIGHT_PARTS` in this revision too, but the reason
+ *   has changed along with the pole's position. At the old position (pole 3.6 units off the
+ *   centre line, carriageway edge at 1.2) the gap the gantry needed to close was 2.4 units —
+ *   over three times its own 0.764-unit reach, a hard shortfall no placement could fix. At the
+ *   new position (pole 1.8 units off the centre line) the gap is only 0.6 units, *inside* the
+ *   gantry's own reach — geometrically the arm could now swing back across the carriageway
+ *   edge. `_C` is kept out anyway: re-admitting it is a separate decision (new reach math to
+ *   verify, a different visual mix of pole and gantry signals along the network) outside this
+ *   revision's scope, which is the three lamp/signal *positions* named in the brief, not the
+ *   part pool. `_A`/`_B`, plain pole signals whose facing was already verified correct, are
+ *   unaffected by any of this and remain the only parts this pool ever draws from.
  *
  * @param streetCells every street cell, `{x, z}`
  * @param cellSize world units per cell
@@ -335,16 +364,39 @@ export function vergeFurniture(streetCells, cellSize) {
         }
       }
       // v: unit direction from the lamp back to this arm's own centre line, i.e. the
-      // carriageway it should overhang. θ = atan2(v.z, -v.x) — derived above.
+      // carriageway it should overhang. θ = atan2(v.z, -v.x) — derived above. Stands on the
+      // kerb: 1.5 steps along the arm (the seam between the pavement's two along-arm tiles),
+      // 1 step off the centre line (the pavement band's own centre, clear of the carriageway
+      // at 1 step's inner edge).
       const v = { x: -lampSide * perp.x, z: -lampSide * perp.z }
       out.push({
         part: LAMP_PART,
-        x: cx + d.x * step * 2 + lampSide * perp.x * step * 2,
-        z: cz + d.z * step * 2 + lampSide * perp.z * step * 2,
+        x: cx + d.x * step * 1.5 + lampSide * perp.x * step,
+        z: cz + d.z * step * 1.5 + lampSide * perp.z * step,
         ry: Math.atan2(v.z, -v.x),
         scale: 1.6,
         lift: VERGE_LIFT,
       })
+    }
+
+    // Corner pavement: where two of this cell's own arms are perpendicular to each other, the
+    // strip each one lays (above) stops one sub-grid step short of the true outer corner
+    // between them — see the doc comment. Laying one more tile there, 2 steps out on each of
+    // both arms' own axes at once, closes that notch so the band turns the corner with no gap.
+    // Opposite arms (dot product -1, a straight run) get no corner tile — there is no notch to
+    // close there, since the two strips run parallel rather than meeting at a corner.
+    for (let i = 0; i < arms.length; i++) {
+      for (let j = i + 1; j < arms.length; j++) {
+        const d1 = arms[i]
+        const d2 = arms[j]
+        if (d1.x * d2.x + d1.z * d2.z !== 0) continue
+        const x = cx + (d1.x + d2.x) * step * 2
+        const z = cz + (d1.z + d2.z) * step * 2
+        const key = posKey(x, z)
+        if (pavementSeen.has(key)) continue
+        pavementSeen.add(key)
+        out.push({ part: PAVEMENT_PART, x, z, ry: 0, scale, lift: VERGE_LIFT })
+      }
     }
 
     if (arms.length >= 3) {
@@ -361,14 +413,17 @@ export function vergeFurniture(streetCells, cellSize) {
       })
 
       // Faces along `d`, the governed arm's own outward direction — toward the traffic
-      // driving in along it. Offset to the far (`-perp`) side by a half sub-grid step, which
-      // keeps it off the whole-step grid every other piece here uses (see the doc comment).
-      // `TRAFFIC_LIGHT_PARTS` excludes `trafficlight_C` — its gantry can't reach the
-      // carriageway from this position; see the doc comment above for the measurement.
+      // driving in along it. Stands at the corner of the junction, 0.75 sub-grid steps out
+      // along the arm and 0.75 to the far (`-perp`) side — inside the pavement's own footprint
+      // near the carriageway, clear of it (see the doc comment for the clearance figure), and
+      // off the whole- and half-step grid every other piece here uses, so it can never
+      // coincide with a pavement tile, a streetlight or a crossing.
+      // `TRAFFIC_LIGHT_PARTS` excludes `trafficlight_C`; see the doc comment above — no longer
+      // a hard reach shortfall at this position, but still out of scope for this revision.
       out.push({
         part: TRAFFIC_LIGHT_PARTS[mod(h, TRAFFIC_LIGHT_PARTS.length)],
-        x: cx + d.x * step * 2 - perp.x * step * 1.5,
-        z: cz + d.z * step * 2 - perp.z * step * 1.5,
+        x: cx + d.x * step * 0.75 - perp.x * step * 0.75,
+        z: cz + d.z * step * 0.75 - perp.z * step * 0.75,
         ry: Math.atan2(d.x, d.z),
         scale: 1,
         lift: VERGE_LIFT,

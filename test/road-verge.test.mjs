@@ -248,8 +248,11 @@ test('a streetlight\'s arm overhangs its own arm\'s carriageway, not the block b
     const lampSide = (c.x + c.z) % 2 === 0 ? 1 : -1
     for (const d of armsOf(c)) {
       const perp = { x: d.z, z: -d.x }
-      const x = cx + d.x * step * 2 + lampSide * perp.x * step * 2
-      const z = cz + d.z * step * 2 + lampSide * perp.z * step * 2
+      // 1.5 steps along the arm (the seam between the pavement's two along-arm tiles), 1 step
+      // off the centre line (the pavement band's own centre) — see the streetlight-offset
+      // pinning test below for why exactly these figures.
+      const x = cx + d.x * step * 1.5 + lampSide * perp.x * step
+      const z = cz + d.z * step * 1.5 + lampSide * perp.z * step
       const lamp = lamps.find((l) => Math.abs(l.x - x) < 1e-6 && Math.abs(l.z - z) < 1e-6)
       if (!lamp) continue
       checked++
@@ -272,14 +275,16 @@ test('a streetlight\'s arm overhangs its own arm\'s carriageway, not the block b
   assert.ok(checked > 20, `only checked ${checked} streetlights against their own arm`)
 })
 
-test('the traffic-light selection pool excludes the unreachable gantry variant', () => {
-  // trafficlight_C's gantry arm reaches only 0.764 units (measured from city.glb) from a pole
-  // that stands 3.6 units off the centre line, while the carriageway's own half-width is 1.2
-  // and the pavement tile at the arm's outer step fills every offset from 1.2 to 3.6 with no
-  // gap — so no pole placement can both keep the arm's tip over the carriageway and keep the
-  // pole itself off the carriageway and clear of that pavement tile. A gantry hanging over
-  // open verge would read as broken, so trafficlight_C is left out of the pool: only the two
-  // pole-mounted variants are ever chosen.
+test('the traffic-light selection pool keeps the gantry variant out', () => {
+  // trafficlight_C's gantry arm reaches 0.764 units (measured from city.glb). At this
+  // revision's pole position — 0.75 sub-grid steps (1.8 units) off the centre line, against a
+  // carriageway half-width of 1.2 — the gap to close is only 0.6 units, inside the gantry's
+  // own reach: unlike the pole's old position (3.6 units off centre, a 2.4-unit gap the
+  // 0.764-unit arm could never close), this is no longer a hard geometric shortfall. `_C` is
+  // kept out of the pool anyway: re-admitting it is a separate decision — new reach math to
+  // verify, a different visual mix of pole and gantry signals — outside this revision's scope,
+  // which only moved the two existing parts' position. Only the two pole-mounted variants are
+  // chosen.
   assert.deepEqual([...TRAFFIC_LIGHT_PARTS], ['trafficlight_A', 'trafficlight_B'])
 
   // Confirms the exclusion actually reaches the real network's output, not just the pool's
@@ -320,4 +325,97 @@ test('a traffic light faces the traffic on the arm it governs', () => {
     )
   }
   assert.ok(checked > 0, `only checked ${checked} traffic lights against their governed arm`)
+})
+
+// ── design revision: lamps onto the kerb, signals onto the junction corner, pavement sealed
+// around every turn (see road-mesh.js's own doc comments for the derivation of each figure) ──
+
+test('streetlights stand on the kerb, not out beyond the pavement in open grass', () => {
+  // Independent of road-mesh.js's own `d`/`perp` bookkeeping: a lamp sits `1.5` sub-grid steps
+  // along its arm and `1` step off the centre line, and — because the arm direction and its
+  // perpendicular are always axis-aligned and orthogonal — that always puts exactly one of
+  // the lamp's own local x/z offsets from its cell's centre at 1.5 steps (3.6 units) and the
+  // other at 1 step (2.4 units), regardless of which of the four arms it belongs to. So this
+  // checks only that unordered pair, computed from nothing but the lamp's own position and its
+  // cell's centre — not by re-deriving which arm it is on.
+  //
+  // At the old (wrong) offset — 2 steps along, 2 steps off the centre line, 4.8 units beyond
+  // the pavement's own outer edge at 3.6 — both figures come out equal at 4.8/4.8 instead of
+  // the distinct 2.4/3.6 pair this asserts, so this test catches a regression back to it.
+  const lamps = of('streetlight')
+  assert.ok(lamps.length > 20, `only ${lamps.length} streetlights`)
+  const step = CELL_SIZE / SUBGRID
+  for (const l of lamps) {
+    const cx = Math.round(l.x / CELL_SIZE) * CELL_SIZE
+    const cz = Math.round(l.z / CELL_SIZE) * CELL_SIZE
+    const offsets = [Math.abs(l.x - cx), Math.abs(l.z - cz)].sort((a, b) => a - b)
+    assert.ok(
+      Math.abs(offsets[0] - step) < 1e-6 && Math.abs(offsets[1] - 1.5 * step) < 1e-6,
+      `streetlight at ${l.x},${l.z} sits ${offsets[0]}/${offsets[1]} off its cell's centre, ` +
+        `expected ${step}/${1.5 * step}`
+    )
+  }
+})
+
+test('traffic lights stand at the junction corner, close to the cell centre', () => {
+  // Same independence as the streetlight test above: a signal sits `0.75` sub-grid steps out
+  // on both the along-arm and perpendicular axes at once (unlike a lamp, the same figure on
+  // both), so its local x/z offsets from its cell's centre both come out at 0.75 steps (1.8
+  // units) regardless of which governed arm it stands beside. Also checks the clearance the
+  // brief asked for directly: 1.8 units clears the carriageway's own 1.2-unit half-width by
+  // 0.6 units — "just clear", not deep in open verge.
+  //
+  // At the old (wrong) offset — 2 steps along the arm, 1.5 steps perpendicular, about 6 units
+  // diagonally — the two local offsets come out as the distinct pair 4.8/3.6 instead of a
+  // matched 1.8/1.8, so this test catches a regression back to it.
+  const lights = ['trafficlight_A', 'trafficlight_B'].flatMap(of)
+  assert.ok(lights.length > 0, 'no traffic lights')
+  const step = CELL_SIZE / SUBGRID
+  const carriagewayHalfWidth = CARRIAGEWAY_WIDTH / 2
+  for (const l of lights) {
+    const cx = Math.round(l.x / CELL_SIZE) * CELL_SIZE
+    const cz = Math.round(l.z / CELL_SIZE) * CELL_SIZE
+    const dx = Math.abs(l.x - cx)
+    const dz = Math.abs(l.z - cz)
+    assert.ok(
+      Math.abs(dx - 0.75 * step) < 1e-6 && Math.abs(dz - 0.75 * step) < 1e-6,
+      `traffic light at ${l.x},${l.z} sits ${dx}/${dz} off its cell's centre, expected ${0.75 * step}/${0.75 * step}`
+    )
+    assert.ok(
+      dx > carriagewayHalfWidth && dz > carriagewayHalfWidth,
+      `traffic light at ${l.x},${l.z} does not clear the carriageway's own half-width ${carriagewayHalfWidth}`
+    )
+  }
+})
+
+test('the pavement turns every corner with no gap — no bare notch where two perpendicular arms meet', () => {
+  // Independently recomputes, for every furnished cell, which pairs of its own arms are
+  // perpendicular to each other (dot product 0 — an opposite pair, dot -1, is a straight run
+  // with no corner to turn) and asserts a pavement tile sits at the shared outer corner those
+  // two arms' own strips fall one sub-grid step short of (2 steps out on both arms' axes at
+  // once) — the exact tile that closes the notch the brief's "rare verspringing" described.
+  const paving = of('base')
+  const step = CELL_SIZE / SUBGRID
+  let checked = 0
+  for (const c of streets.cells) {
+    if (!bordersTown(c)) continue
+    const arms = armsOf(c)
+    for (let i = 0; i < arms.length; i++) {
+      for (let j = i + 1; j < arms.length; j++) {
+        const d1 = arms[i]
+        const d2 = arms[j]
+        if (d1.x * d2.x + d1.z * d2.z !== 0) continue
+        checked++
+        const x = c.x * CELL_SIZE + (d1.x + d2.x) * step * 2
+        const z = c.z * CELL_SIZE + (d1.z + d2.z) * step * 2
+        const found = paving.some((p) => Math.abs(p.x - x) < 1e-6 && Math.abs(p.z - z) < 1e-6)
+        assert.ok(
+          found,
+          `no pavement tile closes the corner at ${x},${z}, where arms ${JSON.stringify(d1)} and ` +
+            `${JSON.stringify(d2)} of cell ${c.x},${c.z} turn`
+        )
+      }
+    }
+  }
+  assert.ok(checked > 0, 'no perpendicular arm pair found in the real network to test corner pavement against')
 })
