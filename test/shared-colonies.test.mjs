@@ -8,6 +8,7 @@ import assert from 'node:assert/strict'
 import { GuestServer, guestThread, hostAllowed, normalizeIp } from '../server/guest.mjs'
 import { Neighbors, cleanNeighbor } from '../server/neighbors.mjs'
 import { Discovery } from '../server/discovery.mjs'
+import { applyViewed } from '../server/api.mjs'
 import { allocateCells, colonyAnchor } from '../src/world/plots.js'
 
 // ── the guest socket ──────────────────────────────────────────────────────────
@@ -74,6 +75,29 @@ test('the guest socket answers info and threads, and nothing else', async () => 
       assert.equal((await fetch(`${base}/guest/threads`, { method })).status, 405, `${method} must be refused`)
     }
   })
+})
+
+// ── the viewed overlay a guest inherits ───────────────────────────────────────
+
+test('applyViewed clears unread for a thread the owner already looked at', () => {
+  const threads = [
+    { id: 'a', unread: true, lastActivityAt: 100 }, // viewed after it last moved → hand goes down
+    { id: 'b', unread: true, lastActivityAt: 300 }, // waved again after the look → still waiting
+    { id: 'c', unread: true, lastActivityAt: 100 }, // never viewed → still waiting
+  ]
+  const out = applyViewed(threads, { a: 200, b: 200 })
+  assert.equal(out.find((t) => t.id === 'a').unread, false, 'a was seen after its last activity')
+  assert.equal(out.find((t) => t.id === 'b').unread, true, 'b moved after it was seen')
+  assert.equal(out.find((t) => t.id === 'c').unread, true, 'c was never seen')
+  // The overlay returns fresh objects; the input threads are left as the scan produced them.
+  assert.equal(threads[0].unread, true)
+})
+
+test('applyViewed tolerates a missing or malformed viewedAt map', () => {
+  const threads = [{ id: 'a', unread: true, lastActivityAt: 100 }]
+  assert.equal(applyViewed(threads, undefined)[0].unread, true)
+  assert.equal(applyViewed(threads, null)[0].unread, true)
+  assert.deepEqual(applyViewed([], { a: 1 }), [])
 })
 
 // ── the origin check ────────────────────────────────────────────────────────────

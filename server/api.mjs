@@ -321,6 +321,23 @@ async function reconcileArchived(threads) {
   return threads.map((t) => (archived(t) ? { ...t, archived: true } : t))
 }
 
+/**
+ * Apply the owner's "I've looked at this" marks: a thread the owner viewed at or after its last
+ * activity stops counting as unread, exactly as the owner's own page does in `src/main.js`
+ * (`applyThreads`). `unread` comes raw from the harness, which only drops it when the thread is
+ * opened in the harness's own app — so without this a "mark as viewed" would quiet the thread on
+ * the owner's screen while a guest (a hub wall reading the guest API) kept it waving for minutes.
+ * Serving the same overlay to guests is what lets "I've handled it" reach the wall. Pure, and it
+ * returns fresh objects so the scan the owner's own map reads is left untouched.
+ */
+export function applyViewed(threads, viewedAt) {
+  const viewed = asObject(viewedAt)
+  return (threads || []).map((t) => {
+    const at = viewed[t.id]
+    return at && t.lastActivityAt <= at ? { ...t, unread: false } : t
+  })
+}
+
 function send(res, status, body) {
   const payload = JSON.stringify(body)
   res.writeHead(status, {
@@ -418,11 +435,13 @@ const guest = new GuestServer({
     ...(currentNetwork.neighbors || []).map((n) => n.host),
     ...(currentNetwork.allowedReaders || []),
   ],
-  // Guests see only what the owner opted to share: the same scan, archived flags applied,
-  // then filtered to the allowlist — by session id or by repo name — before anything leaves.
-  // An empty allowlist shares nothing, which is the whole point of opt-in.
+  // Guests see only what the owner opted to share: the same scan, archived flags applied and
+  // the owner's own "viewed" marks folded in (so a thread the owner has cleared stops waving on
+  // the wall too), then filtered to the allowlist — by session id or by repo name — before
+  // anything leaves. An empty allowlist shares nothing, which is the whole point of opt-in.
   getThreads: async () => {
-    const all = await reconcileArchived(await scanThreads())
+    const { viewedAt } = await readState()
+    const all = applyViewed(await reconcileArchived(await scanThreads()), viewedAt)
     const shared = new Set(currentNetwork.shared || [])
     if (!shared.size) return []
     return all.filter((t) => shared.has(t.id) || shared.has(t.project))
