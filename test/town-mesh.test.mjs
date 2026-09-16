@@ -4,6 +4,7 @@ import { NodeIO } from '@gltf-transform/core'
 import { townPlan, townStamp, TOWN_VERTEX_BUDGET } from '../src/world/town-mesh.js'
 import { planStreets } from '../src/world/streets.js'
 import { CELL_SIZE } from '../src/world/grid.js'
+import { SET_BACK } from '../src/world/town-plan.js'
 
 const doc = await new NodeIO().read('public/assets/city.glb')
 const vertsOf = new Map()
@@ -32,7 +33,28 @@ test('the town stays under its geometry ceiling', () => {
 // `streets.has(k)` branch in `townPlan` skips before `claimed` is ever consulted, making a
 // "the colony wins" assertion pass for the wrong reason (or on too few real cells).
 const all = townPlan({ streets: streets.all, claimed: new Set() })
-const cellOf = (b) => `${Math.round(b.x / CELL_SIZE)},${Math.round(b.z / CELL_SIZE)}`
+
+// A building's own position is no longer inside its owning cell's `CELL_SIZE / 2` bounds —
+// the tighten revision's `SET_BACK` (see its own doc comment in town-plan.js) deliberately
+// reaches into the neighbouring street cell's own verge, so simply rounding `b.x / CELL_SIZE`
+// can now round to that street cell instead. This undoes the row's own `SET_BACK` offset along
+// its facing direction (recovered from `ry`, the same four canonical rotations `town-plan.js`
+// itself uses) before rounding, recovering the true owning cell regardless of how far out
+// `SET_BACK` reaches.
+function directionOfRy(ry) {
+  const EPS = 1e-6
+  if (Math.abs(ry - Math.PI / 2) < EPS) return { x: 1, z: 0 }
+  if (Math.abs(ry + Math.PI / 2) < EPS) return { x: -1, z: 0 }
+  if (Math.abs(ry) < EPS) return { x: 0, z: 1 }
+  if (Math.abs(Math.abs(ry) - Math.PI) < EPS) return { x: 0, z: -1 }
+  throw new Error(`ry ${ry} is not one of the four canonical rotations`)
+}
+const cellOf = (b) => {
+  const d = directionOfRy(b.ry)
+  const cx = b.x - d.x * SET_BACK
+  const cz = b.z - d.z * SET_BACK
+  return `${Math.round(cx / CELL_SIZE)},${Math.round(cz / CELL_SIZE)}`
+}
 const buildingsByCell = new Map()
 for (const b of all) {
   const k = cellOf(b)

@@ -34,10 +34,14 @@ test('a claimed cell is no longer a planting site', () => {
 
 // ── keepClearCells: the per-cell fence R8 asks for ──────────────────────────────────────
 
-test('keepClearCells fences off every one of the 156 street cells', () => {
+test('keepClearCells fences off every one of the 172 street cells', () => {
+  // 172, not the 156 of the previous revision: `MAX_BLOCK` dropped from 3 to 2
+  // (`street-plan.js`), which packs streets closer together and raises the count — see the
+  // report for the full before/after measurement. The exact figure is still worth pinning: a
+  // silent drop would mean the fence swept fewer cells than the real network has.
   const clear = keepClearCells({ streets: streets.all, claimed: new Set() })
   const clearKeys = new Set(clear.map((p) => cellOf(p.x, p.z)))
-  assert.equal(streets.cells.length, 156, `expected 156 street cells, found ${streets.cells.length}`)
+  assert.equal(streets.cells.length, 172, `expected 172 street cells, found ${streets.cells.length}`)
   for (const s of streets.cells) {
     assert.ok(clearKeys.has(`${s.x},${s.z}`), `street cell ${s.x},${s.z} is not fenced off`)
   }

@@ -81,14 +81,29 @@ import { blockContent, inTown } from './town-plan.js'
  * round figure (10,000), the same convention the old 556,700 -> 550,000 rounding used.
  *
  * The spec's rule is that the scenery must not outweigh the thing it surrounds. If a later
- * change pushes past this, the levers, in order of fewest side effects: the frontage-gap
- * probability in `blockContent` (`town-plan.js`), the kit's `_withoutBase` building variants,
- * `GREEN_SHARE`, and last `TOWN_CELL_RADIUS` — which redraws the street network too, since
- * `street-plan.js` shares it. None of them was needed by this revision: with `GREEN_SHARE`
- * brought down from 0.55 to 0.3 (see its own doc comment in `town-plan.js` — the opposite of
- * a cut, spending the headroom this re-measurement opened up on a denser town), the real
- * network places 327 buildings for **750,285** vertices — comfortably under this ceiling,
- * with 559,715 to spare.
+ * change pushes past this, the levers, in order of fewest side effects: the per-slot gap
+ * probability in `blockContent` (`town-plan.js`, `GAP_SHARE`), the kit's `_withoutBase`
+ * building variants, `GREEN_SHARE`, and last `TOWN_CELL_RADIUS` — which redraws the street
+ * network too, since `street-plan.js` shares it.
+ *
+ * Re-measured again in the tighten revision (`MAX_BLOCK` 3 -> 2 in `street-plan.js`, the
+ * pavement narrowed back to a footway and `SET_BACK` moved out to meet it — see their own doc
+ * comments): the real network places 332 buildings for **760,343** vertices — up slightly
+ * from the previous revision's 327 / 750,285 (more, smaller blocks means slightly more
+ * frontage overall, only partly offset by the new diagonal-corner skip in `blockContent`) —
+ * still comfortably under this ceiling, with 549,657 to spare. This figure, like the one
+ * before it, counts only `townPlan`'s own buildings, not the street surface and verge
+ * furniture `road-mesh.js` draws alongside them (carriageway, footway, lamps, signals,
+ * crossings): those are cheap per piece (measured at 104-272 vertices each, depending on the
+ * part) but the real network places about 2,000 of them, for **243,910** vertices total —
+ * *down* from the previous revision's 285,980 despite the higher street-cell count (172, up
+ * from 156), because narrowing the pavement back to one sub-grid tile per side removes far
+ * more vertices than the extra street cells add. Buildings and street geometry together come
+ * to 1,004,253, itself under `TOWN_VERTEX_BUDGET` — but that combined figure is not what
+ * `test/town-mesh.test.mjs`'s own ceiling check measures (it sums `townPlan`'s buildings
+ * only, matching this constant's own name), so it is reported here for completeness rather
+ * than pinned by a test of its own. None of the levers above was needed by this revision:
+ * `GREEN_SHARE` stays at 0.3.
  */
 export const TOWN_VERTEX_BUDGET = 1310000
 

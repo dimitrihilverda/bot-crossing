@@ -27,9 +27,22 @@ export const TOWN_CELL_RADIUS = 8
 /** The seed. Changing it redraws every street in the world. */
 export const STREET_SEED = 20260916
 
-/** How small and how large a generator rectangle may be before it stops being cut, in cells. */
+/**
+ * How small and how large a generator rectangle may be before it stops being cut, in cells.
+ *
+ * `MAX_BLOCK` was 3, which let a rectangle run three cells uncut — 36 units, or fifteen
+ * building-widths (the kit's own module is 2.4, `BUILDING_SCALE` in `town-plan.js`) between
+ * streets. That is what read, in the owner's overhead screenshot, as an enormous empty
+ * expanse with a single row of houses lost in the middle of it: the lattice cell (`CELL_SIZE`
+ * 12) is already five building-widths across, so three of them stacked is far wider than any
+ * real block in the KayKit reference. Lowered to 2 (measured, see
+ * `test/route-on-street.test.mjs` and `test/streets.test.mjs`): streets sit closer together,
+ * at the cost of more, smaller blocks — checked against `allocateCells`' own need for runs of
+ * contiguous non-street cells, since a large repo's plot has nowhere to grow into a block
+ * that no longer exists once its runs get too short.
+ */
 export const MIN_BLOCK = 1
-export const MAX_BLOCK = 3
+export const MAX_BLOCK = 2
 
 /** How often a cut steps sideways partway along, and how often it stops short of one end. */
 export const JOG_CHANCE = 0.45

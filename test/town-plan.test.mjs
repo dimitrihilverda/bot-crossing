@@ -12,6 +12,7 @@ import {
 import { planStreets } from '../src/world/streets.js'
 import { TOWN_CELL_RADIUS } from '../src/world/street-plan.js'
 import { CELL_SIZE, key } from '../src/world/grid.js'
+import { vergeFurniture, carriagewayTiles, ROAD_TILE_SIZE, roadTileScale } from '../src/world/road-mesh.js'
 
 const EPS = 1e-6
 
@@ -72,9 +73,12 @@ test('a built block puts buildings on the sides that face a street', () => {
         assert.ok(BUILDING_PARTS.includes(b.part), `unknown part ${b.part}`)
         const offX = b.x - cell.x * CELL_SIZE
         const offZ = b.z - cell.z * CELL_SIZE
-        // Every building lies inside its own cell.
-        assert.ok(Math.abs(offX) <= 6 + EPS, `building spills out of its cell in x`)
-        assert.ok(Math.abs(offZ) <= 6 + EPS, `building spills out of its cell in z`)
+        // A building no longer has to lie inside its own cell — see `SET_BACK`'s own doc
+        // comment in town-plan.js: it now reaches into the neighbouring street cell's own
+        // outer verge, on purpose, to stand at the kerb rather than at the block's own
+        // boundary. The invariant that actually matters (no overlap with the footway, the
+        // carriageway, or another building) is checked directly, against the real street and
+        // pavement data, by the next test below.
         // The axis (or, only at an outermost slot, both axes) carrying `SET_BACK` pins which
         // side (or sides) of the cell the building could front; the other axis is the row's
         // lateral position along the frontage and is not itself diagnostic.
@@ -119,11 +123,10 @@ function lateralOffset(d, offX, offZ) {
   return d.x !== 0 ? -offZ * d.x : offX * d.z
 }
 
-test('a built frontage is a terrace: several adjacent buildings, no overlaps, inside the cell', () => {
+test('a built frontage is a terrace: several adjacent buildings, and a real terrace shape', () => {
   let cellsChecked = 0
   let buildingsChecked = 0
   let longestRun = 1
-  const half = BUILDING_SCALE
 
   for (let x = -TOWN_CELL_RADIUS; x <= TOWN_CELL_RADIUS; x++) {
     for (let z = -TOWN_CELL_RADIUS; z <= TOWN_CELL_RADIUS; z++) {
@@ -132,31 +135,7 @@ test('a built frontage is a terrace: several adjacent buildings, no overlaps, in
       const content = blockContent(cell, streets.all)
       if (content.kind !== 'built' || content.buildings.length === 0) continue
       cellsChecked++
-
-      for (const b of content.buildings) {
-        const offX = b.x - cell.x * CELL_SIZE
-        const offZ = b.z - cell.z * CELL_SIZE
-        // A building's full footprint — not just its centre — stays inside its own cell.
-        assert.ok(Math.abs(offX) + half <= CELL_SIZE / 2 + EPS, `building footprint crosses the cell boundary in x`)
-        assert.ok(Math.abs(offZ) + half <= CELL_SIZE / 2 + EPS, `building footprint crosses the cell boundary in z`)
-        buildingsChecked++
-      }
-
-      // No two buildings in this cell overlap — including two on perpendicular sides meeting
-      // at a shared corner, which is exactly the case `blockContent`'s own corner rule exists
-      // to prevent (see its doc comment).
-      for (let i = 0; i < content.buildings.length; i++) {
-        for (let j = i + 1; j < content.buildings.length; j++) {
-          const a = content.buildings[i]
-          const c = content.buildings[j]
-          const dx = Math.abs(a.x - c.x)
-          const dz = Math.abs(a.z - c.z)
-          assert.ok(
-            dx >= 2 * half - EPS || dz >= 2 * half - EPS,
-            `buildings overlap in cell (${x},${z}): (${a.x},${a.z}) and (${c.x},${c.z})`
-          )
-        }
-      }
+      buildingsChecked += content.buildings.length
 
       // Group by side, then look for a run of slots exactly `SLOT_PITCH` apart — adjacent,
       // touching buildings, the signature of a terrace rather than the old one-per-side
@@ -187,6 +166,66 @@ test('a built frontage is a terrace: several adjacent buildings, no overlaps, in
     longestRun >= 3,
     `no frontage anywhere in the town has 3 adjacent buildings (longest run found: ${longestRun})`
   )
+})
+
+// ── the withdrawn invariant's replacement: SET_BACK now deliberately reaches past a
+// building's own cell boundary (see SET_BACK's own doc comment), so "inside its own cell" is
+// no longer a real rule. What must still hold — checked here against the real street network
+// and the real pavement/carriageway data road-mesh.js produces for it, town-wide, not just
+// within a single cell — is that no building overlaps the footway, the carriageway, or
+// another building. ──────────────────────────────────────────────────────────────────────────
+
+test('no building overlaps the footway, the carriageway, or another building, anywhere in the town', () => {
+  const half = BUILDING_SCALE
+  const tileHalf = (ROAD_TILE_SIZE * roadTileScale()) / 2
+  const overlap1D = (c1, h1, c2, h2) => Math.abs(c1 - c2) < h1 + h2 - EPS
+  const overlapSquare = (x1, z1, h1, x2, z2, h2) =>
+    overlap1D(x1, h1, x2, h2) && overlap1D(z1, h1, z2, h2)
+
+  const buildings = []
+  for (let x = -TOWN_CELL_RADIUS; x <= TOWN_CELL_RADIUS; x++) {
+    for (let z = -TOWN_CELL_RADIUS; z <= TOWN_CELL_RADIUS; z++) {
+      const cell = { x, z }
+      if (!inTown(cell) || streets.all.has(`${x},${z}`)) continue
+      const content = blockContent(cell, streets.all)
+      if (content.kind !== 'built') continue
+      buildings.push(...content.buildings)
+    }
+  }
+  assert.ok(buildings.length >= 30, `only ${buildings.length} buildings — too few to trust`)
+
+  const furniture = vergeFurniture(streets.cells, CELL_SIZE)
+  const paving = furniture.filter((f) => f.part === 'base')
+  const carriageway = carriagewayTiles(streets.cells, CELL_SIZE)
+
+  for (const b of buildings) {
+    for (const p of paving) {
+      assert.ok(
+        !overlapSquare(b.x, b.z, half, p.x, p.z, tileHalf),
+        `building at (${b.x},${b.z}) overlaps a footway tile at (${p.x},${p.z})`
+      )
+    }
+    for (const t of carriageway) {
+      assert.ok(
+        !overlapSquare(b.x, b.z, half, t.x, t.z, tileHalf),
+        `building at (${b.x},${b.z}) overlaps a carriageway tile at (${t.x},${t.z})`
+      )
+    }
+  }
+
+  // Every building against every other, town-wide — not just within one cell, since the
+  // collision `blockContent`'s "Corners, across two cells" doc comment describes is between
+  // two different cells' rows, both reaching into the same street cell's outer verge.
+  for (let i = 0; i < buildings.length; i++) {
+    for (let j = i + 1; j < buildings.length; j++) {
+      const a = buildings[i]
+      const c = buildings[j]
+      assert.ok(
+        !overlapSquare(a.x, a.z, half, c.x, c.z, half),
+        `buildings overlap: (${a.x},${a.z}) and (${c.x},${c.z})`
+      )
+    }
+  }
 })
 
 test('some blocks are green', () => {

@@ -422,50 +422,76 @@ test('the pavement turns every corner with no gap — no bare notch where two pe
   assert.ok(checked > 0, 'no perpendicular arm pair found in the real network to test corner pavement against')
 })
 
-// ── density revision: the verge is paved all the way to the street cell's own boundary,
-// not just its inner half (see road-mesh.js's own doc comment on vergeFurniture) ─────────────
+// ── tighten revision: the verge is a footway hugging the kerb again, not the plaza an
+// earlier revision widened it into (see road-mesh.js's own doc comment on vergeFurniture) ────
 
-test('the paved verge reaches the street cell\'s own boundary, with no grass beyond it', () => {
-  // The owner's screenshot showed grey paving slabs sitting as detached islands in grass: the
-  // pavement used to stop at the inner sub-grid step (perpendicular offset 1, tile outer edge
-  // at 3.6 of a 6.0 half-cell), leaving a 2.4-unit ribbon of bare terrain between it and the
-  // neighbouring block's own edge. This pins the fix two ways — a tile exists at the outer
-  // sub-grid step, and that tile's own far edge lands exactly on the cell boundary — so a
-  // future change that only widens the *inner* band, or that shrinks the tile's own scale
-  // back down, cannot silently reopen the gap.
+test('the paved verge is a footway hugging the kerb, not a plaza reaching the cell boundary', () => {
+  // An earlier revision paved the *whole* verge — both perpendicular sub-grid steps, reaching
+  // the street cell's own 6.0 boundary — trying to close the owner's "buildings read as far
+  // from the road" complaint. That read as a grey plaza, and it did not even fix the
+  // complaint: `SET_BACK` in `town-plan.js` stayed flush with whatever the paved band's own
+  // outer edge was, so the buildings simply moved out with the pavement. The real fix moves
+  // the buildings into the freed verge instead (see `SET_BACK`'s own doc comment) and this
+  // reverts the pavement itself back to a single sub-grid tile immediately outside the kerb —
+  // continuous along every arm and turning every corner (see the corner test above), its own
+  // outer edge at 3.6, a full 2.4 units short of the cell's own boundary at 6.0.
+  //
+  // Pinned two ways: every expected footway position exists with its far edge at exactly 3.6
+  // (not 6.0, which would mean the widening crept back in), and the total pavement tile count
+  // matches exactly what the footway-plus-corner formula predicts (not more, which would mean
+  // some other tile — e.g. the old outer-step band — is still being emitted alongside it).
   const paving = of('base')
   const step = CELL_SIZE / SUBGRID
   const tileHalfWidth = (ROAD_TILE_SIZE * roadTileScale()) / 2
+  const posKeyLocal = (x, z) => `${x.toFixed(6)},${z.toFixed(6)}`
+  const seen = new Set()
   let checked = 0
+
   for (const c of streets.cells) {
     if (!bordersTown(c)) continue
-    for (const d of armsOf(c)) {
+    const cx = c.x * CELL_SIZE
+    const cz = c.z * CELL_SIZE
+    const arms = armsOf(c)
+    for (const d of arms) {
       const perp = { x: d.z, z: -d.x }
-      for (const side of [1, -1]) {
-        for (const i of [1, 2]) {
-          const x = c.x * CELL_SIZE + d.x * step * i + side * perp.x * step * 2
-          const z = c.z * CELL_SIZE + d.z * step * i + side * perp.z * step * 2
+      for (const i of [1, 2]) {
+        for (const side of [1, -1]) {
+          const x = cx + d.x * step * i + side * perp.x * step
+          const z = cz + d.z * step * i + side * perp.z * step
           const tile = paving.find((p) => Math.abs(p.x - x) < 1e-6 && Math.abs(p.z - z) < 1e-6)
           assert.ok(
             tile,
-            `no outer-verge pavement tile at ${x},${z} (arm ${JSON.stringify(d)}, side ${side}, i ${i}` +
-              ` of cell ${c.x},${c.z}) — the verge stops short of the cell boundary again`
+            `no footway tile at ${x},${z} (arm ${JSON.stringify(d)}, side ${side}, i ${i} of cell` +
+              ` ${c.x},${c.z}) — the footway is no longer continuous along its own kerb`
           )
           checked++
 
-          // The outer edge of this tile — its centre plus half its own width, on the
-          // perpendicular axis, toward the cell boundary — has to land exactly on it.
           const perpAxis = perp.x !== 0 ? 'x' : 'z'
-          const centreOnPerpAxis = perpAxis === 'x' ? c.x * CELL_SIZE : c.z * CELL_SIZE
+          const centreOnPerpAxis = perpAxis === 'x' ? cx : cz
           const farEdge = Math.abs(tile[perpAxis] - centreOnPerpAxis) + tileHalfWidth
           assert.ok(
-            Math.abs(farEdge - CELL_SIZE / 2) < 1e-6,
-            `outer-verge tile at ${tile.x},${tile.z} reaches only ${farEdge} of the cell's own` +
-              ` half-width ${CELL_SIZE / 2} — grass remains between the pavement and the boundary`
+            Math.abs(farEdge - 3.6) < 1e-6,
+            `footway tile at ${tile.x},${tile.z} reaches ${farEdge}, not the expected 3.6 — the` +
+              ' verge has been widened past a footway again'
           )
+          seen.add(posKeyLocal(x, z))
         }
       }
     }
+    for (let i = 0; i < arms.length; i++) {
+      for (let j = i + 1; j < arms.length; j++) {
+        const d1 = arms[i]
+        const d2 = arms[j]
+        if (d1.x * d2.x + d1.z * d2.z !== 0) continue
+        seen.add(posKeyLocal(cx + (d1.x + d2.x) * step * 2, cz + (d1.z + d2.z) * step * 2))
+      }
+    }
   }
-  assert.ok(checked > 50, `only checked ${checked} outer-verge tiles`)
+  assert.ok(checked > 50, `only checked ${checked} footway tiles`)
+  assert.equal(
+    paving.length,
+    seen.size,
+    `${paving.length} pavement tiles were produced, but the footway-plus-corner formula only ` +
+      `predicts ${seen.size} — extra tiles suggest the verge has been widened again`
+  )
 })
