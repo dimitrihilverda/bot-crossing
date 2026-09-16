@@ -1,9 +1,19 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { inTown, townRadiusAt, blockContent, BUILDING_PARTS } from '../src/world/town-plan.js'
+import {
+  inTown,
+  townRadiusAt,
+  blockContent,
+  BUILDING_PARTS,
+  SET_BACK,
+  SLOT_PITCH,
+  BUILDING_SCALE,
+} from '../src/world/town-plan.js'
 import { planStreets } from '../src/world/streets.js'
 import { TOWN_CELL_RADIUS } from '../src/world/street-plan.js'
 import { CELL_SIZE, key } from '../src/world/grid.js'
+
+const EPS = 1e-6
 
 const streets = planStreets()
 
@@ -42,35 +52,141 @@ test('block content depends on its own position and nothing else', () => {
 })
 
 test('a built block puts buildings on the sides that face a street', () => {
+  // Every built cell in the town, not a handful of hand-picked ones: a row's outermost slot
+  // sits exactly on the cell's own corner (its lateral offset happens to equal `SET_BACK` too
+  // — see `SLOT_OFFSETS`), so for that one slot the set-back axis is genuinely ambiguous
+  // between its own side and the adjacent one. Sweeping every built cell means the (many)
+  // unambiguous buildings — every slot but the outermost — still pin the check tight, so an
+  // across-the-board defect ("every side", "the opposite side") cannot hide behind the
+  // corner's ambiguity.
   let checked = 0
   let buildingsChecked = 0
-  for (const cell of [{ x: 1, z: 1 }, { x: 2, z: 3 }, { x: -3, z: 2 }, { x: 4, z: -1 }, { x: -2, z: -4 }]) {
-    const content = blockContent(cell, streets.all)
-    if (content.kind !== 'built') continue
-    checked++
-    for (const b of content.buildings) {
-      assert.ok(BUILDING_PARTS.includes(b.part), `unknown part ${b.part}`)
-      const offX = b.x - cell.x * CELL_SIZE
-      const offZ = b.z - cell.z * CELL_SIZE
-      // Every building lies inside its own cell.
-      assert.ok(Math.abs(offX) <= 6, `building spills out of its cell in x`)
-      assert.ok(Math.abs(offZ) <= 6, `building spills out of its cell in z`)
-      // The offset from the cell centre is SET_BACK along exactly one axis and zero on the
-      // other, so it pins which side of the cell the building sits on — derive that side and
-      // assert the cell actually neighbouring on it is a street, i.e. the building fronts it.
-      assert.ok(offX === 0 || offZ === 0, `building offset (${offX}, ${offZ}) is not axis-aligned`)
-      assert.ok(offX !== 0 || offZ !== 0, 'building sits exactly on the cell centre')
-      const dx = Math.sign(offX)
-      const dz = Math.sign(offZ)
-      assert.ok(
-        streets.all.has(key(cell.x + dx, cell.z + dz)),
-        `building at (${b.x}, ${b.z}) does not face a street cell`
-      )
-      buildingsChecked++
+  for (let x = -TOWN_CELL_RADIUS; x <= TOWN_CELL_RADIUS; x++) {
+    for (let z = -TOWN_CELL_RADIUS; z <= TOWN_CELL_RADIUS; z++) {
+      const cell = { x, z }
+      if (!inTown(cell) || streets.all.has(`${x},${z}`)) continue
+      const content = blockContent(cell, streets.all)
+      if (content.kind !== 'built') continue
+      checked++
+      for (const b of content.buildings) {
+        assert.ok(BUILDING_PARTS.includes(b.part), `unknown part ${b.part}`)
+        const offX = b.x - cell.x * CELL_SIZE
+        const offZ = b.z - cell.z * CELL_SIZE
+        // Every building lies inside its own cell.
+        assert.ok(Math.abs(offX) <= 6 + EPS, `building spills out of its cell in x`)
+        assert.ok(Math.abs(offZ) <= 6 + EPS, `building spills out of its cell in z`)
+        // The axis (or, only at an outermost slot, both axes) carrying `SET_BACK` pins which
+        // side (or sides) of the cell the building could front; the other axis is the row's
+        // lateral position along the frontage and is not itself diagnostic.
+        const isSetBack = (v) => Math.abs(Math.abs(v) - SET_BACK) < EPS
+        const xIsSetBack = isSetBack(offX)
+        const zIsSetBack = isSetBack(offZ)
+        assert.ok(
+          xIsSetBack || zIsSetBack,
+          `building offset (${offX}, ${offZ}) carries the row's set-back on neither axis`
+        )
+        const candidates = []
+        if (xIsSetBack) candidates.push({ x: Math.sign(offX), z: 0 })
+        if (zIsSetBack) candidates.push({ x: 0, z: Math.sign(offZ) })
+        assert.ok(
+          candidates.some((d) => streets.all.has(key(cell.x + d.x, cell.z + d.z))),
+          `building at (${b.x}, ${b.z}) does not face a street cell`
+        )
+        buildingsChecked++
+      }
     }
   }
-  assert.ok(checked >= 1, 'none of the sampled cells was a built block')
-  assert.ok(buildingsChecked >= 1, 'none of the sampled built blocks placed a building')
+  assert.ok(checked >= 1, 'no built block found in the whole town')
+  assert.ok(buildingsChecked >= 30, `only ${buildingsChecked} buildings checked — too few to trust`)
+})
+
+// A building's `ry` is exact and unambiguous — `Math.atan2(d.x, d.z)` for one of the four
+// canonical `d`s — even at an outermost slot, where the set-back axis alone cannot say which
+// of two sides a building belongs to (see the previous test's own comment). Used below to
+// group a cell's buildings by the side they front, and to recover each one's lateral position
+// along that row.
+function sideOfRy(ry) {
+  if (Math.abs(ry - Math.PI / 2) < EPS) return { x: 1, z: 0 }
+  if (Math.abs(ry + Math.PI / 2) < EPS) return { x: -1, z: 0 }
+  if (Math.abs(ry) < EPS) return { x: 0, z: 1 }
+  if (Math.abs(Math.abs(ry) - Math.PI) < EPS) return { x: 0, z: -1 }
+  throw new Error(`ry ${ry} is not one of the four canonical rotations`)
+}
+
+// The lateral offset (along the row's own axis, `perp` in `town-plan.js`) a building sits at,
+// recovered from its world offset and the side `d` it fronts.
+function lateralOffset(d, offX, offZ) {
+  return d.x !== 0 ? -offZ * d.x : offX * d.z
+}
+
+test('a built frontage is a terrace: several adjacent buildings, no overlaps, inside the cell', () => {
+  let cellsChecked = 0
+  let buildingsChecked = 0
+  let longestRun = 1
+  const half = BUILDING_SCALE
+
+  for (let x = -TOWN_CELL_RADIUS; x <= TOWN_CELL_RADIUS; x++) {
+    for (let z = -TOWN_CELL_RADIUS; z <= TOWN_CELL_RADIUS; z++) {
+      const cell = { x, z }
+      if (!inTown(cell) || streets.all.has(`${x},${z}`)) continue
+      const content = blockContent(cell, streets.all)
+      if (content.kind !== 'built' || content.buildings.length === 0) continue
+      cellsChecked++
+
+      for (const b of content.buildings) {
+        const offX = b.x - cell.x * CELL_SIZE
+        const offZ = b.z - cell.z * CELL_SIZE
+        // A building's full footprint — not just its centre — stays inside its own cell.
+        assert.ok(Math.abs(offX) + half <= CELL_SIZE / 2 + EPS, `building footprint crosses the cell boundary in x`)
+        assert.ok(Math.abs(offZ) + half <= CELL_SIZE / 2 + EPS, `building footprint crosses the cell boundary in z`)
+        buildingsChecked++
+      }
+
+      // No two buildings in this cell overlap — including two on perpendicular sides meeting
+      // at a shared corner, which is exactly the case `blockContent`'s own corner rule exists
+      // to prevent (see its doc comment).
+      for (let i = 0; i < content.buildings.length; i++) {
+        for (let j = i + 1; j < content.buildings.length; j++) {
+          const a = content.buildings[i]
+          const c = content.buildings[j]
+          const dx = Math.abs(a.x - c.x)
+          const dz = Math.abs(a.z - c.z)
+          assert.ok(
+            dx >= 2 * half - EPS || dz >= 2 * half - EPS,
+            `buildings overlap in cell (${x},${z}): (${a.x},${a.z}) and (${c.x},${c.z})`
+          )
+        }
+      }
+
+      // Group by side, then look for a run of slots exactly `SLOT_PITCH` apart — adjacent,
+      // touching buildings, the signature of a terrace rather than the old one-per-side
+      // layout or a row of buildings merely scattered along the same frontage.
+      const bySide = new Map()
+      for (const b of content.buildings) {
+        const d = sideOfRy(b.ry)
+        const k = `${d.x},${d.z}`
+        const offX = b.x - cell.x * CELL_SIZE
+        const offZ = b.z - cell.z * CELL_SIZE
+        if (!bySide.has(k)) bySide.set(k, [])
+        bySide.get(k).push(lateralOffset(d, offX, offZ))
+      }
+      for (const positions of bySide.values()) {
+        positions.sort((a, b) => a - b)
+        let run = 1
+        for (let i = 1; i < positions.length; i++) {
+          run = Math.abs(positions[i] - positions[i - 1] - SLOT_PITCH) < EPS ? run + 1 : 1
+          longestRun = Math.max(longestRun, run)
+        }
+      }
+    }
+  }
+
+  assert.ok(cellsChecked >= 1, 'no built block found in the whole town')
+  assert.ok(buildingsChecked >= 30, `only ${buildingsChecked} buildings checked — too few to trust`)
+  assert.ok(
+    longestRun >= 3,
+    `no frontage anywhere in the town has 3 adjacent buildings (longest run found: ${longestRun})`
+  )
 })
 
 test('some blocks are green', () => {

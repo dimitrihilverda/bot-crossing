@@ -21,14 +21,71 @@ export const BUILDING_PARTS = Object.freeze([
 ])
 
 /**
- * What a kit building is scaled by. A part is 2 units across; 3.5 makes it 7 wide and
- * 5.8-10.7 tall, which reads as a house beside a 12-unit street cell. At the road tiles'
- * own scale (1.2) it would be a shed.
+ * What a kit building is scaled by. A part is 2 units across; the kit's own module is the
+ * road tiles' scale — `roadTileScale()` in `road-mesh.js` derives it as
+ * `CARRIAGEWAY_WIDTH / ROAD_TILE_SIZE = 2.4 / 2 = 1.2`, the same figure repeated here so this
+ * file does not import `road-mesh.js` (which already imports this one — importing back would
+ * make the two modules a load-order-dependent cycle for the sake of one constant). At 1.2 a
+ * building is 2.4 wide and 1.98-3.66 (2.0-3.7) tall — a townhouse, not a warehouse — and five
+ * stand edge to edge across one 12-unit frontage (`SLOTS_PER_SIDE`, `SLOT_PITCH` below),
+ * exactly as five carriageway tiles tile a street cell (`SUBGRID` in `road-mesh.js`).
  */
-export const BUILDING_SCALE = 3.5
+export const BUILDING_SCALE = 1.2
 
-/** How much of the block frontage is left as green rather than built. */
-export const GREEN_SHARE = 0.32
+/**
+ * How much of the block frontage is left as green rather than built.
+ *
+ * Raised from 0.32 to 0.55 in this revision (Task 5 Step 2's third lever, reached after the
+ * first — `GAP_SHARE` — stopped paying its way and the second — the kit's `_withoutBase`
+ * building variants — was measured and disqualified; see `TOWN_VERTEX_BUDGET`'s doc comment
+ * in `town-mesh.js` for both). A kit building at its correct scale is a third the width of the
+ * old one, so many more stand per frontage, and `TOWN_VERTEX_BUDGET` must not move to fit
+ * them — so fewer blocks are built at all instead. The measured green fraction of the town's
+ * own blocks lands near 0.46 at this value (the two do not coincide exactly, since a block is
+ * a coin flip against this share, not a quota) — comfortably inside the `> 0.15` and `< 0.6`
+ * bounds `test/town-plan.test.mjs` already checks.
+ */
+export const GREEN_SHARE = 0.55
+
+/** How many buildings stand in a row along one street-facing side of a block cell — the same
+ *  count the road tiles themselves tile a cell at (`SUBGRID` in `road-mesh.js`), so a
+ *  building's row falls on the identical sub-grid pitch as the pavement and carriageway
+ *  beside it: `SLOT_PITCH` below is exactly `CARRIAGEWAY_WIDTH` (2.4), and exactly a building's
+ *  own width (`BUILDING_SCALE * 2`), so a full row of five spans one 12-unit cell edge with no
+ *  gap and no overlap between neighbours. */
+export const SLOTS_PER_SIDE = 5
+
+/** World units between two neighbouring slots' centres. `CELL_SIZE / SLOTS_PER_SIDE` = 2.4 —
+ *  see `SLOTS_PER_SIDE` above for why that number matters. */
+export const SLOT_PITCH = CELL_SIZE / SLOTS_PER_SIDE
+
+/**
+ * The chance any one slot in a frontage row is left empty — a break in the terrace rather
+ * than a missing tooth in an otherwise-full row, since it is rolled independently per slot and
+ * most rows of five still come up mostly full. Raising this is the first lever against
+ * `TOWN_VERTEX_BUDGET` (see `town-mesh.js`): it shortens terrace runs without touching how
+ * wide, tall or dense any single building is.
+ *
+ * Raised from 0.18 (Task 5 Step 2, measured): a kit building at its correct scale is a third
+ * the width of the old one, so several stand where one did, and the old value left the town
+ * far over budget on its own. It was not pushed further than this, though — past here the
+ * measured isolated-building rate (a kept slot with an empty slot on both sides, no longer
+ * read as part of a row) climbs faster than the vertex total falls, working against the very
+ * terrace look this revision exists for — so the rest of the cut came from `GREEN_SHARE`
+ * (fewer built blocks at all) instead of driving this past where a row still mostly reads as
+ * a row.
+ */
+export const GAP_SHARE = 0.25
+
+/** The centre offset of each slot in a frontage row, from the cell's own centre along the
+ *  row's own axis — `SLOTS_PER_SIDE` values centred on 0 and spaced `SLOT_PITCH` apart, e.g.
+ *  `[-4.8, -2.4, 0, 2.4, 4.8]`. The outermost slot's own half-width (`BUILDING_SCALE`) reaches
+ *  exactly `CELL_HALF` (6), so the row fills the frontage corner to corner without spilling
+ *  past either side of the cell. */
+const SLOT_OFFSETS = Array.from(
+  { length: SLOTS_PER_SIDE },
+  (_, i) => (i - (SLOTS_PER_SIDE - 1) / 2) * SLOT_PITCH
+)
 
 /** Half a block cell's extent, in world units — the fence `keepClearCells` puts around a
  *  street or built cell so scatter cannot reach across the kerb into it. */
@@ -39,9 +96,22 @@ const CELL_HALF = CELL_SIZE / 2
  *  otherwise empty. */
 const GREEN_PLANT_RADIUS = 5
 
-/** How far a building's centre sits from its cell's centre, toward the street it faces.
- *  A kit building is 2 units across, so `BUILDING_SCALE * 2` is its world width. */
-const SET_BACK = CELL_SIZE / 2 - (BUILDING_SCALE * 2) / 2 - 0.6
+/**
+ * How far a building row's centre line sits from its cell's own centre, toward the street it
+ * faces.
+ *
+ * The pavement band and the carriageway both belong to the *neighbouring* street cell, not to
+ * this one — `vergeFurniture` in `road-mesh.js` lays every kerb, lamp and crossing inside the
+ * street cell's own footprint, never past it into a block cell. So a block cell has nothing of
+ * its own to set back *from* except its own edge: a building may stand right up to it, the way
+ * the reference render's terraces stand right against the pavement with no front yard.
+ *
+ * Half the building's own depth (`BUILDING_SCALE`, since a part is 2 units deep and scale
+ * halves that to one factor: `BUILDING_SCALE * 2 / 2 = BUILDING_SCALE`) short of the cell edge
+ * (`CELL_HALF`) puts its street-facing wall exactly flush with that edge:
+ * `CELL_HALF - BUILDING_SCALE` = `6 - 1.2` = `4.8`.
+ */
+export const SET_BACK = CELL_HALF - BUILDING_SCALE
 
 /**
  * The town's outer edge: a radius that varies with direction, so the town frays into the
@@ -78,13 +148,31 @@ const SIDES = [
   { x: 0, z: -1 },
 ]
 
+/** A quarter turn about +Y (matching how three.js rotates x, z): the direction a row's own
+ *  axis runs in, given the direction `d` its buildings face. */
+const rotCW = (d) => ({ x: d.z, z: -d.x })
+/** The other quarter turn. */
+const rotCCW = (d) => ({ x: -d.z, z: d.x })
+
 /**
  * What fills one block cell.
  *
  * Buildings go on the sides that face a street and nowhere else — a house fronts a road, and
- * a building in the middle of a block would be reachable by nothing. That also keeps the
- * geometry budget in reach: a cell has at most four street-facing sides and usually one or
- * two.
+ * a building in the middle of a block would be reachable by nothing. On each street-facing
+ * side, a whole row of them (`SLOTS_PER_SIDE`) stands adjacent along the sub-grid pitch the
+ * road tiles themselves use (`SLOT_PITCH`), so a frontage reads as a terrace rather than one
+ * building in a field — with the odd slot left empty (`GAP_SHARE`) so a terrace is not always
+ * one unbroken wall the full width of the cell.
+ *
+ * **Corners.** A row's outermost slot reaches exactly to the cell's own edge on both axes at
+ * once (see `SLOT_OFFSETS`), which is fine on its own — but a cell that faces a street on two
+ * *adjacent* sides (an actual street corner, not two opposite sides of a through-block) has
+ * two rows meeting at the same corner, and each row's outermost slot would claim that same
+ * square of ground: the row facing `d`'s slot at one end sits exactly where the row facing the
+ * perpendicular street's own outermost slot sits, a real overlap, not just a tight fit. Rather
+ * than pick a winner, both are left empty at a shared corner — a small gap at the corner of an
+ * intersection is true to the reference render too, not just a fix for two buildings trying to
+ * stand in the same place.
  *
  * @param cell the block cell, `{x, z}`
  * @param streetKeys the street membership set from `planStreets().all`
@@ -98,22 +186,35 @@ export function blockContent(cell, streetKeys) {
   const cx = cell.x * CELL_SIZE
   const cz = cell.z * CELL_SIZE
   const buildings = []
+  const faces = (d) => streetKeys.has(`${cell.x + d.x},${cell.z + d.z}`)
+  const last = SLOT_OFFSETS.length - 1
   for (const d of SIDES) {
-    if (!streetKeys.has(`${cell.x + d.x},${cell.z + d.z}`)) continue
-    // A gap in the frontage here and there, so a street is not an unbroken terrace.
-    if (rand() < 0.2) continue
-    buildings.push({
-      part: BUILDING_PARTS[Math.floor(rand() * BUILDING_PARTS.length)],
-      x: cx + d.x * SET_BACK,
-      z: cz + d.z * SET_BACK,
-      // Measured (Task 5 Step 1, on all eight parts building_A..H): one atlas cell — the
-      // door/window band — sits only on the model's local +Z face, spanning most of its
-      // width, never mirrored to -Z and never pinned to an X face. So a kit building does
-      // have a front, and it faces local +Z. `atan2(d.x, d.z)` is the rotation that turns
-      // that local +Z to point along `d`, the direction from this cell toward the street
-      // cell it fronts — so the door ends up facing the street, not the block's interior.
-      ry: Math.atan2(d.x, d.z),
-      scale: BUILDING_SCALE,
+    if (!faces(d)) continue
+    // The axis a row of buildings runs along, across the frontage — a quarter turn from `d`,
+    // the direction the row faces.
+    const perp = rotCW(d)
+    // The two corners this row's outermost slots would reach: skip either one whose
+    // perpendicular street is also faced here, so the two rows never both claim it.
+    const skipFirst = faces(rotCCW(d))
+    const skipLast = faces(rotCW(d))
+    SLOT_OFFSETS.forEach((offset, i) => {
+      if ((i === 0 && skipFirst) || (i === last && skipLast)) return
+      // A gap in the terrace here and there, so a frontage is not always one unbroken wall.
+      if (rand() < GAP_SHARE) return
+      buildings.push({
+        part: BUILDING_PARTS[Math.floor(rand() * BUILDING_PARTS.length)],
+        x: cx + d.x * SET_BACK + perp.x * offset,
+        z: cz + d.z * SET_BACK + perp.z * offset,
+        // Measured (Task 5 Step 1, on all eight parts building_A..H): one atlas cell — the
+        // door/window band — sits only on the model's local +Z face, spanning most of its
+        // width, never mirrored to -Z and never pinned to an X face. So a kit building does
+        // have a front, and it faces local +Z. `atan2(d.x, d.z)` is the rotation that turns
+        // that local +Z to point along `d`, the direction from this cell toward the street
+        // cell it fronts — so the door ends up facing the street, not the block's interior.
+        // The row runs along `perp`, so this rotation is the same for every slot in it.
+        ry: Math.atan2(d.x, d.z),
+        scale: BUILDING_SCALE,
+      })
     })
   }
   return { kind: 'built', buildings }

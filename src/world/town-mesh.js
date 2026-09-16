@@ -29,6 +29,25 @@ import { blockContent, inTown } from './town-plan.js'
  * probability in `blockContent` (`town-plan.js`), the kit's `_withoutBase` building variants,
  * `GREEN_SHARE`, and last `TOWN_CELL_RADIUS` — which redraws the street network too, since
  * `street-plan.js` shares it.
+ *
+ * **Pulled in Task 5 Step 2**, when `blockContent` moved from one building per street-facing
+ * side to a full terrace at the kit's own scale (`BUILDING_SCALE`, `SLOTS_PER_SIDE` in
+ * `town-plan.js`): the naive version — every slot filled, `GREEN_SHARE` at its old 0.32 —
+ * measured 1,000,251 vertices, almost double this ceiling.
+ *   1. `GAP_SHARE` raised from 0.18 to 0.25 — as far as it usefully went; past there the
+ *      measured rate of isolated single buildings (a kept slot with both neighbours empty)
+ *      climbed faster than the vertex total fell.
+ *   2. The `_withoutBase` variants were measured and disqualified: their local `minY` is
+ *      `0.1`, against `0.000` for the parts with a base, on every one of the eight buildings
+ *      (`building_A..H`) — so swapping in a `_withoutBase` shell at the same placement Y
+ *      leaves it floating `0.1 * BUILDING_SCALE` above the ground it should stand on. Not
+ *      used.
+ *   3. `GREEN_SHARE` raised from 0.32 to 0.55, well inside `test/town-plan.test.mjs`'s
+ *      `> 0.15` / `< 0.6` bounds.
+ * Measured with both applied, and with the corner fix `blockContent`'s own doc comment
+ * describes (two rows meeting at a street corner no longer both claim the same ground): 222
+ * buildings, 515,877 vertices — a 6.2% margin under this ceiling. `TOWN_CELL_RADIUS` was not
+ * touched.
  */
 export const TOWN_VERTEX_BUDGET = 550000
 
