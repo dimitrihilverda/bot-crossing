@@ -28,12 +28,12 @@ import {
 } from '../world/drive-path.js'
 import { planStreets } from '../world/streets.js'
 import { roadCells } from '../world/road-path.js'
-import { createRoads, DRIVING_LANE_OFFSET } from '../world/road-mesh.js'
+import { createRoads, DRIVING_LANE_OFFSET, PARKING_LANE_OFFSET } from '../world/road-mesh.js'
 import { createTown, townStamp } from '../world/town-mesh.js'
 import { keepClearCells } from '../world/town-plan.js'
 import { Deliveries, CAR_SPEED } from '../world/deliveries.js'
 import { TrafficCars } from '../world/traffic-cars.js'
-import { MAX_TRAFFIC, newVehicle, stepVehicle, trafficCount } from '../world/traffic.js'
+import { newVehicle, parkedCars, stepVehicle, trafficCount } from '../world/traffic.js'
 import { Ship } from '../world/ship.js'
 import { Astronauts } from '../agents/astronauts.js'
 import { Indicators, BADGE } from '../agents/indicators.js'
@@ -77,6 +77,15 @@ const LAYOUT_MEMORY = 80
 // cell with `worldToCell` gives the same answer without opening another export. Computed once
 // at module scope rather than per call — the depot does not move.
 const SHIP_CELL_FOR_STREETS = worldToCell(shipPosition().x, shipPosition().z)
+
+/**
+ * The seed kerbside parking is laid out from.
+ *
+ * Fixed rather than random: the same town parks the same cars every time it is opened,
+ * which is what lets them read as scenery. A parked car that moved between sessions would
+ * be the only thing in the colony that changed without anything having happened.
+ */
+const PARKED_SEED = 0x5ca1ab1e
 
 /**
  * The reveal progress at which a house has already hidden itself.
@@ -205,12 +214,18 @@ export class Colony {
     // rather than per colony — `Deliveries` keeps a mesh pair per plot colour — so this is a
     // generous bound either way, and an unused instance slot costs nothing until it is written.
     this.deliveries = new Deliveries(scene, MAX_AGENT_CAP)
-    // Ambient traffic: cars nobody owns, driving the same streets. Its own pool, capped well
-    // above `MAX_TRAFFIC` (the most that will ever be on the road at once) rather than at it,
-    // for the same "unused instance slot costs nothing" reason the delivery fleet is sized
-    // generously above.
-    this.traffic = new TrafficCars(scene, MAX_TRAFFIC * 2)
+    // Ambient traffic: cars nobody owns, driving the same streets, plus every car parked at a
+    // kerb — one fleet, because a parked car is the same instanced body standing still.
+    //
+    // The capacity is per (body, tint) bucket rather than a total, and it can no longer be
+    // derived from `MAX_TRAFFIC`: parked cars are not capped by it. They are bounded by the
+    // town instead — at most two per straight carriageway tile, thinned by `PARK_PERCENT` —
+    // and spread across the palette's twenty buckets, which on a large colony comes to a few
+    // dozen per bucket. 256 clears that with room to spare, and an unused instance slot costs
+    // a matrix that is never drawn, since `_writeBucket` sets `count` to what it wrote.
+    this.traffic = new TrafficCars(scene, 256)
     this._trafficVehicles = []
+    this._parkedCars = []
     this._trafficRoutes = new Map()
     // Ever-increasing, so a vehicle that leaves the pool and a different one that later
     // takes its slot are never the same car with the same seed.
@@ -504,6 +519,13 @@ export class Colony {
     if (this.roadGroup) this.worldGroup.remove(this.roadGroup)
     this.roadGroup = createRoads({ streets: this.streets, groundAt: (x, z) => this.groundAt(x, z) })
     this.worldGroup.add(this.roadGroup)
+    // Cars standing at the kerb. Rebuilt only when the streets are — they are scenery, and
+    // `parkedCars` is deterministic in each tile's own position, so claiming a plot on the
+    // far side of the colony does not reshuffle a street here. `y` is sampled once, for the
+    // same reason the road tiles sample it: the ground under a street rolls between plots.
+    this._parkedCars = parkedCars(this.roadGroup.userData.carriageway ?? [], PARKING_LANE_OFFSET, PARKED_SEED).map(
+      (car) => ({ ...car, y: this.groundAt(car.x, car.z) })
+    )
     const layout = allocateCells(projectList, this.plotCells, this.streets.all)
 
     // Every cell the colony itself occupies: every plot's cells, plus the depot's own —
@@ -1241,7 +1263,8 @@ export class Colony {
    * once a frame like everything else.
    */
   _updateTraffic(dt) {
-    const wanted = trafficCount(this._activeThreadCount())
+    // How much street there is, not just how busy the colony is — see `trafficCount`.
+    const wanted = trafficCount(this._activeThreadCount(), this.streets?.all?.size ?? 0)
     while (this._trafficVehicles.length < wanted) {
       this._trafficVehicles.push(newVehicle(this._trafficSeed++))
     }
@@ -1273,6 +1296,10 @@ export class Colony {
         tint: vehicle.tint,
       })
     }
+    // Parked cars ride along in the same fleet: same buckets, same instanced meshes, and
+    // their fixed `distance` of 0 is what keeps a standing car's wheels from turning.
+    for (const car of this._parkedCars) rendered.push(car)
+
     this.traffic.update(rendered)
   }
 

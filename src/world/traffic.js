@@ -13,17 +13,30 @@
  * that roof load, which is why `TRAFFIC_BODIES` excludes the stationwagon and is asserted
  * to.
  *
- * The one thing ambient traffic does say is *how much* of it there is: the count scales with
- * how many threads are active, so a busy colony has busy streets. That is atmosphere carried
- * by the volume, never by a particular car, and it is the only place this design lets
- * traffic mean anything at all.
+ * The one thing ambient traffic does say is *how much* of it there is — but what carries the
+ * meaning is the **increase**, not the total. The rule used to be stricter: no active threads,
+ * no cars. A built town with nothing running then had genuinely empty streets, which reads as
+ * a dead town rather than a quiet colony. So the count is now a baseline scaled to how much
+ * street the town actually has, plus a share for activity on top. A busy colony still visibly
+ * has busier streets than the same colony idle; an idle one is quiet rather than abandoned.
+ *
+ * Parked cars (`parkedCars`) carry no signal whatsoever, not even in their number: they are
+ * scenery, fixed to the street rather than to anything the colony is doing.
  */
 
 /** The most vehicles that will ever be on the road at once. */
-export const MAX_TRAFFIC = 8
+export const MAX_TRAFFIC = 24
 
 /** How many active threads it takes to put one more vehicle on the road. */
 const THREADS_PER_VEHICLE = 4
+
+/**
+ * How many street cells the town gets one ambient car for, before any activity is counted.
+ *
+ * A density rather than a number, so a five-plot colony does not get a rush hour and a large
+ * town does not look deserted. Tuned by eye against the shipping layout.
+ */
+const CELLS_PER_AMBIENT_CAR = 6
 
 /** Seconds a vehicle stands at an address before heading back. */
 export const DWELL_MIN = 4
@@ -42,15 +55,23 @@ export const TRAFFIC_BODIES = Object.freeze(['car_hatchback', 'car_sedan', 'car_
 export const TRAFFIC_TINTS = Object.freeze([0xb8bcc0, 0x8e9398, 0xe8e9ea, 0x5a5f66, 0x2f3338])
 
 /**
- * How many vehicles belong on the road for a given number of active threads.
+ * How many vehicles belong on the road, given how busy the colony is and how much street it
+ * has to drive on.
  *
- * Zero when nothing is active, one per `THREADS_PER_VEHICLE` after that, capped. Monotonic
- * by construction, which the test asserts across the whole range rather than at three
- * sample points.
+ * No streets, no traffic — and that is not a tuning choice: with nowhere to drive there is
+ * nowhere to put a car, and it is the state every colony is in for the first few frames,
+ * before `planStreets` has run once. Otherwise a baseline from the size of the town, at least
+ * one car so a street is never empty, plus one per `THREADS_PER_VEHICLE` active threads,
+ * capped.
+ *
+ * Monotonic in both arguments by construction, which the test asserts across the whole range
+ * rather than at three sample points.
  */
-export function trafficCount(activeThreads) {
-  if (!(activeThreads > 0)) return 0
-  return Math.min(MAX_TRAFFIC, Math.ceil(activeThreads / THREADS_PER_VEHICLE))
+export function trafficCount(activeThreads, streetCells = 0) {
+  if (!(streetCells > 0)) return 0
+  const baseline = Math.max(1, Math.floor(streetCells / CELLS_PER_AMBIENT_CAR))
+  const busy = activeThreads > 0 ? Math.ceil(activeThreads / THREADS_PER_VEHICLE) : 0
+  return Math.min(MAX_TRAFFIC, baseline + busy)
 }
 
 /**
@@ -150,4 +171,80 @@ export function stepVehicle(vehicle, dt, routeLength, random) {
     next.addressSeed = lowbias32(next.addressSeed + 1)
   }
   return next
+}
+
+/**
+ * The one road piece a car may park beside: a plain straight run.
+ *
+ * Never a junction, a bend, a T-split or a zebra crossing. Not a rule about realism so much
+ * as about geometry — those pieces carry the carriageway through a turn or across another
+ * street, and a car standing in one is a car standing in the middle of a junction.
+ */
+const PARKABLE_PART = 'road_straight'
+
+/** How many of the available kerbside spaces hold a car, in hundredths. */
+const PARK_PERCENT = 38
+
+/**
+ * A hash of a tile, a side and a run seed, stable across reloads.
+ *
+ * The coordinates are world positions and so are floats; they are quantised to sixteenths
+ * before hashing, which is far finer than the 2.4-unit tile pitch and coarse enough that the
+ * last bits of a float cannot move a car from one frame to the next.
+ */
+function tileHash(tile, side, seed) {
+  const x = Math.round(tile.x * 16) | 0
+  const z = Math.round(tile.z * 16) | 0
+  return lowbias32(lowbias32(lowbias32(x) ^ z) ^ ((side * 31 + seed) | 0))
+}
+
+/**
+ * Cars standing at the kerb, given the carriageway tiles the town actually laid.
+ *
+ * These are scenery: they never move, they own no thread, and unlike the moving fleet their
+ * number says nothing at all about the colony. What they do is make a street read as a street
+ * — an empty carriageway with buildings along it looks like a model, not a town.
+ *
+ * Deterministic in the tile's own position rather than in an index or a draw order, so a
+ * street parks the same cars whatever order the tiles arrive in and however many times the
+ * town is rebuilt around them. A car that moved every time a plot was claimed elsewhere would
+ * pull the eye exactly the way this is supposed not to.
+ *
+ * Sides are decided independently, and each car parks **on its own right** — the near kerb's
+ * cars face one way and the far kerb's the other, the way a real street does. Parking every
+ * car the same way round is the visible fault this avoids, and the test asserts against it.
+ *
+ * @param tiles carriageway tiles, `[{x, z, part, ry}]` as `carriagewayTiles` returns them
+ * @param offset how far from the road's centre line a parked car stands
+ * @param seed a run seed, so two colonies do not park identically
+ * @returns `[{x, z, heading, distance, body, tint}]` — the shape `TrafficCars` renders, with
+ *   `distance` fixed at 0 so a standing car's wheels do not turn
+ */
+export function parkedCars(tiles, offset, seed = 0) {
+  const out = []
+  for (const tile of tiles) {
+    if (tile.part !== PARKABLE_PART) continue
+    // A straight tile runs along its own +Z, turned by `ry` — the same convention `tileFor`
+    // rotates it by and the one `test/road-corner-glb.test.mjs` pins against the glb.
+    const d = { x: Math.sin(tile.ry), z: Math.cos(tile.ry) }
+    for (const side of [1, -1]) {
+      const h = tileHash(tile, side, seed)
+      if (h % 100 >= PARK_PERCENT) continue
+      // Body and tint come from `newVehicle` rather than being drawn here, so a parked car
+      // cannot end up wearing the delivery stationwagon or a repo's accent by some later
+      // edit to one pool and not the other.
+      const paint = newVehicle(h)
+      out.push({
+        // Right of the direction this car faces: `(-d.z, d.x)` for the near kerb, and the
+        // mirror of it for the far one.
+        x: tile.x + side * -d.z * offset,
+        z: tile.z + side * d.x * offset,
+        heading: side > 0 ? tile.ry : tile.ry + Math.PI,
+        distance: 0,
+        body: paint.body,
+        tint: paint.tint,
+      })
+    }
+  }
+  return out
 }

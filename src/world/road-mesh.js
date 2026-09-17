@@ -628,6 +628,12 @@ export function createRoads({ streets, groundAt }) {
     }
   }
 
+  // The carriageway the town actually laid, crossings already removed, so a caller can put
+  // something on the road without recomputing where the road is. `parkedCars`
+  // (`traffic.js`) is the one consumer: it needs to know which tiles are plain straight
+  // runs, and a zebra is not one.
+  group.userData.carriageway = roadTiles
+
   return group
 }
 
