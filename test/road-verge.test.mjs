@@ -7,6 +7,8 @@ import {
   ROAD_SURFACE_LIFT,
   SUBGRID,
   TRAFFIC_LIGHT_PARTS,
+  VERGE_PROPS,
+  furnitureWorldBounds,
 } from '../src/world/road-mesh.js'
 import { planStreets } from '../src/world/streets.js'
 import { inTown } from '../src/world/town-plan.js'
@@ -339,5 +341,71 @@ test('every piece of verge furniture sits on the ground, at the same lift as the
   assert.ok(furniture.length > 0, 'no verge furniture to check the lift of')
   for (const f of furniture) {
     assert.equal(f.lift, ROAD_SURFACE_LIFT, `${f.part} at ${f.x},${f.z} uses lift ${f.lift}`)
+  }
+})
+
+test('a furnished street carries more than lamps and signals', () => {
+  // The kit ships a bench, a bush, a dumpster, a hydrant and two pieces of litter, and until
+  // now not one of them was ever placed. An empty verge is what made the streets read as a
+  // model of a town rather than a town.
+  const streets = planStreets()
+  const parts = new Set(vergeFurniture(streets.cells, CELL_SIZE).map((f) => f.part))
+  for (const prop of VERGE_PROPS) {
+    assert.ok(parts.has(prop), `nothing in the whole colony placed a ${prop}`)
+  }
+})
+
+test('verge props stand clear of the carriageway', () => {
+  // Everything here sits on the verge, never on the road: a bench in the running lane is worse
+  // than no bench. Checked against each piece's own measured footprint rather than its centre,
+  // because a dumpster is 0.57 across and a centre-only test would pass with half of it on the
+  // asphalt.
+  const streets = planStreets()
+  const half = CARRIAGEWAY_WIDTH / 2
+  for (const f of vergeFurniture(streets.cells, CELL_SIZE)) {
+    if (!VERGE_PROPS.includes(f.part)) continue
+    const bounds = furnitureWorldBounds(f)
+    assert.ok(bounds, `${f.part} has no measured footprint`)
+    // Distance from the nearest arm's centre line, on whichever axis that arm runs.
+    const cellX = Math.round(f.x / CELL_SIZE) * CELL_SIZE
+    const cellZ = Math.round(f.z / CELL_SIZE) * CELL_SIZE
+    const acrossX = Math.min(Math.abs(bounds.xmin - cellX), Math.abs(bounds.xmax - cellX))
+    const acrossZ = Math.min(Math.abs(bounds.zmin - cellZ), Math.abs(bounds.zmax - cellZ))
+    assert.ok(
+      Math.max(acrossX, acrossZ) >= half,
+      `${f.part} reaches to ${Math.max(acrossX, acrossZ).toFixed(2)} of a centre line, inside the ${half} carriageway`
+    )
+  }
+})
+
+test('no two pieces of verge furniture stand in the same place', () => {
+  // Lamps, signals, crossings and now props all come out of one function, and they are placed
+  // from the same handful of positions along an arm. Two on one spot reads as one broken model.
+  const streets = planStreets()
+  const seen = new Map()
+  for (const f of vergeFurniture(streets.cells, CELL_SIZE)) {
+    if (f.part === 'road_straight_crossing') continue // a crossing is road, not an obstacle
+    const k = `${f.x.toFixed(3)},${f.z.toFixed(3)}`
+    assert.ok(!seen.has(k), `${f.part} stands on top of ${seen.get(k)} at ${k}`)
+    seen.set(k, f.part)
+  }
+})
+
+test('verge props are deterministic', () => {
+  const streets = planStreets()
+  assert.deepEqual(vergeFurniture(streets.cells, CELL_SIZE), vergeFurniture(streets.cells, CELL_SIZE))
+})
+
+test('every prop the verge places has a measured footprint', () => {
+  // This is the one that keeps a building from being built straight through a bench.
+  // `reservedSlots` (town-plan.js) leaves a terrace slot empty only for furniture it can
+  // measure, so a part placed here with no entry in `FURNITURE_LOCAL_BBOX` is not merely
+  // unchecked — it is actively invisible to the rule that protects it, and the town-wide
+  // overlap test in town-plan.test.mjs filters it out rather than failing on it.
+  for (const prop of VERGE_PROPS) {
+    assert.ok(
+      furnitureWorldBounds({ part: prop, x: 0, z: 0, ry: 0, scale: 1 }),
+      `${prop} is placed on the verge but has no measured footprint, so a wall may be built through it`
+    )
   }
 })

@@ -420,8 +420,35 @@ export function cellFurniture(cell, streetKeys, cellSize) {
   const lampSide = (cell.x + cell.z) % 2 === 0 ? 1 : -1
   const out = []
 
-  for (const d of arms) {
+  arms.forEach((d, i) => {
     const perp = rot(d)
+    // A prop on the kerb opposite this arm's lamp: the lamp owns `lampSide`, so everything
+    // here goes on the other side of the carriageway and cannot collide with it however the
+    // two are scaled. Its own stream, salted by which arm it is, so the four arms of a
+    // crossroads do not all get the same thing.
+    const ph = cellHash({ x: cell.x * 31 + i, z: cell.z * 17 - i })
+    if (mod(ph, 100) < PROP_PERCENT) {
+      const part = VERGE_PROPS[mod(ph >> 7, VERGE_PROPS.length)]
+      // One step out or two: both sit inside the cell (2.4 and 4.8 against a half-cell of 6),
+      // so a prop never lands on the boundary where the neighbouring cell places its own.
+      const along = step * (1 + mod(ph >> 3, 2))
+      const side = -lampSide
+      // Facing the road it stands beside — the direction from the prop back to this arm's
+      // centre line, which is `lampSide * perp` since the prop is on the other side. The rest
+      // of the pool has no front worth aiming, and gets a quarter turn from its own hash
+      // instead so a row of them is not all squared up the same way.
+      const toRoad = { x: lampSide * perp.x, z: lampSide * perp.z }
+      out.push({
+        part,
+        x: cx + d.x * along + side * perp.x * kerb,
+        z: cz + d.z * along + side * perp.z * kerb,
+        ry: PROPS_THAT_FACE.has(part)
+          ? Math.atan2(toRoad.x, toRoad.z)
+          : (mod(ph >> 11, 4) * Math.PI) / 2,
+        scale: PROP_SCALE,
+        lift: ROAD_SURFACE_LIFT,
+      })
+    }
     // v: unit direction from the lamp back to this arm's own centre line, i.e. the
     // carriageway it should overhang. θ = atan2(v.z, -v.x) — derived above. Stands at the
     // kerb line: 1 sub-grid step along the arm, `kerb` (1.8) off the centre line — half a
@@ -437,7 +464,7 @@ export function cellFurniture(cell, streetKeys, cellSize) {
       scale: 1.6,
       lift: ROAD_SURFACE_LIFT,
     })
-  }
+  })
 
   if (arms.length >= 3) {
     const d = arms[mod(h, arms.length)]
@@ -521,7 +548,46 @@ export const FURNITURE_LOCAL_BBOX = Object.freeze({
     zmax: 0.11071021109819412,
   },
   [CROSSING_PART]: { xmin: -ROAD_TILE_SIZE / 2, xmax: ROAD_TILE_SIZE / 2, zmin: -ROAD_TILE_SIZE / 2, zmax: ROAD_TILE_SIZE / 2 },
+  // The props below. Measured from city.glb the same way as the pieces above, and needed for
+  // the same reason: `reservedSlots` in `town-plan.js` reads these to decide which terrace
+  // slot a building may not have, so a piece with no entry here is a piece a wall is free to
+  // be built straight through.
+  bench: { xmin: -0.20000001788139343, xmax: 0.20000001788139343, zmin: -0.07500002533197403, zmax: 0.07500002533197403 },
+  bush: { xmin: -0.08946483582258224, xmax: 0.09989581257104874, zmin: -0.09955329447984695, zmax: 0.09954001754522324 },
+  dumpster: { xmin: -0.2829735279083252, xmax: 0.2829735279083252, zmin: -0.17639896273612976, zmax: 0.17639896273612976 },
+  firehydrant: { xmin: -0.06774556636810303, xmax: 0.06774961948394775, zmin: -0.06509828567504883, zmax: 0.0662224292755127 },
+  trash_A: { xmin: -0.060088641941547394, xmax: 0.06668513268232346, zmin: -0.0666484460234642, zmax: 0.0666484460234642 },
+  trash_B: { xmin: -0.026508506387472153, xmax: 0.041553303599357605, zmin: -0.032371584326028824, zmax: 0.038469985127449036 },
 })
+
+/**
+ * The kit's own street props, none of which were ever placed until now.
+ *
+ * City Builder Bits ships all six and the colony used none of them: the verge carried a
+ * streetlight, a signal and a crossing and otherwise nothing at all, which is a large part of
+ * why the streets read as a model of a town rather than a town.
+ *
+ * Ordered so the two pieces of litter come last, where the weighting below makes them the
+ * common ones — a kerb has more rubbish on it than it has benches.
+ */
+export const VERGE_PROPS = Object.freeze(['bench', 'dumpster', 'bush', 'firehydrant', 'trash_A', 'trash_B'])
+
+/**
+ * What a prop is scaled by.
+ *
+ * 1, against the streetlight's 1.6, and judged against the cars rather than against metres:
+ * the kit's buildings and its cars are not drawn to one scale (a building is 2.4 across and a
+ * car 0.985 long, which would make a terraced house two car-lengths wide), so "how big is this
+ * really" has no answer here. What does have an answer is how a bench looks beside a parked
+ * car, and at 1 a bench is 0.4 — about four tenths of a car, which is a bench.
+ */
+const PROP_SCALE = 1
+
+/** How many of a furnished cell's arms get a prop, in hundredths. */
+const PROP_PERCENT = 55
+
+/** The props that have a front worth pointing at the road; the rest read the same either way. */
+const PROPS_THAT_FACE = new Set(['bench', 'dumpster'])
 
 /**
  * The world-space, axis-aligned box one piece of verge furniture actually occupies: its local
