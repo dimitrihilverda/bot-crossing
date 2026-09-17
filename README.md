@@ -350,7 +350,7 @@ so lit surfaces stay crisp instead of going hazy.
 ## Where the art comes from
 
 The colony is built out of five CC0 asset packs by **[Kay Lousberg](https://kaylousberg.com)**,
-plus the project's own shaders on top of them.
+one part borrowed from elsewhere, plus the project's own shaders on top of them.
 
 | Pack | Used for | Licence |
 | --- | --- | --- |
@@ -359,10 +359,21 @@ plus the project's own shaders on top of them.
 | [KayKit : Space Base Bits](https://kaylousberg.itch.io/space-base-bits) | The crates, drums and floodlights stacked around each plot, and the containers stacked in the depot's yard | CC0 |
 | [KayKit : Character Animations](https://kaylousberg.itch.io/kaykit-character-animations) | The crew's body and all seventeen animation clips they play | CC0 |
 | [KayKit : Forest Nature Pack](https://kaylousberg.itch.io/kaykit-forest) | Terra's trees, bushes and grass, and the boulders on every world | CC0 |
+| [Quaternius : LowPoly Public Transport](https://opengameart.org/content/lowpoly-public-transport) | The bicycle, and nothing else | CC0 |
 
 CC0 asks for nothing, but crediting Kay costs nothing either. If you rebuild the assets, all
 five packs go in `assets-src/` (see below); `public/assets/CREDITS.md` is the definitive list
 of what each `.glb` is built from.
+
+**The bicycle is the one part Kay did not make.** None of KayKit's 23 packs has one — checked
+across all 203 parts of the four packs this colony loads — and a Dutch street without a bicycle
+is missing the thing that makes it Dutch. So a single model is borrowed from Quaternius' CC0
+pack and grafted into the city kit by `tools/build-bike.mjs`: one part, not a sixth kit, because
+a whole foreign pack would sit *beside* KayKit rather than in it. What makes it belong is that
+it is repainted on the way in — the source model's four materials are all the same flat grey
+(Quaternius colours in Blender, not in the OBJ), so each is mapped to a cell of the city atlas
+and the bicycle comes out sampling the same texture, through the same shader, as the buildings
+and cars around it. Its frame takes the accent cell, so a bicycle can be tinted the way a car is.
 
 One design choice, shared by every pack, is what makes the whole approach work: every model in
 a pack UVs into a single 1024px gradient atlas and therefore shares one material, so a house
