@@ -99,6 +99,25 @@ export const WHEEL_AUTHORED_RADIUS = 0.0723
 export const WHEEL_RADIUS = WHEEL_AUTHORED_RADIUS * CAR_SCALE
 
 /**
+ * How far below a car's own origin its tyres touch down, in the pack's authored units.
+ *
+ * A kit car's origin is not its contact patch. The wheel nodes are mounted at y=0.0112574 and
+ * the tyre's own geometry reaches to -0.0723003, so the rubber sits 0.0610429 below the
+ * origin — and the body itself hangs to -0.03. Placing that origin on a surface therefore
+ * buries the wheels in it by most of a tyre, which is exactly what the first pass at road
+ * height did.
+ *
+ * One measured number rather than the difference of two rounded ones: writing it as
+ * `WHEEL_AUTHORED_RADIUS - 0.0113` looks tidier and is wrong by 4.5e-5, because both of those
+ * are themselves rounded. Every body in the pack measures identically, and the glb test checks
+ * each of them against this rather than trusting the comment.
+ */
+export const WHEEL_CONTACT_AUTHORED = 0.06104
+
+/** The same, in world units — how far a car has to be lifted to stand on a surface. */
+export const CAR_GROUND_DROP = WHEEL_CONTACT_AUTHORED * CAR_SCALE
+
+/**
  * World units per second. Tuned by eye in step 7; a colony crossing should take a few seconds.
  *
  * Deliberately above `WALK_SPEED` in astronauts.js, and the README and the spec both describe

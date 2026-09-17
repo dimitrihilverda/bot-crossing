@@ -31,7 +31,7 @@ import { roadCells } from '../world/road-path.js'
 import { createRoads, DRIVING_LANE_OFFSET, PARKING_LANE_OFFSET, roadSurfaceY } from '../world/road-mesh.js'
 import { createTown, townStamp } from '../world/town-mesh.js'
 import { keepClearCells } from '../world/town-plan.js'
-import { Deliveries, CAR_SPEED } from '../world/deliveries.js'
+import { Deliveries, CAR_GROUND_DROP, CAR_SPEED } from '../world/deliveries.js'
 import { TrafficCars } from '../world/traffic-cars.js'
 import {
   HEADWAY,
@@ -1346,7 +1346,11 @@ export class Colony {
   _carY(x, z) {
     const ground = this.groundAt(x, z)
     const cell = worldToCell(x, z)
-    return this.streets?.all?.has(key(cell.x, cell.z)) ? roadSurfaceY(ground) : ground
+    const surface = this.streets?.all?.has(key(cell.x, cell.z)) ? roadSurfaceY(ground) : ground
+    // Plus the drop from the body's own origin to its contact patch. Putting the origin on a
+    // surface is not the same as putting the tyres on it, and the difference is most of a
+    // wheel — see `CAR_GROUND_DROP` in `deliveries.js`.
+    return surface + CAR_GROUND_DROP
   }
 
   /**

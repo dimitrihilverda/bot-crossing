@@ -11,7 +11,8 @@ import {
   roadSurfaceY,
   roadTileScale,
 } from '../src/world/road-mesh.js'
-import { CAR_BODY_WIDTH, CAR_SCALE } from '../src/world/deliveries.js'
+import { CAR_BODY_WIDTH, CAR_GROUND_DROP, CAR_SCALE } from '../src/world/deliveries.js'
+import { TRAFFIC_BODIES } from '../src/world/traffic.js'
 
 const COLS = 8
 const ROWS = 4
@@ -188,4 +189,30 @@ test('a car stands on the road surface rather than sunk into the slab', () => {
   const scale = roadTileScale()
   assert.ok(y > ground + ROAD_SURFACE_AUTHORED * scale - 1e-9, `car at ${y} is inside the asphalt`)
   assert.ok(y < ground + 0.1 * scale, `car at ${y} floats above the tile's rim`)
+})
+
+test('a car rests on its tyres, not on its own origin', () => {
+  // Putting the car's origin on the road surface is not the same as putting its wheels there.
+  // A kit car's origin sits above its contact patch: the axle is at 0.0113 and the tyre has a
+  // radius of 0.0723, so the rubber reaches 0.0610 below the origin and the first fix left
+  // every tyre that far into the asphalt. Measured here per body, so a re-exported kit that
+  // re-centres one of them fails rather than sinking it.
+  for (const body of TRAFFIC_BODIES) {
+    const node = doc.getRoot().listNodes().find((n) => n.getName() === `${body}_wheel_front_left`)
+    assert.ok(node, `${body} has no front left wheel`)
+    let lowest = Infinity
+    for (const prim of node.getMesh().listPrimitives()) {
+      const pos = prim.getAttribute('POSITION')
+      const p = []
+      for (let i = 0; i < pos.getCount(); i++) {
+        pos.getElement(i, p)
+        lowest = Math.min(lowest, p[1])
+      }
+    }
+    const contact = node.getTranslation()[1] + lowest
+    assert.ok(
+      Math.abs(-contact * CAR_SCALE - CAR_GROUND_DROP) < 1e-5,
+      `${body} touches down at ${contact.toFixed(4)}, but CAR_GROUND_DROP says ${(-CAR_GROUND_DROP / CAR_SCALE).toFixed(4)}`
+    )
+  }
 })
