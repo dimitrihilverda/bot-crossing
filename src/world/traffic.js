@@ -24,8 +24,13 @@
  * scenery, fixed to the street rather than to anything the colony is doing.
  */
 
-/** The most vehicles that will ever be on the road at once. */
-export const MAX_TRAFFIC = 24
+/**
+ * The most vehicles that will ever be on the road at once.
+ *
+ * A ceiling on cost, not a design statement: every car on the road holds a cached route and
+ * an instance slot, and nothing about the colony is clearer at sixty cars than at forty.
+ */
+export const MAX_TRAFFIC = 40
 
 /** How many active threads it takes to put one more vehicle on the road. */
 const THREADS_PER_VEHICLE = 4
@@ -34,9 +39,16 @@ const THREADS_PER_VEHICLE = 4
  * How many street cells the town gets one ambient car for, before any activity is counted.
  *
  * A density rather than a number, so a five-plot colony does not get a rush hour and a large
- * town does not look deserted. Tuned by eye against the shipping layout.
+ * town does not look deserted. Tuned by eye against the shipping layout: 6 was the first try
+ * and read as too still next to the number of cars standing at the kerb, so the moving share
+ * was doubled and the parked share cut (`PARK_PERCENT`) — the balance between the two is what
+ * makes a street look driven rather than photographed.
+ *
+ * Cars do not avoid one another and never will: at this density two can occupy the same piece
+ * of road, which at a glance reads as traffic and on close inspection reads as two cars in the
+ * same place. That is the trade this number is bought with.
  */
-const CELLS_PER_AMBIENT_CAR = 6
+const CELLS_PER_AMBIENT_CAR = 3
 
 /** Seconds a vehicle stands at an address before heading back. */
 export const DWELL_MIN = 4
@@ -182,8 +194,15 @@ export function stepVehicle(vehicle, dt, routeLength, random) {
  */
 const PARKABLE_PART = 'road_straight'
 
-/** How many of the available kerbside spaces hold a car, in hundredths. */
-const PARK_PERCENT = 38
+/**
+ * How many of the available kerbside spaces hold a car, in hundredths.
+ *
+ * 22, down from the 38 first tried. Both sides of every straight tile are a space, so 38 put a
+ * car at nearly every second one and the street read as a car park with a road through it. The
+ * point of these is to break up an empty kerb, not to line it — and they should be outnumbered
+ * by the cars that are actually going somewhere (`CELLS_PER_AMBIENT_CAR`).
+ */
+const PARK_PERCENT = 22
 
 /**
  * A hash of a tile, a side and a run seed, stable across reloads.
