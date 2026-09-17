@@ -43,28 +43,43 @@ export const BUILDING_SCALE = 1.2
 /**
  * How much of the block frontage is left as green rather than built.
  *
- * Brought back down from 0.55 to 0.3 in this revision. 0.55 was never a design choice — it
- * was forced there in the previous revision purely to fit the town under `TOWN_VERTEX_BUDGET`
- * (`town-mesh.js`) as that constant stood then, and it meant more than half of every block was
- * empty, which was a large part of why the owner reported the town reading as "verspreid en
- * ver uit elkaar" (spread out and far apart) rather than a place with occasional parks. That
- * budget has since been re-measured to the colony's own *complete* draw rather than its houses
- * alone (see `TOWN_VERTEX_BUDGET`'s own doc comment for the derivation) — a legitimate
- * correction to what was being measured, not a raised ceiling — and the headroom it opened up
- * is spent here first, exactly as the spec's ruling on that re-measurement directs: a green
- * block should read as an occasional park, not the default.
+ * Lowered from 0.3 to 0.18 in this revision (the density-tuning revision, building on the
+ * density-recovery revision, `0954f67`). 0.3 was itself already a correction of an earlier
+ * 0.55, forced there purely to fit the town under an under-measured, since-corrected
+ * `TOWN_VERTEX_BUDGET` (`town-mesh.js`) — but 0.3 was never re-examined against the budget's
+ * honest, re-measured figure, and this revision's own measurements show it did not need to be
+ * that high either: at `0954f67` (`GREEN_SHARE` 0.3, `GAP_SHARE` 0.25) the town placed 157
+ * buildings for 352,369 vertices, 27% of the 1,310,000 budget, with 957,631 vertices unused —
+ * the budget was never the constraint on density, `GREEN_SHARE` and `GAP_SHARE` were.
  *
- * Measured against the real street network, after the tighten revision's own changes
- * (`MAX_BLOCK` 3 -> 2 in `street-plan.js`, more and smaller blocks): 0.3 gives a green
- * fraction of **0.254** (15 green of 59 built-or-green cells, up slightly from the previous
- * revision's 0.239 — the same share of more, smaller blocks lands a little differently) —
- * comfortably inside `test/town-plan.test.mjs`'s `> 0.15` / `< 0.6` bounds — and the town it
- * produces places 332 buildings for 760,343 vertices, still well under the budget (see
- * `TOWN_VERTEX_BUDGET`'s own doc comment in `town-mesh.js` for the exact figures and margin).
- * `GREEN_SHARE` itself was not touched by the tighten revision; the density it targets did not
- * need it.
+ * Measured in steps against the real street network (78 in-town, non-street cells total):
+ *
+ * ```
+ * GREEN_SHARE  green/built   measured green share
+ * 0.30         20 / 58       0.256
+ * 0.22         17 / 61       0.218
+ * 0.20         13 / 65       0.167
+ * 0.18         13 / 65       0.167   <- chosen
+ * 0.16         11 / 67       0.141
+ * 0.15         11 / 67       0.141
+ * ```
+ *
+ * (`GREEN_SHARE` is a per-cell probability threshold checked against a fixed, deterministic
+ * stream — see `cellRand` — so the *measured* share moves in discrete steps as individual
+ * cells' own draws cross the threshold, not smoothly with it; 0.20 and 0.18 land on the same
+ * side of every one of the 78 draws and so measure identically.) Even at the extreme of
+ * `GREEN_SHARE` and `GAP_SHARE` both near zero — no parks, no gaps, every eligible slot filled
+ * — the real network places only 285 buildings for 641,804 vertices, 49% of budget: the
+ * *structural* ceiling on this town's density is the street network's own geometry (how many
+ * cells front a street at all, and how many of each row's slots survive `CORNER_SKIP_COUNT` and
+ * `reservedSlots`), not `TOWN_VERTEX_BUDGET`, at any point on this range. 0.18 was chosen over
+ * pushing further down to 0.16/0.15 because the gain was marginal (65 -> 67 built cells, +2)
+ * against a real cost: at 0.16 and below the measured share (0.141) falls under
+ * `test/town-plan.test.mjs`'s existing `> 0.15` bound, which would need re-pointing for a
+ * two-cell gain not worth it. 0.18 keeps a clearly visible, occasional park (13 of 78 candidate
+ * cells, about one in six) comfortably inside the existing, unmodified bounds.
  */
-export const GREEN_SHARE = 0.3
+export const GREEN_SHARE = 0.18
 
 /** How many buildings stand in a row along one street-facing side of a block cell — the same
  *  count the road tiles themselves tile a cell at (`SUBGRID` in `road-mesh.js`), so a
@@ -81,20 +96,44 @@ export const SLOT_PITCH = CELL_SIZE / SLOTS_PER_SIDE
 /**
  * The chance any one slot in a frontage row is left empty — a break in the terrace rather
  * than a missing tooth in an otherwise-full row, since it is rolled independently per slot and
- * most rows of five still come up mostly full. Raising this is the first lever against
- * `TOWN_VERTEX_BUDGET` (see `town-mesh.js`): it shortens terrace runs without touching how
- * wide, tall or dense any single building is.
+ * most rows of five still come up mostly full.
  *
- * Raised from 0.18 (Task 5 Step 2, measured): a kit building at its correct scale is a third
- * the width of the old one, so several stand where one did, and the old value left the town
- * far over budget on its own. It was not pushed further than this, though — past here the
- * measured isolated-building rate (a kept slot with an empty slot on both sides, no longer
- * read as part of a row) climbs faster than the vertex total falls, working against the very
- * terrace look this revision exists for — so the rest of the cut came from `GREEN_SHARE`
- * (fewer built blocks at all) instead of driving this past where a row still mostly reads as
- * a row.
+ * Lowered from 0.25 to 0.1 in this revision (the density-tuning revision, building on the
+ * density-recovery revision, `0954f67`). 0.25 was itself raised from an earlier 0.18 purely to
+ * fit the town under an under-measured, since-corrected `TOWN_VERTEX_BUDGET` (`town-mesh.js`);
+ * this revision's own measurements (see `GREEN_SHARE`'s own doc comment for the full budget
+ * arithmetic) show that ceiling was never actually binding — even the town's structural maximum
+ * (`GREEN_SHARE` and `GAP_SHARE` both near zero) uses only 49% of the real, re-measured budget —
+ * so the terrace can be denser without touching it.
+ *
+ * Measured in steps against the real street network, `GREEN_SHARE` held at this revision's own
+ * 0.18 throughout so the two levers' effects don't get tangled together:
+ *
+ * ```
+ * GAP_SHARE  buildings  vertices
+ * 0.25       179        397,532
+ * 0.12       207        459,658
+ * 0.10       212        471,813   <- chosen
+ * 0.08       220        491,701
+ * 0.05       227        510,219
+ * 0.03       231        516,594
+ * ~0 (min)   237        532,514
+ * ```
+ *
+ * Most of a row's own slots are already ruled out before `GAP_SHARE` is ever rolled — by
+ * `CORNER_SKIP_COUNT` near a corner, or by `reservedSlots` at a street cell's own furniture — so
+ * a large share of what used to read as "a gap" at the old 0.25 was really a corner or a lamp
+ * post, not this constant, and the marginal gain of pushing `GAP_SHARE` toward zero is
+ * correspondingly small and fast-diminishing (212 -> 220 -> 227 -> 231 -> 237, each halving of
+ * the remaining probability buying fewer buildings than the last). 0.1 was chosen to sit past
+ * that knee — most of the achievable density (212 of the theoretical 237-building maximum at
+ * this `GREEN_SHARE`) — while still leaving a clearly visible, occasional gap in a row of five
+ * (roughly one slot in ten left empty) rather than pushing all the way to a wall with no breaks
+ * at all, which is the terrace-reads-as-continuous-but-not-monolithic look the reference asks
+ * for. Vertex budget played no part in choosing this figure — every value in the table above,
+ * including the near-zero one, stays under half of `TOWN_VERTEX_BUDGET`.
  */
-export const GAP_SHARE = 0.25
+export const GAP_SHARE = 0.1
 
 /** The centre offset of each slot in a frontage row, from the cell's own centre along the
  *  row's own axis — `SLOTS_PER_SIDE` values centred on 0 and spaced `SLOT_PITCH` apart, e.g.

@@ -140,8 +140,29 @@ import { blockContent, inTown } from './town-plan.js'
  * together come to 462,202, itself far under `TOWN_VERTEX_BUDGET` — but that combined figure is
  * not what `test/town-mesh.test.mjs`'s own ceiling check measures (it sums `townPlan`'s
  * buildings only, matching this constant's own name), so it is reported here for completeness
- * rather than pinned by a test of its own. None of the levers above was needed by this
- * revision: `GREEN_SHARE` stays at 0.3, and `TOWN_VERTEX_BUDGET` itself is untouched.
+ * rather than pinned by a test of its own. None of the levers above was needed by that
+ * revision: `GREEN_SHARE` stayed at 0.3, and `TOWN_VERTEX_BUDGET` itself was untouched.
+ *
+ * Re-measured again in the density-recovery revision (`0954f67`, `src/world/road-mesh.js` only —
+ * `town-plan.js` and this file were not touched): moving a streetlight's along-arm position off
+ * the exact seam between two frontage slots (see `road-mesh.js`'s `cellFurniture`) meant each
+ * lamp reserved one slot instead of two, and the real network placed **157** buildings for
+ * **352,369** vertices, 957,631 to spare. That revision's own report was explicit that vertex
+ * budget was still not the constraint on density — `GREEN_SHARE` and `GAP_SHARE` were — but left
+ * both untouched as out of its own scope.
+ *
+ * Re-measured once more in the density-tuning revision (this one, `town-plan.js` only): with the
+ * budget confirmed not to be the constraint, `GREEN_SHARE` (0.3 -> 0.18) and `GAP_SHARE`
+ * (0.25 -> 0.1) were both lowered — see each constant's own doc comment in `town-plan.js` for
+ * the step-by-step measurements — and the real network now places **212** buildings for
+ * **471,813** vertices, 36% of the budget, 838,187 to spare. That headroom is deliberate, not
+ * left on the table by accident: measured directly, even the town's structural maximum
+ * (`GREEN_SHARE` and `GAP_SHARE` both pushed to their near-zero limit, no parks and no gaps at
+ * all) places only 285 buildings for 641,804 vertices — 49% of `TOWN_VERTEX_BUDGET` — because
+ * what actually caps this town's density is the street network's own geometry (how many cells
+ * front a street, and how many of each row's slots survive `CORNER_SKIP_COUNT` and
+ * `reservedSlots`), not this constant. `TOWN_VERTEX_BUDGET` itself remains untouched at
+ * 1,310,000 — the spec forbids raising it, and nothing in this revision needed that either.
  */
 export const TOWN_VERTEX_BUDGET = 1310000
 
