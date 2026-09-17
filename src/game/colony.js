@@ -28,12 +28,20 @@ import {
 } from '../world/drive-path.js'
 import { planStreets } from '../world/streets.js'
 import { roadCells } from '../world/road-path.js'
-import { createRoads, DRIVING_LANE_OFFSET, PARKING_LANE_OFFSET } from '../world/road-mesh.js'
+import { createRoads, DRIVING_LANE_OFFSET, PARKING_LANE_OFFSET, roadSurfaceY } from '../world/road-mesh.js'
 import { createTown, townStamp } from '../world/town-mesh.js'
 import { keepClearCells } from '../world/town-plan.js'
 import { Deliveries, CAR_SPEED } from '../world/deliveries.js'
 import { TrafficCars } from '../world/traffic-cars.js'
-import { HEADWAY, headwayFactor, newVehicle, parkedCars, stepVehicle, trafficCount } from '../world/traffic.js'
+import {
+  HEADWAY,
+  headwayFactor,
+  newVehicle,
+  parkedCars,
+  routeEndpoints,
+  stepVehicle,
+  trafficCount,
+} from '../world/traffic.js'
 import { Ship } from '../world/ship.js'
 import { Astronauts } from '../agents/astronauts.js'
 import { Indicators, BADGE } from '../agents/indicators.js'
@@ -524,7 +532,7 @@ export class Colony {
     // far side of the colony does not reshuffle a street here. `y` is sampled once, for the
     // same reason the road tiles sample it: the ground under a street rolls between plots.
     this._parkedCars = parkedCars(this.roadGroup.userData.carriageway ?? [], PARKING_LANE_OFFSET, PARKED_SEED).map(
-      (car) => ({ ...car, y: this.groundAt(car.x, car.z) })
+      (car) => ({ ...car, y: this._carY(car.x, car.z) })
     )
     const layout = allocateCells(projectList, this.plotCells, this.streets.all)
 
@@ -1236,7 +1244,7 @@ export class Colony {
         // The route is drawn cell to cell, but the ground under it is not flat: plots sit on
         // raised decks and the terrain rolls between them. Sampling the same height the crew
         // walks on is what keeps a car on the surface instead of through a deck.
-        y: this.groundAt(at.x, at.z),
+        y: this._carY(at.x, at.z),
         z: at.z,
         heading: at.heading,
         distance: entry.driven,
@@ -1278,8 +1286,6 @@ export class Colony {
       if (dropped._routeKey) this._trafficRoutes.delete(dropped._routeKey)
     }
 
-    const houses = [...this.buildings.values()]
-
     // Where each car stands *before* anything moves. Two passes rather than one, so the gap a
     // car keeps is measured against this frame's positions instead of last frame's: with
     // forty cars the extra `pointAt` per car is nothing, and a frame of lag in a following
@@ -1287,7 +1293,7 @@ export class Colony {
     const routes = []
     const standing = []
     for (const vehicle of this._trafficVehicles) {
-      const route = this._trafficRouteFor(vehicle, houses)
+      const route = this._trafficRouteFor(vehicle)
       routes.push(route)
       standing.push(this._sampleRoute(route, vehicle))
     }
@@ -1310,7 +1316,7 @@ export class Colony {
         x: at.x,
         // Sampled the same way `_updateDeliveries` samples it, for the same reason: the
         // route is drawn cell to cell, but the ground under it rolls between plots.
-        y: this.groundAt(at.x, at.z),
+        y: this._carY(at.x, at.z),
         z: at.z,
         heading: at.heading,
         distance: vehicle.driven,
@@ -1323,6 +1329,24 @@ export class Colony {
     for (const car of this._parkedCars) rendered.push(car)
 
     this.traffic.update(rendered)
+  }
+
+  /**
+   * The height a car's wheels stand at.
+   *
+   * On a street cell, the carriageway's own surface; anywhere else, the ground. Cars were
+   * placed at `groundAt` everywhere, which is where a road tile's *base* sits rather than the
+   * surface a car drives on, so the whole fleet stood 0.084 down inside the asphalt — more
+   * than a wheel radius — and read as half-melted into the road.
+   *
+   * Decided per position rather than per car, because the one car that must *not* be lifted is
+   * a delivery at the end of its route: it parks at a house's kerb, off the carriageway, where
+   * there is no road surface and the ground is what it stands on.
+   */
+  _carY(x, z) {
+    const ground = this.groundAt(x, z)
+    const cell = worldToCell(x, z)
+    return this.streets?.all?.has(key(cell.x, cell.z)) ? roadSurfaceY(ground) : ground
   }
 
   /**
@@ -1362,32 +1386,30 @@ export class Colony {
    * With no house built yet, there is nowhere to send a car: it gets a single-point,
    * zero-length route and sits at the depot rather than throwing on an empty `houses`.
    */
-  _trafficRouteFor(vehicle, houses) {
-    if (houses.length === 0) {
+  _trafficRouteFor(vehicle) {
+    const streetCells = this.streets?.cells
+    const ends = routeEndpoints(vehicle, streetCells?.length ?? 0)
+    // Nowhere to drive between: fewer than two street cells, which is where every colony
+    // starts and what it falls back to if the plan is ever empty.
+    if (!ends) {
       const depot = shipPosition()
       const standstill = [{ x: depot.x, z: depot.z }]
       return { points: standstill, back: standstill, length: 0, backLength: 0 }
     }
 
-    const cacheKey = `${vehicle.addressSeed}|${this._streetStamp}`
+    // Keyed on both ends, not just the destination: a car's origin is now its own rather than
+    // the single cell every car in the colony shared.
+    const cacheKey = `${vehicle.originSeed}|${vehicle.addressSeed}|${this._streetStamp}`
     let route = this._trafficRoutes.get(cacheKey)
     if (!route) {
-      const house = houses[vehicle.addressSeed % houses.length]
-      const houseCell = worldToCell(house.mesh.position.x, house.mesh.position.z)
-      // Ambient traffic has no business on a plot: it drives the streets and waits at the
-      // kerb. `roadCells` ends at the house's own cell, which is by definition not a street
-      // cell, so the tail is trimmed back to the last cell that is one. Without this every
-      // ambient car turned off the carriageway and drove diagonally across the verge on to
-      // somebody's garden — a delivery belongs there and keeps its own `kerbBack` leg, but
-      // these cars are traffic, not visitors.
-      const streets = this.streets?.all
-      const cells = roadCells(SHIP_CELL_FOR_STREETS, houseCell, streets)
-      let last = cells.length
-      if (streets) {
-        while (last > 1 && !streets.has(key(cells[last - 1].x, cells[last - 1].z))) last--
-      }
+      // Street cell to street cell. This used to run from the depot to a house, which sent
+      // every ambient car in the colony through one off-road gap and across the same grass —
+      // invisible until they kept their distance and it became a queue. Both ends are street
+      // cells now, so there is nothing to trim and no verge to cross.
       const lanes = drivingLanes(
-        cells.slice(0, last).map((c) => cellWorld(c.x, c.z)),
+        roadCells(streetCells[ends.from], streetCells[ends.to], this.streets.all).map((c) =>
+          cellWorld(c.x, c.z)
+        ),
         DRIVING_LANE_OFFSET
       )
       // Two lanes, and their lengths are deliberately not assumed equal: offsetting right and

@@ -122,7 +122,36 @@ export function newVehicle(seed) {
     body,
     tint: TRAFFIC_TINTS[lowbias32(seed + 1) % TRAFFIC_TINTS.length],
     addressSeed: lowbias32(seed + 2),
+    // Where this car lives, and unlike `addressSeed` it never changes. A car is standing at
+    // the start of its route whenever that route is replaced, so an origin that moved between
+    // trips would teleport it across town in front of you. The destination may move freely,
+    // because the car is at the other end when it does.
+    originSeed: lowbias32(seed + 3),
   }
+}
+
+/**
+ * The two street cells a vehicle shuttles between, as indices into the town's street list.
+ *
+ * Ambient traffic used to run from the depot to a house, every car from the same cell — which
+ * nothing revealed until they started keeping their distance and formed a single queue out of
+ * the depot and across the grass. It was never right: these cars own no thread and carry
+ * nothing, so they have no business at the warehouse. They are through traffic, and through
+ * traffic starts somewhere on the street.
+ *
+ * @param vehicle a vehicle from `newVehicle`
+ * @param count how many street cells the town has
+ * @returns `{from, to}` indices, never equal — or `null` when there is no journey to make,
+ *   which is a town with fewer than two street cells and the state every colony starts in.
+ */
+export function routeEndpoints(vehicle, count) {
+  if (!(count > 1)) return null
+  const from = vehicle.originSeed % count
+  const to = vehicle.addressSeed % count
+  // A route from a cell to itself has zero length and a car that never moves, which reads as
+  // one abandoned in the road. Nudging to the neighbouring index is enough: it cannot collide
+  // with `from` again, because `count` is at least two.
+  return { from, to: to === from ? (to + 1) % count : to }
 }
 
 /**

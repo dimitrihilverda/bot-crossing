@@ -6,7 +6,9 @@ import {
   DRIVING_LANE_OFFSET,
   EDGE_LINE_AUTHORED,
   PARKING_LANE_OFFSET,
+  ROAD_SURFACE_AUTHORED,
   YELLOW_CELL,
+  roadSurfaceY,
   roadTileScale,
 } from '../src/world/road-mesh.js'
 import { CAR_BODY_WIDTH, CAR_SCALE } from '../src/world/deliveries.js'
@@ -144,4 +146,46 @@ test('a car fits the lane and the parking strip the kit actually painted', () =>
   // CAR_SCALE is what it is.
   assert.ok(PARKING_LANE_OFFSET - halfCar > edge, `parked car sits on the edge line by ${(edge - (PARKING_LANE_OFFSET - halfCar)).toFixed(3)}`)
   assert.ok(PARKING_LANE_OFFSET + halfCar < kerb, `parked car hangs off the asphalt by ${(PARKING_LANE_OFFSET + halfCar - kerb).toFixed(3)}`)
+})
+
+/** Every distinct height a part's vertices sit at, for one atlas cell, lowest first. */
+function levelsOf(name, cell) {
+  const node = doc.getRoot().listNodes().find((n) => n.getName() === name)
+  assert.ok(node, `${name} is missing from city.glb`)
+  const levels = new Set()
+  for (const prim of node.getMesh().listPrimitives()) {
+    const pos = prim.getAttribute('POSITION')
+    const uv = prim.getAttribute('TEXCOORD_0')
+    const p = []
+    const t = []
+    for (let i = 0; i < pos.getCount(); i++) {
+      pos.getElement(i, p)
+      uv.getElement(i, t)
+      const c =
+        Math.min(COLS - 1, Math.floor(t[0] * COLS)) + COLS * Math.min(ROWS - 1, Math.floor(t[1] * ROWS))
+      if (c === cell) levels.add(Number(p[1].toFixed(4)))
+    }
+  }
+  return [...levels].sort((a, b) => a - b)
+}
+
+test('a car stands on the road surface rather than sunk into the slab', () => {
+  // A road tile is not a flat plate: its asphalt has a base, a driving surface and a raised
+  // rim, and the lane paint floats just above the surface. Placing a car at ground height —
+  // which is what shipped — buries it to well over a wheel radius, and the whole fleet reads
+  // as half-melted into the road.
+  const asphalt = levelsOf('road_straight', 2)
+  assert.deepEqual(asphalt, [0, ROAD_SURFACE_AUTHORED, 0.1], 'road_straight no longer has base/surface/rim')
+
+  const paint = levelsOf('road_straight', YELLOW_CELL)
+  assert.equal(paint.length, 1)
+  assert.ok(paint[0] > ROAD_SURFACE_AUTHORED, 'the paint should sit above the surface it marks')
+  assert.ok(paint[0] < 0.1, 'the paint should sit below the rim')
+
+  // On flat ground a car stands above the asphalt it drives on and below the rim beside it.
+  const ground = 0
+  const y = roadSurfaceY(ground)
+  const scale = roadTileScale()
+  assert.ok(y > ground + ROAD_SURFACE_AUTHORED * scale - 1e-9, `car at ${y} is inside the asphalt`)
+  assert.ok(y < ground + 0.1 * scale, `car at ${y} floats above the tile's rim`)
 })

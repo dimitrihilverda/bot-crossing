@@ -116,6 +116,29 @@ export function carriagewayHeight(groundY, lift = ROAD_SURFACE_LIFT) {
   return groundY + lift
 }
 
+/**
+ * Where the driving surface sits on a road tile, in the tile's own authored units.
+ *
+ * A road tile is not a flat plate. Measured off `road_straight` in city.glb, its asphalt has
+ * vertices at exactly three heights — 0 for the base it stands on, 0.07 for the surface a car
+ * drives on, and 0.1 for the raised rim down each side — with the lane paint floating at
+ * 0.073, three thousandths above the surface it marks so it does not fight it. The test reads
+ * all of that back out of the glb rather than trusting this comment.
+ */
+export const ROAD_SURFACE_AUTHORED = 0.07
+
+/**
+ * The height a car's wheels stand at, on a carriageway laid over ground at `groundY`.
+ *
+ * Cars used to be placed at `groundY` itself — which is where the tile's *base* goes, not its
+ * surface. Every car in the colony therefore sat 0.084 down inside the asphalt, comfortably
+ * more than a wheel radius (0.076 at the shipping `CAR_SCALE`), and the fleet read as
+ * half-melted into the road.
+ */
+export function roadSurfaceY(groundY, lift = ROAD_SURFACE_LIFT) {
+  return carriagewayHeight(groundY, lift) + ROAD_SURFACE_AUTHORED * roadTileScale()
+}
+
 /** A cell is this many carriageway tiles across. */
 export const SUBGRID = 5
 

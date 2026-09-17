@@ -10,6 +10,7 @@ import {
   trafficCount,
   parkedCars,
   headwayFactor,
+  routeEndpoints,
 } from '../src/world/traffic.js'
 
 test('a vehicle walks its four phases in order', () => {
@@ -249,4 +250,48 @@ test('a throttled vehicle stops moving but still counts down its wait', () => {
 
   const waiting = { phase: 'waiting', driven: 100, dwell: 4 }
   assert.ok(stepVehicle(waiting, 1, 100, () => 0.5, 0).dwell < 4, 'a blocked car never finishes waiting')
+})
+
+// ── where a car starts ───────────────────────────────────────────────────────────────
+
+test('a vehicle keeps the same origin across round trips, and only its destination moves', () => {
+  // The origin has to be stable or a car teleports across town the instant it finishes a
+  // trip: it is standing at the start of its route when the route is replaced. The
+  // destination may move freely, because the car is at the *other* end when that happens.
+  let v = newVehicle(4)
+  const origin = v.originSeed
+  const first = v.addressSeed
+  const random = () => 0.5
+  for (let i = 0; i < 4000; i++) v = stepVehicle(v, 1 / 60, 20, random)
+  assert.equal(v.originSeed, origin, 'a vehicle moved house between trips')
+  assert.notEqual(v.addressSeed, first, 'a vehicle shuttled to the same address forever')
+})
+
+test('a vehicle drives between two different street cells, never from one to itself', () => {
+  // A route whose ends are the same cell has zero length, and a car on it never moves — it
+  // would read as a car abandoned in the road.
+  for (let seed = 0; seed < 200; seed++) {
+    const ends = routeEndpoints(newVehicle(seed), 17)
+    assert.ok(ends, `seed ${seed} got no route at all`)
+    assert.notEqual(ends.from, ends.to, `seed ${seed} drives from cell ${ends.from} to itself`)
+    for (const i of [ends.from, ends.to]) {
+      assert.ok(Number.isInteger(i) && i >= 0 && i < 17, `seed ${seed} picked cell ${i} of 17`)
+    }
+  }
+})
+
+test('a town with nowhere to drive between gets no route', () => {
+  // One street cell is not a journey, and no streets at all is the state every colony starts
+  // in. Both have to answer "nothing", not a route of length zero that a car sits on.
+  assert.equal(routeEndpoints(newVehicle(1), 1), null)
+  assert.equal(routeEndpoints(newVehicle(1), 0), null)
+})
+
+test('cars do not all start from the same place', () => {
+  // The whole point. Every ambient car used to set off from the depot cell, which nothing
+  // revealed until they kept their distance from each other and formed one long queue out of
+  // it, across the grass, for the entire colony to see.
+  const origins = new Set()
+  for (let seed = 0; seed < 40; seed++) origins.add(routeEndpoints(newVehicle(seed), 150).from)
+  assert.ok(origins.size > 20, `40 cars started from only ${origins.size} places`)
 })
