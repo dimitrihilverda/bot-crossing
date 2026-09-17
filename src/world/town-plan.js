@@ -1,6 +1,8 @@
 import { CELL_SIZE } from './grid.js'
 import { mulberry } from './rng.js'
 import { TOWN_CELL_RADIUS } from './street-plan.js'
+import { TOWN_SEED, townRadiusAt, inTown } from './town-outline.js'
+import { cellFurniture, furnitureWorldBounds } from './road-mesh.js'
 
 /**
  * What stands in a block.
@@ -12,7 +14,10 @@ import { TOWN_CELL_RADIUS } from './street-plan.js'
  * never anywhere to be lost.
  */
 
-export const TOWN_SEED = 77313
+// `TOWN_SEED`, `townRadiusAt` and `inTown` now live in `town-outline.js` — see that module's
+// own doc comment for why — and are re-exported here so every existing import site
+// (`town-mesh.js`, the test files) keeps working unchanged.
+export { TOWN_SEED, townRadiusAt, inTown }
 
 /** The eight buildings in `city.glb`, all 2 x 2 in plan and 1.65-3.05 tall. */
 export const BUILDING_PARTS = Object.freeze([
@@ -23,12 +28,15 @@ export const BUILDING_PARTS = Object.freeze([
 /**
  * What a kit building is scaled by. A part is 2 units across; the kit's own module is the
  * road tiles' scale — `roadTileScale()` in `road-mesh.js` derives it as
- * `CARRIAGEWAY_WIDTH / ROAD_TILE_SIZE = 2.4 / 2 = 1.2`, the same figure repeated here so this
- * file does not import `road-mesh.js` (which already imports this one — importing back would
- * make the two modules a load-order-dependent cycle for the sake of one constant). At 1.2 a
- * building is 2.4 wide and 1.98-3.66 (2.0-3.7) tall — a townhouse, not a warehouse — and five
- * stand edge to edge across one 12-unit frontage (`SLOTS_PER_SIDE`, `SLOT_PITCH` below),
- * exactly as five carriageway tiles tile a street cell (`SUBGRID` in `road-mesh.js`).
+ * `CARRIAGEWAY_WIDTH / ROAD_TILE_SIZE = 2.4 / 2 = 1.2`, the same figure repeated here rather
+ * than imported. This file does now import `road-mesh.js` — for `cellFurniture` and
+ * `furnitureWorldBounds` (see `reservedSlots` below), safe in that one direction since
+ * `road-mesh.js` no longer needs anything from this file (see `town-outline.js`'s own doc
+ * comment for why) — but a bare number like this one is not worth threading through that import
+ * just to save one repeated line. At 1.2 a building is 2.4 wide and 1.98-3.66 (2.0-3.7) tall —
+ * a townhouse, not a warehouse — and five stand edge to edge across one 12-unit frontage
+ * (`SLOTS_PER_SIDE`, `SLOT_PITCH` below), exactly as five carriageway tiles tile a street cell
+ * (`SUBGRID` in `road-mesh.js`).
  */
 export const BUILDING_SCALE = 1.2
 
@@ -110,83 +118,74 @@ const GREEN_PLANT_RADIUS = 5
 /**
  * Half the carriageway's own width — the point past which a street cell stops being asphalt.
  * The same figure `road-mesh.js` exports as `CARRIAGEWAY_WIDTH / 2`, duplicated here rather
- * than imported for the same reason `BUILDING_SCALE` is: importing `road-mesh.js` would make
- * it and this module a load-order-dependent cycle for the sake of one constant, since
- * `road-mesh.js` already imports `inTown` from here.
+ * than imported for the same reason `BUILDING_SCALE` is: importing `road-mesh.js` — which this
+ * file now does, for `cellFurniture`/`furnitureWorldBounds` (see `reservedSlots` below) — is
+ * safe in that one direction, but `road-mesh.js` still cannot import back (it needs `inTown`,
+ * which now lives in `town-outline.js` precisely so this stays one-directional — see that
+ * module's own doc comment). A constant this small is not worth threading through an import
+ * for on top of that.
  */
 const CARRIAGEWAY_HALF = 1.2
 
 /**
- * The clearance a building's own outer wall keeps past the carriageway's edge.
+ * The clearance a building's own outer wall keeps past the carriageway's edge — now that the
+ * furniture that used to force a wide margin here (see below) is instead handled by
+ * `reservedSlots`, leaving a real gap in the terrace for whichever slot a lamp, crossing or
+ * signal actually occupies.
  *
- * The owner's next request, after the tighten revision landed, was to close this gap further
- * still: "laten we de gebouwen nu aan de weg maken zonder de gras ruimte ertussen" (put the
- * buildings against the road, with no strip of grass between). At the tighten revision's own
- * figure — `KERB_CLEARANCE` in `road-mesh.js`, 0.6, chosen only so a wall, a lamp post and a
- * signal pole would all read as standing at the same roadside distance — the wall's outer face
- * and a streetlight's own kerb line turn out to sit at *exactly* the same distance from the
- * street (both `CARRIAGEWAY_HALF + 0.6` = 1.8 from its centre line), a coincidence that was
- * never actually checked town-wide before now. `streetlight`'s mast is thin but not zero: its
- * local footprint (measured from `public/assets/city.glb`) is `-0.239..0.030` on X, and every
- * lamp's cantilever arm is rotated to overhang its own carriageway (see `vergeFurniture`'s own
- * doc comment in `road-mesh.js`), so the *small* side of that range — `0.030096590518951416` —
- * is always the one facing back toward the block, scaled by the lamp's own placement scale
- * (1.6): ≈ `0.0482`. A wall placed flush with the old 0.6 clearance shares that exact roadside
- * line with the lamp, so that thin sliver of mast lands inside the wall by the same margin —
- * confirmed by sweeping every built cell in the real town: 49 of 186 buildings actually
- * overlapped a streetlight at the old clearance, on both plain street frontages and junction
- * ones alike, not only at corners. `0.6` was never a safe figure; it was only ever *lucky* that
- * nothing checked it.
- *
- * So closing the gap here has to start from the lamp, not the carriageway: the wall's face has
- * to clear the lamp's own kerb line by that measured 0.0482, which needs `BUILDING_CLEARANCE`
- * of at least `0.6 + 0.0482` ≈ `0.6482` (confirmed against the real town: `0.648` still leaves
- * every one of those 49 overlaps, `0.649` clears all of them). `0.65` is used here instead of
- * that bare minimum — a clean number with a genuine sliver of margin past the threshold, the
- * same idiom `KERB_CLEARANCE` itself already uses. This is not the closing this brief asked
- * for — the grass strip moves from 0.6 to 0.65, wider than before, because the previous
- * revision's lamp placement was already standing exactly where a flush wall wants to be. See
- * `SET_BACK`'s own doc comment for where that leaves the wall, and `blockContent`'s "Corners,
- * at a governed junction arm" section for the traffic light — a *bulkier* fixture at the same
- * kerb line, which cannot be cleared by any `BUILDING_CLEARANCE` this small and is handled by
- * skipping the one slot it actually reaches instead.
+ * The owner's request: "laten we de gebouwen nu aan de weg maken zonder de gras ruimte
+ * ertussen" (put the buildings against the road, with no strip of grass between). The facade
+ * revision tried to close this by widening `BUILDING_CLEARANCE` itself (0.6 -> 0.65), because a
+ * streetlight standing at the kerb line — `CARRIAGEWAY_HALF + 0.6` = 1.8 from the street's own
+ * centre line, the same distance a flush wall wants to stand at — left 49 of 186 buildings
+ * overlapping a streetlight at the old, tighter figure. That revision's own report named the
+ * real fix directly: "on a real street a lamp post stands *in front of* the buildings, not
+ * instead of them — the conflict only exists because our frontage tries to put a building in
+ * every slot along the street edge, including the slot a lamp occupies." This revision does
+ * that instead: `reservedSlots` (below) finds, for each row, which of its own slots a piece of
+ * real verge furniture on the street cell it fronts would actually reach, and `blockContent`
+ * leaves that one slot empty rather than pushing the *whole row* back to clear it. With the
+ * lamp no longer sharing a slot with a building, the wall can come back to the carriageway's own
+ * edge: a small margin past `CARRIAGEWAY_HALF` (1.2) so the wall's face does not sit exactly
+ * coincident with (and, given any floating-point slack, occasionally inside) the outermost
+ * carriageway tile — the same reasoning `ROAD_SURFACE_LIFT` already uses for the vertical gap
+ * between a road tile and the terrain under it, applied here to the horizontal one between a
+ * wall and the carriageway beside it.
  */
-const BUILDING_CLEARANCE = 0.65
+const BUILDING_CLEARANCE = 0.05
 
 /**
  * How far a building row's centre line sits from its cell's own centre, toward the street it
  * faces.
  *
  * The playful revision removes the pavement entirely (see `road-mesh.js`'s own doc comment on
- * `vergeFurniture`) — there is no footway edge left to stand a wall against, so the wall stands
- * directly at the carriageway's own edge instead, with the same small clearance `road-mesh.js`
- * gives its own kerbside furniture: `CARRIAGEWAY_HALF + BUILDING_CLEARANCE` = `1.2 + 0.65` =
- * `1.85` from the street cell's centre line — the reach a building's own outer wall keeps from
- * the street it fronts.
+ * `cellFurniture`) — there is no footway edge left to stand a wall against, so the wall stands
+ * directly at the carriageway's own edge instead, with only `BUILDING_CLEARANCE` (0.05) past it:
+ * `CARRIAGEWAY_HALF + BUILDING_CLEARANCE` = `1.2 + 0.05` = `1.25` from the street cell's centre
+ * line — the reach a building's own outer wall keeps from the street it fronts, now that the
+ * furniture that used to force a wider gap here is handled by reserving its own slot instead
+ * (see `BUILDING_CLEARANCE`'s own doc comment, and `reservedSlots` below).
  *
  * Measured against `public/assets/city.glb`: every one of `building_A..H`'s local footprint
  * spans `-1..1` on both its own X and Z, so at `BUILDING_SCALE` the half-depth facing the
  * street is exactly `BUILDING_SCALE` (a part is 2 units deep before scale, and scale halves
  * that to one factor: `BUILDING_SCALE * 2 / 2 = BUILDING_SCALE`). The street cell's own centre
  * line sits one full cell (`CELL_SIZE`) from this block cell's centre, so putting the wall's
- * outer face at that 1.85-unit reach from that centre line means its row's own centre line —
+ * outer face at that 1.25-unit reach from that centre line means its row's own centre line —
  * `SET_BACK` — sits at `CELL_SIZE - (CARRIAGEWAY_HALF + BUILDING_CLEARANCE) - BUILDING_SCALE` =
- * `12 - 1.85 - 1.2` = `8.95` from *this* cell's own centre: past the block's own boundary
+ * `12 - 1.25 - 1.2` = `9.55` from *this* cell's own centre: past the block's own boundary
  * (`CELL_HALF`, 6) and into the neighbouring street cell's own verge, right up against the
  * carriageway itself now that nothing paved stands between them.
  *
  * That deliberately breaks the old invariant that a building never crosses its own cell's
  * boundary — it was never a rule of the reference render, only an accident of the old, flush
- * placement. The invariant that actually matters — a building overlapping no carriageway and
- * no other building (or, new to this revision, no streetlight or traffic light — see
- * `BUILDING_CLEARANCE`'s own doc comment and `blockContent`'s "Corners, at a governed junction
- * arm" section) — still holds, checked directly against the real street, building and verge
- * furniture data by `test/town-plan.test.mjs`: the wall's outer face sits `BUILDING_CLEARANCE`
- * (0.65) past the carriageway's own edge, clear of it rather than merely touching it — a
- * genuine gap, not a seam, since (with the pavement gone) a wall and the road surface it now
- * stands beside are both real geometry a camera can pass between. That 0.65 is *wider* than
- * the 0.6 this revision set out to close — see `BUILDING_CLEARANCE`'s own doc comment for why
- * the streetlight, not the carriageway, ends up setting the real limit.
+ * placement. The invariant that actually matters — a building overlapping no carriageway, no
+ * streetlight, no traffic light, no crossing and no other building — still holds, checked
+ * directly against the real street, building and verge furniture data by
+ * `test/town-plan.test.mjs`: the wall's outer face sits `BUILDING_CLEARANCE` (0.05) past the
+ * carriageway's own edge, clear of it rather than merely touching it, and every slot a real
+ * piece of furniture would actually reach is left empty by `reservedSlots` rather than swept
+ * under a wider margin.
  */
 export const SET_BACK = CELL_SIZE - (CARRIAGEWAY_HALF + BUILDING_CLEARANCE) - BUILDING_SCALE
 
@@ -206,15 +205,13 @@ export const SET_BACK = CELL_SIZE - (CARRIAGEWAY_HALF + BUILDING_CLEARANCE) - BU
  * the two slots are exactly `2 * BUILDING_SCALE` apart on both axes (a bare touch, not yet an
  * overlap) and the point where they coincide exactly on one axis. At the tighten revision's
  * `SET_BACK` (7.2) that interval's own left edge for `k=0` is exactly 7.2 — a tangency, not an
- * overlap, which is why skipping only the single outermost slot (`k=0`) was ever enough. At
- * the playful revision's 9.0, and still at this revision's 8.95 (closer to the kerb line than
- * the tighten revision, if slightly further back than the playful revision's own figure — see
- * `BUILDING_CLEARANCE`'s own doc comment for why) — `k=0` *and* `k=1` both fall inside their
- * own risk interval (measured directly, before this constant existed: two real buildings in the
- * actual street network overlapped by exactly 0.6 units on both axes), so both now have to be
- * skipped. `k=2`, this row's centre slot, stays outside every interval up to `SET_BACK` 9.6, so
- * it is never at risk here — and 8.95 stays under that ceiling too, so this revision's own
- * closer setback does not add a third skipped slot.
+ * overlap, which is why skipping only the single outermost slot (`k=0`) was ever enough. At the
+ * playful and facade revisions' 9.0/8.95, and still at this revision's 9.55 (closer to the kerb
+ * line than either — see `BUILDING_CLEARANCE`'s own doc comment for why) — `k=0` *and* `k=1`
+ * both fall inside their own risk interval, so both still have to be skipped. `k=2`, this row's
+ * centre slot, stays outside every interval up to `SET_BACK` 9.6, so it is never at risk here —
+ * and 9.55 stays (just) under that ceiling too, so this revision's own closer setback does not
+ * add a third skipped slot.
  *
  * Computed from `SET_BACK` itself rather than hand-set to `2`, so a future change to either
  * constant keeps this correct instead of silently under- or over-skipping.
@@ -226,65 +223,46 @@ const CORNER_SKIP_COUNT = (() => {
 })()
 
 /**
- * Which slot, counted in from a corner (`k = 0` outermost, matching `CORNER_SKIP_COUNT`'s own
- * indexing), a *governed junction arm*'s own traffic light reaches — see `blockContent`'s
- * "Corners, at a governed junction arm" section for what that means and why it is a separate
- * case from `CORNER_SKIP_COUNT`'s own (that one is about two buildings; this one is about a
- * building and the junction's own signal).
+ * Which of a row's own slots a street cell's own verge furniture actually reaches — reserved so
+ * `blockContent` leaves that one slot empty rather than pushing the whole row back to clear it
+ * (see `BUILDING_CLEARANCE`'s own doc comment for why that is the better fix).
  *
- * Unlike the streetlight (see `BUILDING_CLEARANCE`'s own doc comment), a traffic light's own
- * footprint is too bulky to clear with any reasonable `BUILDING_CLEARANCE` — measured directly
- * against the real town, clearing it town-wide needs `BUILDING_CLEARANCE` past 0.83, most of a
- * whole extra `SLOT_PITCH` step back from the kerb, which would give back nearly everything
- * this revision closes. But a governed arm's own light sits at a *fixed* spot regardless of
- * `SET_BACK`: `KERB` (`CARRIAGEWAY_HALF + 0.6`, the same figure `road-mesh.js`'s own
- * `vergeFurniture` places it at) off the row's own centre-line, on the side its arm points to —
- * a fixed lateral offset from the row's own centre, never an along-street one, so which slot it
- * threatens does not move with `SET_BACK` either. Slot `k`'s own lateral span is
- * `CELL_HALF - BUILDING_SCALE - k * SLOT_PITCH ± BUILDING_SCALE`, i.e. `[3.6 - 2.4k, 6.0 -
- * 2.4k]`; solving for which `k` contains `KERB` (1.8) gives `k = 1` — never `k = 0` (too far
- * out, its own near edge starts past 1.8) or `k = 2` (too far in, its own far edge stops short
- * of 1.8) — confirmed directly against the real town: every one of the five real collisions
- * this revision found between a building and a traffic light sits at exactly this slot, and
- * none at any other.
+ * `road-mesh.js`'s `cellFurniture` is the one source of truth for where a street cell's lamps,
+ * crossing and traffic light actually stand — this calls it directly rather than re-deriving
+ * R7/R11's own arm selection, cell hash and arm order the way an earlier revision did (that
+ * duplication is exactly what this replaces). For each piece it returns, this projects the
+ * piece's real, rotated world footprint (`furnitureWorldBounds`) onto the row's own two axes —
+ * `d`, the depth toward the street, and `perp`, the lateral axis every slot sits along — and
+ * checks it against a candidate building's own square footprint at each slot, the same
+ * axis-aligned overlap test `test/town-plan.test.mjs`'s own sweep uses. A slot is reserved only
+ * if a real piece of furniture would actually reach it at this revision's own `SET_BACK`, not by
+ * any fixed offset hand-derived for one `SET_BACK` and liable to drift when it changes.
  *
- * Computed the same way `CORNER_SKIP_COUNT` is — from the real constants, not hand-set — so a
- * future change to `CARRIAGEWAY_WIDTH`, `KERB_CLEARANCE`, `BUILDING_SCALE` or `SLOT_PITCH`
- * keeps this correct instead of silently drifting off the light's own real position. `-1` (no
- * slot) if none of them actually contains it, so a future constant change that moves the light
- * out of reach entirely disables this skip instead of silently skipping the wrong slot.
+ * @param streetCell the street cell this row fronts, `{x, z}`
+ * @param d the direction from the block cell to `streetCell`
+ * @param perp the row's own lateral axis, `rotCW(d)`
+ * @param blockCenter the block cell's own world centre, `{x, z}`
+ * @param streetKeys the street membership set
+ * @returns a `Set` of slot indices (into `SLOT_OFFSETS`) a real piece of furniture occupies
  */
-const JUNCTION_LIGHT_SKIP_INDEX = (() => {
-  const kerb = CARRIAGEWAY_HALF + 0.6 // KERB_CLEARANCE, duplicated from road-mesh.js — see BUILDING_CLEARANCE's own doc comment for why this file does not import that one
-  for (let k = 0; k < SLOTS_PER_SIDE; k++) {
-    const slotNear = CELL_HALF - BUILDING_SCALE - k * SLOT_PITCH - BUILDING_SCALE
-    const slotFar = CELL_HALF - BUILDING_SCALE - k * SLOT_PITCH + BUILDING_SCALE
-    if (kerb > slotNear && kerb < slotFar) return k
+function reservedSlots(streetCell, d, perp, blockCenter, streetKeys) {
+  const reserved = new Set()
+  for (const f of cellFurniture(streetCell, streetKeys, CELL_SIZE)) {
+    const bounds = furnitureWorldBounds(f)
+    if (!bounds) continue
+    SLOT_OFFSETS.forEach((offset, k) => {
+      if (reserved.has(k)) return
+      const bx = blockCenter.x + d.x * SET_BACK + perp.x * offset
+      const bz = blockCenter.z + d.z * SET_BACK + perp.z * offset
+      const overlaps =
+        bx - BUILDING_SCALE < bounds.xmax &&
+        bx + BUILDING_SCALE > bounds.xmin &&
+        bz - BUILDING_SCALE < bounds.zmax &&
+        bz + BUILDING_SCALE > bounds.zmin
+      if (overlaps) reserved.add(k)
+    })
   }
-  return -1
-})()
-
-/**
- * The town's outer edge: a radius that varies with direction, so the town frays into the
- * countryside instead of stopping on a square. Three harmonics with seeded phases — enough
- * to look unplanned, few enough to stay smooth.
- */
-const OUTLINE = (() => {
-  const rand = mulberry(TOWN_SEED)
-  return [2, 3, 5].map((n) => ({ n, amp: 0.05 + rand() * 0.05, phase: rand() * Math.PI * 2 }))
-})()
-
-/** The town's radius, in cells, in the direction `angle`. */
-export function townRadiusAt(angle) {
-  let f = 1
-  for (const h of OUTLINE) f -= (h.amp * (1 - Math.sin(h.n * angle + h.phase))) / 2
-  return TOWN_CELL_RADIUS * f
-}
-
-/** Is this cell inside the town's outline? */
-export function inTown(cell) {
-  if (cell.x === 0 && cell.z === 0) return true
-  return Math.hypot(cell.x, cell.z) <= townRadiusAt(Math.atan2(cell.z, cell.x))
+  return reserved
 }
 
 /** A stable per-cell random stream. Same cell, same numbers, always. */
@@ -304,54 +282,6 @@ const SIDES = [
 const rotCW = (d) => ({ x: d.z, z: -d.x })
 /** The other quarter turn. */
 const rotCCW = (d) => ({ x: -d.z, z: d.x })
-
-/** Are two unit directions the same one? */
-const sameDir = (a, b) => a.x === b.x && a.z === b.z
-
-/** A JS `%` can come back negative; this never does. Duplicated from `road-mesh.js`'s own
- *  identical helper — see `BUILDING_CLEARANCE`'s own doc comment for why this file does not
- *  import that one. */
-const mod = (n, m) => ((n % m) + m) % m
-
-// road-mesh.js's own N, S, E, W, in its own N/S/E/W order — duplicated (not `SIDES` above,
-// which is the same four directions in a different order) because `governingArm` below has to
-// reproduce `vergeFurniture`'s `arms[mod(h, arms.length)]` selection exactly: which *index*
-// `mod` picks depends on the order the arms were filtered in, not just which directions are
-// present, so the order itself is part of the fact being duplicated.
-const NSEW = [{ x: 0, z: -1 }, { x: 0, z: 1 }, { x: 1, z: 0 }, { x: -1, z: 0 }]
-
-/**
- * R11 (`road-mesh.js`'s own `isFurnished`), duplicated here: a street cell only carries verge
- * furniture — lamps, a crossing, a traffic light — if at least one of its four neighbours is
- * itself *not* a street and lies inside `inTown`'s outline. A country-lane street cell places
- * no traffic light at all, so `governingArm` below must agree with this before it looks for one.
- */
-function bordersTown(cell, streetKeys) {
-  return NSEW.some((d) => {
-    const n = { x: cell.x + d.x, z: cell.z + d.z }
-    return !streetKeys.has(`${n.x},${n.z}`) && inTown(n)
-  })
-}
-
-/**
- * Which arm (if any) of a street cell carries *that cell's own* traffic light — the same
- * selection `vergeFurniture` makes in `road-mesh.js` (R7: a furnished cell with three or four
- * arms gets one light, on the arm `cellHash(cell) mod arms.length` picks), replicated here so
- * `blockContent` can tell, without importing that module (see `BUILDING_CLEARANCE`'s own doc
- * comment), whether *its own* row would be reached by it. `null` if the cell carries no light
- * at all — too few arms, or (R11) it does not border the town.
- *
- * @param streetCell the street cell to check, `{x, z}`
- * @param streetKeys the street membership set
- * @returns the governed arm, `{x, z}`, or `null`
- */
-function governingArm(streetCell, streetKeys) {
-  if (!bordersTown(streetCell, streetKeys)) return null
-  const arms = NSEW.filter((d) => streetKeys.has(`${streetCell.x + d.x},${streetCell.z + d.z}`))
-  if (arms.length < 3) return null
-  const h = streetCell.x * 31 + streetCell.z * 17 // cellHash, duplicated from road-mesh.js
-  return arms[mod(h, arms.length)]
-}
 
 /**
  * What fills one block cell.
@@ -397,23 +327,21 @@ function governingArm(streetCell, streetKeys) {
  * and the street set alone: no colony state, and no need to call `blockContent` recursively on
  * the diagonal cell to know it would collide.
  *
- * **Corners, at a governed junction arm.** This revision's closer `SET_BACK` (see
- * `BUILDING_CLEARANCE`'s own doc comment) opens a third collision, this time not with another
- * building at all: the street cell `S` this row fronts can itself be a furnished three- or
- * four-arm junction (R7, `road-mesh.js`), and R7 puts exactly one traffic light on `S` — on
- * whichever of *its own* arms `governingArm` picks. When that arm is perpendicular to this
- * row (`rotCCW(d)` or `rotCW(d)`, the same two directions the within-cell case above checks),
- * the light stands at a *fixed* lateral offset from this row's own centre-line (`KERB`, off
- * `S`'s own centre, which shares this row's own lateral axis exactly — see
- * `JUNCTION_LIGHT_SKIP_INDEX`'s own doc comment for the arithmetic), landing inside slot
- * `JUNCTION_LIGHT_SKIP_INDEX` regardless of `SET_BACK`. Unlike the within-cell and
- * across-two-cells cases above, this is not symmetric — `S` places one light regardless of
- * what this cell does, so only this row's own matching slot has to give way, not two rows at
- * once — and it is not a `faces`/`isBlock` question either: `S` is already a street cell (the
- * one this row fronts), never a diagonal block, so neither existing check ever sees it. Found
- * by sweeping every built cell against the real `vergeFurniture` output for the real street
- * set (`test/town-plan.test.mjs`): five real collisions in this exact network, every one at
- * exactly this slot.
+ * **Reserved slots, at the street cell's own furniture.** With `SET_BACK` now reaching all the
+ * way to the carriageway's own edge (see `BUILDING_CLEARANCE`'s own doc comment), a row can
+ * reach not only another building but the street cell `S` it fronts' own verge furniture — a
+ * streetlight on one of `S`'s arms, or, if `S` is a furnished three- or four-arm junction (R7),
+ * its own crossing or traffic light. Rather than pushing the *whole row* back to clear whichever
+ * fixture stands nearest (the facade revision's own fix, and the wider grass strip it left
+ * behind), `reservedSlots` finds exactly which of this row's own slots a real piece of `S`'s
+ * furniture actually reaches and only that slot is left empty — a lamp or a signal standing in
+ * a gap in the terrace, at the kerb, with buildings tight on either side of it, the way a real
+ * street works: the furniture stands *in front of* the terrace, not instead of one of its
+ * houses. Unlike the within-cell and across-two-cells cases above, this is not symmetric — `S`
+ * places its furniture regardless of what this cell decides, so only this row's own reached
+ * slots give way, not two rows at once — and it is not a `faces`/`isBlock` question either: `S`
+ * is already a street cell (the one this row fronts), never a diagonal block, so neither
+ * existing check ever sees it.
  *
  * @param cell the block cell, `{x, z}`
  * @param streetKeys the street membership set from `planStreets().all`
@@ -451,17 +379,14 @@ export function blockContent(cell, streetKeys) {
     // cell's corner) — so no two rows, in this cell or across the street, ever both claim it.
     const skipFirst = faces(rotCCW(d)) || isBlock(diagFirst)
     const skipLast = faces(rotCW(d)) || isBlock(diagLast)
-    // The street cell `S` this row fronts can carry its own traffic light, on one of its own
-    // arms — see the "Corners, at a governed junction arm" doc comment above. Only relevant
-    // when that governed arm is perpendicular to this row: an arm running along `d` itself (or
-    // its opposite) puts the light out ahead of or behind the row, never to either side of it.
-    const litArm = governingArm(street, streetKeys)
-    const lightSkipFirst = JUNCTION_LIGHT_SKIP_INDEX >= 0 && !!litArm && sameDir(litArm, rotCCW(d))
-    const lightSkipLast = JUNCTION_LIGHT_SKIP_INDEX >= 0 && !!litArm && sameDir(litArm, rotCW(d))
+    // The slots the street cell `S` this row fronts' own furniture — a streetlight, a crossing
+    // or a traffic light — actually reaches, computed against the real, measured positions
+    // `road-mesh.js`'s `cellFurniture` places rather than re-derived here (see "Reserved slots,
+    // at the street cell's own furniture" above, and `reservedSlots`'s own doc comment).
+    const furnitureSlots = reservedSlots(street, d, perp, { x: cx, z: cz }, streetKeys)
     SLOT_OFFSETS.forEach((offset, i) => {
       if ((i < CORNER_SKIP_COUNT && skipFirst) || (i > last - CORNER_SKIP_COUNT && skipLast)) return
-      if ((i === JUNCTION_LIGHT_SKIP_INDEX && lightSkipFirst) || (i === last - JUNCTION_LIGHT_SKIP_INDEX && lightSkipLast))
-        return
+      if (furnitureSlots.has(i)) return
       // A gap in the terrace here and there, so a frontage is not always one unbroken wall.
       if (rand() < GAP_SHARE) return
       buildings.push({

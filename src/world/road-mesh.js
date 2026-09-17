@@ -3,7 +3,7 @@ import { atlasTexture, hasPart } from './kit.js'
 import { Composer } from './buildings.js'
 import { CELL_SIZE } from './grid.js'
 import { DECK_TOP } from './plots.js'
-import { inTown } from './town-plan.js'
+import { inTown } from './town-outline.js'
 
 /**
  * The street surface and its verge: a carriageway down the middle of each street cell, and —
@@ -248,14 +248,24 @@ function isFurnished(cell, streetKeys) {
   })
 }
 
+/** A street cell's own street-connected neighbours, in `[N, S, E, W]` order — the order
+ *  matters, not just the set of directions, because `cellFurniture` below picks a governed arm
+ *  by `arms[mod(cellHash(cell), arms.length)]`, and which *index* that lands on depends on it. */
+function armsOf(cell, streetKeys) {
+  return [N, S, E, W].filter((d) => streetKeys.has(`${cell.x + d.x},${cell.z + d.z}`))
+}
+
 /**
- * Where every piece of verge furniture goes, laid out the same way `carriagewayTiles` lays
- * the road surface itself: one street cell at a time, from that cell's own arms.
+ * Where every piece of verge furniture on *one* street cell goes — the per-cell body
+ * `vergeFurniture` below loops over the whole network, and the same thing `town-plan.js` calls
+ * directly (rather than re-deriving R7/R11's own arm selection, cell hash and arm order — see
+ * that module's own doc comment on why the duplication it used to carry was worth removing) to
+ * learn which of a street cell's own lamps, crossing and traffic light a building row fronting
+ * it needs to leave a gap for.
  *
- * Gated by `isFurnished` (R11) — a cell that fails it contributes nothing here, so the
- * network's country-lane stretches stay bare carriageway with no lamp or light. There is no
- * pavement to gate here any more either; R11 now governs only the three things left in this
- * list.
+ * Gated by `isFurnished` (R11) — a cell that fails it gets nothing, so the network's
+ * country-lane stretches stay bare carriageway with no lamp or light. There is no pavement to
+ * gate here any more either; R11 now governs only the three things left in this list.
  *
  * - **Streetlights.** One per arm, standing at the kerb line — just outside the carriageway's
  *   own edge, not out in the open verge beyond it. `KERB_CLEARANCE` is the margin past
@@ -316,71 +326,155 @@ function isFurnished(cell, streetKeys) {
  *   already verified correct, are unaffected by any of this and remain the only parts this pool
  *   ever draws from.
  *
+ * @param cell the street cell, `{x, z}`
+ * @param streetKeys the street membership set, `"x,z"` keys
+ * @param cellSize world units per cell
+ * @returns `[{part, x, z, ry, scale, lift}]` — empty if `cell` fails R11
+ */
+export function cellFurniture(cell, streetKeys, cellSize) {
+  if (!isFurnished(cell, streetKeys)) return []
+  const step = cellSize / SUBGRID
+  const kerb = CARRIAGEWAY_WIDTH / 2 + KERB_CLEARANCE
+  const cx = cell.x * cellSize
+  const cz = cell.z * cellSize
+  const arms = armsOf(cell, streetKeys)
+  const h = cellHash(cell)
+  const lampSide = (cell.x + cell.z) % 2 === 0 ? 1 : -1
+  const out = []
+
+  for (const d of arms) {
+    const perp = rot(d)
+    // v: unit direction from the lamp back to this arm's own centre line, i.e. the
+    // carriageway it should overhang. θ = atan2(v.z, -v.x) — derived above. Stands at the
+    // kerb line: 1.5 sub-grid steps along the arm, `kerb` (1.8) off the centre line.
+    const v = { x: -lampSide * perp.x, z: -lampSide * perp.z }
+    out.push({
+      part: LAMP_PART,
+      x: cx + d.x * step * 1.5 + lampSide * perp.x * kerb,
+      z: cz + d.z * step * 1.5 + lampSide * perp.z * kerb,
+      ry: Math.atan2(v.z, -v.x),
+      scale: 1.6,
+      lift: ROAD_SURFACE_LIFT,
+    })
+  }
+
+  if (arms.length >= 3) {
+    const d = arms[mod(h, arms.length)]
+    const perp = rot(d)
+    const along = tileFor([d, { x: -d.x, z: -d.z }])
+    out.push({
+      part: CROSSING_PART,
+      x: cx + d.x * step * 2,
+      z: cz + d.z * step * 2,
+      ry: (along.k * Math.PI) / 2,
+      scale: roadTileScale(),
+      lift: ROAD_SURFACE_LIFT,
+    })
+
+    // Faces along `d`, the governed arm's own outward direction — toward the traffic
+    // driving in along it. Stands at the junction corner, `kerb` (1.8) out along the arm and
+    // `kerb` to the far (`-perp`) side — clear of the carriageway on both axes (see the doc
+    // comment for the clearance figure), and off the whole- and half-step grid every other
+    // piece here uses, so it can never coincide with a streetlight or a crossing.
+    // `TRAFFIC_LIGHT_PARTS` excludes `trafficlight_C`; see the doc comment above.
+    out.push({
+      part: TRAFFIC_LIGHT_PARTS[mod(h, TRAFFIC_LIGHT_PARTS.length)],
+      x: cx + d.x * kerb - perp.x * kerb,
+      z: cz + d.z * kerb - perp.z * kerb,
+      ry: Math.atan2(d.x, d.z),
+      scale: 1,
+      lift: ROAD_SURFACE_LIFT,
+    })
+  }
+  return out
+}
+
+/**
+ * Where every piece of verge furniture in the whole network goes — `cellFurniture` above,
+ * concatenated over every street cell, laid out the same way `carriagewayTiles` lays the road
+ * surface itself: one street cell at a time, from that cell's own arms.
+ *
  * @param streetCells every street cell, `{x, z}`
  * @param cellSize world units per cell
  * @returns `[{part, x, z, ry, scale, lift}]`
  */
 export function vergeFurniture(streetCells, cellSize) {
   const keys = new Set(streetCells.map((c) => `${c.x},${c.z}`))
-  const step = cellSize / SUBGRID
-  const kerb = CARRIAGEWAY_WIDTH / 2 + KERB_CLEARANCE
-  const armsOf = (c) => [N, S, E, W].filter((d) => keys.has(`${c.x + d.x},${c.z + d.z}`))
   const out = []
-
-  for (const c of streetCells) {
-    if (!isFurnished(c, keys)) continue
-    const cx = c.x * cellSize
-    const cz = c.z * cellSize
-    const arms = armsOf(c)
-    const h = cellHash(c)
-    const lampSide = (c.x + c.z) % 2 === 0 ? 1 : -1
-
-    for (const d of arms) {
-      const perp = rot(d)
-      // v: unit direction from the lamp back to this arm's own centre line, i.e. the
-      // carriageway it should overhang. θ = atan2(v.z, -v.x) — derived above. Stands at the
-      // kerb line: 1.5 sub-grid steps along the arm, `kerb` (1.8) off the centre line.
-      const v = { x: -lampSide * perp.x, z: -lampSide * perp.z }
-      out.push({
-        part: LAMP_PART,
-        x: cx + d.x * step * 1.5 + lampSide * perp.x * kerb,
-        z: cz + d.z * step * 1.5 + lampSide * perp.z * kerb,
-        ry: Math.atan2(v.z, -v.x),
-        scale: 1.6,
-        lift: ROAD_SURFACE_LIFT,
-      })
-    }
-
-    if (arms.length >= 3) {
-      const d = arms[mod(h, arms.length)]
-      const perp = rot(d)
-      const along = tileFor([d, { x: -d.x, z: -d.z }])
-      out.push({
-        part: CROSSING_PART,
-        x: cx + d.x * step * 2,
-        z: cz + d.z * step * 2,
-        ry: (along.k * Math.PI) / 2,
-        scale: roadTileScale(),
-        lift: ROAD_SURFACE_LIFT,
-      })
-
-      // Faces along `d`, the governed arm's own outward direction — toward the traffic
-      // driving in along it. Stands at the junction corner, `kerb` (1.8) out along the arm and
-      // `kerb` to the far (`-perp`) side — clear of the carriageway on both axes (see the doc
-      // comment for the clearance figure), and off the whole- and half-step grid every other
-      // piece here uses, so it can never coincide with a streetlight or a crossing.
-      // `TRAFFIC_LIGHT_PARTS` excludes `trafficlight_C`; see the doc comment above.
-      out.push({
-        part: TRAFFIC_LIGHT_PARTS[mod(h, TRAFFIC_LIGHT_PARTS.length)],
-        x: cx + d.x * kerb - perp.x * kerb,
-        z: cz + d.z * kerb - perp.z * kerb,
-        ry: Math.atan2(d.x, d.z),
-        scale: 1,
-        lift: ROAD_SURFACE_LIFT,
-      })
-    }
-  }
+  for (const c of streetCells) out.push(...cellFurniture(c, keys, cellSize))
   return out
+}
+
+/**
+ * The local footprint (before its own placement `scale`) of every part `cellFurniture` can
+ * place, keyed by `part` — the one fact `town-plan.js` needs, alongside a piece's own `x, z,
+ * ry, scale`, to know whether a building at some candidate slot would actually reach it.
+ *
+ * `streetlight`, `trafficlight_A` and `trafficlight_B`'s boxes are measured from
+ * `public/assets/city.glb` (`@gltf-transform/core`'s `NodeIO`, summing `POSITION` attribute
+ * entries — the same method this module's other doc comments already use): the streetlight's
+ * thin, off-centre mast (see `BUILDING_CLEARANCE`'s own doc comment in `town-plan.js`) and the
+ * two pole-mounted traffic-light variants (`trafficlight_C`, the gantry, is never placed — see
+ * `cellFurniture`'s own doc comment above). `road_straight_crossing` is not measured the same
+ * way: every road piece in this kit is a plain `ROAD_TILE_SIZE`-square tile (see this module's
+ * own doc comment at the top), the crossing included, so its local box is just that square,
+ * the same fact `ROAD_TILE_SIZE` already states.
+ */
+export const FURNITURE_LOCAL_BBOX = Object.freeze({
+  streetlight: {
+    xmin: -0.2392103672027588,
+    xmax: 0.030096590518951416,
+    zmin: -0.034511469304561615,
+    zmax: 0.0345110222697258,
+  },
+  trafficlight_A: {
+    xmin: -0.13457560539245605,
+    xmax: 0.0398561954498291,
+    zmin: -0.03985767439007759,
+    zmax: 0.11071021109819412,
+  },
+  trafficlight_B: {
+    xmin: -0.2392103672027588,
+    xmax: 0.0398561954498291,
+    zmin: -0.03985767439007759,
+    zmax: 0.11071021109819412,
+  },
+  [CROSSING_PART]: { xmin: -ROAD_TILE_SIZE / 2, xmax: ROAD_TILE_SIZE / 2, zmin: -ROAD_TILE_SIZE / 2, zmax: ROAD_TILE_SIZE / 2 },
+})
+
+/**
+ * The world-space, axis-aligned box one piece of verge furniture actually occupies: its local
+ * box (`FURNITURE_LOCAL_BBOX`), rotated by its own placement `ry` — always a multiple of pi/2
+ * for everything this module places, so the box stays axis-aligned, the same rotation three.js's
+ * own `makeRotationY` applies — and scaled, then placed at the furniture's own `(x, z)`.
+ *
+ * @param f one entry from `cellFurniture`/`vergeFurniture`, `{part, x, z, ry, scale}`
+ * @returns `{xmin, xmax, zmin, zmax}`, or `null` if `f.part` has no known footprint
+ */
+export function furnitureWorldBounds(f) {
+  const b = FURNITURE_LOCAL_BBOX[f.part]
+  if (!b) return null
+  const c = Math.cos(f.ry)
+  const s = Math.sin(f.ry)
+  const corners = [
+    [b.xmin, b.zmin],
+    [b.xmin, b.zmax],
+    [b.xmax, b.zmin],
+    [b.xmax, b.zmax],
+  ]
+  let xmin = Infinity
+  let xmax = -Infinity
+  let zmin = Infinity
+  let zmax = -Infinity
+  for (const [lx, lz] of corners) {
+    const wx = (lx * c + lz * s) * f.scale
+    const wz = (-lx * s + lz * c) * f.scale
+    xmin = Math.min(xmin, wx)
+    xmax = Math.max(xmax, wx)
+    zmin = Math.min(zmin, wz)
+    zmax = Math.max(zmax, wz)
+  }
+  return { xmin: f.x + xmin, xmax: f.x + xmax, zmin: f.z + zmin, zmax: f.z + zmax }
 }
 
 // ── the scene half ───────────────────────────────────────────────────────────────────

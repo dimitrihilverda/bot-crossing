@@ -12,7 +12,14 @@ import {
 import { planStreets } from '../src/world/streets.js'
 import { TOWN_CELL_RADIUS } from '../src/world/street-plan.js'
 import { CELL_SIZE, key } from '../src/world/grid.js'
-import { carriagewayTiles, ROAD_TILE_SIZE, roadTileScale, vergeFurniture, CARRIAGEWAY_WIDTH } from '../src/world/road-mesh.js'
+import {
+  carriagewayTiles,
+  ROAD_TILE_SIZE,
+  roadTileScale,
+  vergeFurniture,
+  CARRIAGEWAY_WIDTH,
+  furnitureWorldBounds,
+} from '../src/world/road-mesh.js'
 
 const EPS = 1e-6
 
@@ -230,81 +237,39 @@ test('no building overlaps the carriageway or another building, anywhere in the 
 
 test('the wall sits the new, closer distance from the street centre-line, with a real gap to the asphalt', () => {
   // Recomputed here from SET_BACK and BUILDING_SCALE, independent of town-plan.js's own
-  // BUILDING_CLEARANCE constant, so a regression back to the old, coincident-with-the-lamp
-  // figure (1.8, i.e. BUILDING_CLEARANCE 0.6) is caught by an actual measurement rather than by
-  // re-reading the same constant this test is meant to pin.
+  // BUILDING_CLEARANCE constant, so a regression back to an old, wider figure (1.8/0.6 from the
+  // tighten and facade revisions, or 1.85/0.65 from the facade revision) is caught by an actual
+  // measurement rather than by re-reading the same constant this test is meant to pin.
+  //
+  // The flush revision closes this all the way to the carriageway's own edge: the furniture
+  // that used to force a wide margin here (a streetlight standing at the kerb, or a junction's
+  // own crossing and traffic light) is now handled by reserving its own slot in the terrace
+  // instead (see reservedSlots in town-plan.js), so the wall itself only needs a small,
+  // z-fighting-avoiding margin past the carriageway, not a whole lamp-post's worth of clearance.
   const wallDistanceFromStreetCentre = CELL_SIZE - SET_BACK - BUILDING_SCALE
   assert.ok(
-    Math.abs(wallDistanceFromStreetCentre - 1.85) < EPS,
-    `the wall sits ${wallDistanceFromStreetCentre} from the street centre-line, expected 1.85`
+    Math.abs(wallDistanceFromStreetCentre - 1.25) < EPS,
+    `the wall sits ${wallDistanceFromStreetCentre} from the street centre-line, expected 1.25`
   )
   const gapToAsphalt = wallDistanceFromStreetCentre - CARRIAGEWAY_WIDTH / 2
   assert.ok(
-    Math.abs(gapToAsphalt - 0.65) < EPS,
-    `the facade-to-asphalt gap is ${gapToAsphalt}, expected 0.65 — the streetlight standing at ` +
-      `the kerb (see BUILDING_CLEARANCE's own doc comment), not the carriageway, is what stops ` +
-      `this from closing all the way to the old 1.2-unit carriageway half-width`
+    Math.abs(gapToAsphalt - 0.05) < EPS,
+    `the facade-to-asphalt gap is ${gapToAsphalt}, expected 0.05 — a small margin against ` +
+      `z-fighting, not a strip of grass; furniture along the frontage now gets its own slot ` +
+      `reserved instead of pushing the whole row back (see reservedSlots in town-plan.js)`
   )
 })
 
-test('no building overlaps a streetlight or a traffic light, anywhere in the town', () => {
-  // Measured from public/assets/city.glb, the same way town-mesh.test.mjs reads real vertex
-  // counts off the same file (@gltf-transform/core's NodeIO): each part's own local footprint,
-  // before its own placement scale — the streetlight's thin, off-centre mast (see
-  // BUILDING_CLEARANCE's own doc comment) and the two pole-mounted traffic-light variants
-  // (trafficlight_C, the gantry, is never placed — see road-mesh.js's own doc comment).
-  const LOCAL_BBOX = {
-    streetlight: {
-      xmin: -0.2392103672027588,
-      xmax: 0.030096590518951416,
-      zmin: -0.034511469304561615,
-      zmax: 0.0345110222697258,
-    },
-    trafficlight_A: {
-      xmin: -0.13457560539245605,
-      xmax: 0.0398561954498291,
-      zmin: -0.03985767439007759,
-      zmax: 0.11071021109819412,
-    },
-    trafficlight_B: {
-      xmin: -0.2392103672027588,
-      xmax: 0.0398561954498291,
-      zmin: -0.03985767439007759,
-      zmax: 0.11071021109819412,
-    },
-  }
-
-  // The world-space axis-aligned box a piece of furniture actually occupies: its local bbox,
-  // rotated by its own placement `ry` — always a multiple of pi/2 here, so the box stays
-  // axis-aligned, the same rotation three.js's own `makeRotationY` applies (see road-mesh.js's
-  // own doc comment on `vergeFurniture`, and the facing tests in road-verge.test.mjs, for the
-  // same `(x, z) -> (x cosθ + z sinθ, -x sinθ + z cosθ)` mapping) — and scaled, then placed at
-  // the furniture's own (x, z).
-  function furnitureBounds(f) {
-    const b = LOCAL_BBOX[f.part]
-    const c = Math.cos(f.ry)
-    const s = Math.sin(f.ry)
-    const corners = [
-      [b.xmin, b.zmin],
-      [b.xmin, b.zmax],
-      [b.xmax, b.zmin],
-      [b.xmax, b.zmax],
-    ]
-    let xmin = Infinity
-    let xmax = -Infinity
-    let zmin = Infinity
-    let zmax = -Infinity
-    for (const [lx, lz] of corners) {
-      const wx = (lx * c + lz * s) * f.scale
-      const wz = (-lx * s + lz * c) * f.scale
-      xmin = Math.min(xmin, wx)
-      xmax = Math.max(xmax, wx)
-      zmin = Math.min(zmin, wz)
-      zmax = Math.max(zmax, wz)
-    }
-    return { xmin: f.x + xmin, xmax: f.x + xmax, zmin: f.z + zmin, zmax: f.z + zmax }
-  }
-
+test('no building overlaps a streetlight, a traffic light or a crossing, anywhere in the town', () => {
+  // `furnitureWorldBounds` (road-mesh.js) is the one source of truth for a piece of verge
+  // furniture's real, rotated, scaled world footprint — the same function `reservedSlots`
+  // (town-plan.js) uses to decide which slot to leave empty in the first place, so this test
+  // checks the production reservation logic against an independent sweep of the real output
+  // rather than a copy of its own bbox table. It covers every part `cellFurniture` can place
+  // that carries a footprint (streetlight, trafficlight_A/B, road_straight_crossing —
+  // trafficlight_C is never placed, see road-mesh.js's own doc comment), not only the two this
+  // test used to cover: the flush revision brings the wall close enough to the carriageway that
+  // a crossing, sitting right at a junction's own kerb, is now a genuine risk too.
   const half = BUILDING_SCALE
   const buildings = []
   for (let x = -TOWN_CELL_RADIUS; x <= TOWN_CELL_RADIUS; x++) {
@@ -318,14 +283,14 @@ test('no building overlaps a streetlight or a traffic light, anywhere in the tow
   }
   assert.ok(buildings.length >= 30, `only ${buildings.length} buildings — too few to trust`)
 
-  const furniture = vergeFurniture(streets.cells, CELL_SIZE).filter((f) => LOCAL_BBOX[f.part])
-  assert.ok(furniture.length > 20, `only ${furniture.length} streetlights/traffic lights — too few to trust`)
+  const furniture = vergeFurniture(streets.cells, CELL_SIZE).filter((f) => furnitureWorldBounds(f))
+  assert.ok(furniture.length > 20, `only ${furniture.length} lamps/lights/crossings — too few to trust`)
 
   let checked = 0
   for (const b of buildings) {
     for (const f of furniture) {
       checked++
-      const box = furnitureBounds(f)
+      const box = furnitureWorldBounds(f)
       const overlaps =
         b.x - half < box.xmax - EPS &&
         b.x + half > box.xmin + EPS &&

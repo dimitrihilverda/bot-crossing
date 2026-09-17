@@ -100,20 +100,44 @@ import { blockContent, inTown } from './town-plan.js'
  * `JOG_CHANCE` 0.45 -> 0.75 in `street-plan.js`), so a larger share of the town's frontage sits
  * at one of those corner-priced cells.
  *
- * Re-measured once more in the facade revision (`SET_BACK` closer still, to 8.95, and a new
- * per-slot skip at a governed junction arm — see `BUILDING_CLEARANCE` and
- * `JUNCTION_LIGHT_SKIP_INDEX`'s own doc comments in `town-plan.js`): the real network now
- * places **179** buildings for **403,192** vertices — seven fewer buildings than the playful
- * revision's 186, the ones whose only street-facing slot fell inside a governed junction arm's
- * own traffic light and so is now left empty rather than overlapping it. The result stays
- * comfortably under this ceiling, with 906,808 to spare. This figure, like the ones before it,
- * counts only `townPlan`'s own buildings, not the street surface and verge furniture
- * `road-mesh.js` draws alongside them (carriageway, streetlights, crossings, traffic lights —
- * there is no pavement left to count): the real network places 150 street cells (unchanged by
- * this revision, which does not touch `street-plan.js`) for **166,704** vertices total, itself
- * well down from the tighten revision's 243,910 now that there is no footway to draw — the
- * pavement alone was worth roughly 70,000 of that difference. Buildings and street geometry
- * together come to 569,896, itself far under `TOWN_VERTEX_BUDGET` — but that combined figure is
+ * Re-measured again in the facade revision (`SET_BACK` closer still, to 8.95, and a per-slot
+ * skip at a governed junction arm): the real network placed **179** buildings for **403,192**
+ * vertices — seven fewer than the playful revision's 186, the ones whose only street-facing slot
+ * fell inside a governed junction arm's own traffic light.
+ *
+ * Re-measured once more in the flush revision (`SET_BACK` brought all the way to the
+ * carriageway's own edge, `BUILDING_CLEARANCE` 0.05 — see that constant's own doc comment in
+ * `town-plan.js`): the real network now places **130** buildings for **295,498** vertices, a
+ * real net *loss* of 49 against the facade revision's 179. `reservedSlots` (`town-plan.js`)
+ * replaces the facade revision's single-slot `JUNCTION_LIGHT_SKIP_INDEX` (about five real
+ * collisions, traffic lights only) with a general reservation checked against every real piece
+ * of a street cell's own furniture — every plain streetlight along a frontage, not only a
+ * governed junction's own light — because bringing the wall flush to the carriageway (1.25 from
+ * the street centre line, against the facade revision's 1.85) brings *every* row within reach of
+ * the streetlight standing at its own kerb line, not just the small minority that used to graze a
+ * junction's own signal. Measured directly: 206 slots reserved town-wide (194 for streetlights,
+ * 7 for `trafficlight_A`, 5 for `trafficlight_B`; `road_straight_crossing` never reserves a slot
+ * in this real network — see `flush-revision-report.md` for the mutation evidence). A genuine
+ * majority of those streetlight reservations (97 of 97 rows a near lamp reaches) cost *two*
+ * adjacent slots, not one: `vergeFurniture`'s own lamp offset (1.5 sub-grid steps, 3.6 units)
+ * and `SLOT_OFFSETS`' own outer boundary (`(4.8 + 2.4) / 2` = 3.6) coincide exactly, because the
+ * lamp pitch and the slot pitch are both `CARRIAGEWAY_WIDTH` (2.4) — so a real lamp's own small
+ * footprint straddles both slots by a thin sliver on each side rather than sitting inside either
+ * one cleanly. That is a genuine fact about the kit's own proportions, not a defect in the
+ * reservation logic: a coarser, point-based "nearest slot" check would have missed one of the
+ * two and left a paper-thin but real overlap standing, exactly the kind of sweep the owner's
+ * report has already flagged as worthless once. The owner has repeatedly asked for density, and
+ * this revision does not deliver it — the honest trade for a wall that is actually flush and an
+ * overlap sweep with nothing to hide behind. The result stays comfortably under this ceiling,
+ * with 1,014,502 to spare.
+ *
+ * This figure, like the ones before it, counts only `townPlan`'s own buildings, not the street
+ * surface and verge furniture `road-mesh.js` draws alongside them (carriageway, streetlights,
+ * crossings, traffic lights — there is no pavement left to count): the real network places 150
+ * street cells (unchanged by this revision, which does not touch `street-plan.js`) for
+ * **166,704** vertices total (also unchanged — `road-mesh.js`'s own furniture positions were not
+ * moved, only which slot a building leaves empty for them). Buildings and street geometry
+ * together come to 462,202, itself far under `TOWN_VERTEX_BUDGET` — but that combined figure is
  * not what `test/town-mesh.test.mjs`'s own ceiling check measures (it sums `townPlan`'s
  * buildings only, matching this constant's own name), so it is reported here for completeness
  * rather than pinned by a test of its own. None of the levers above was needed by this
