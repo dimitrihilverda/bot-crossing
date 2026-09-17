@@ -33,6 +33,16 @@ export function pathLength(points) {
  *
  * Clamps rather than extrapolating: a car that has arrived sits at the kerb instead of
  * carrying on into the terrain, and a negative distance is the start rather than a reverse.
+ *
+ * `heading` is a **Y rotation for a body whose front faces local +Z**, not a bare direction
+ * angle — `atan2(dx, dz)`, the same convention `town-plan.js`, `road-mesh.js` and
+ * `astronauts.js` already use, and the one every car in `city.glb` is modelled for (front
+ * wheels at z=+0.245, rear at -0.256). It used to be `atan2(dz, dx)`, the mirrored form.
+ * The two agree only where |dx| == |dz|, so on a square lattice — where every street runs
+ * along an axis — every car in the colony drove exactly 90 degrees sideways. Nothing
+ * caught it, because the tests pinned the number this function returned instead of what
+ * that number does to a body, which is why the test that replaced them rotates an actual
+ * vector.
  */
 export function pointAt(points, distance) {
   if (!points.length) return { x: 0, z: 0, heading: 0 }
@@ -45,7 +55,7 @@ export function pointAt(points, distance) {
   // not pivot on the spot the instant it pulls away.
   if (distance <= 0) {
     const next = points[1]
-    return { x: first.x, z: first.z, heading: Math.atan2(next.z - first.z, next.x - first.x) }
+    return { x: first.x, z: first.z, heading: Math.atan2(next.x - first.x, next.z - first.z) }
   }
 
   let travelled = 0
@@ -59,7 +69,7 @@ export function pointAt(points, distance) {
       return {
         x: a.x + (b.x - a.x) * t,
         z: a.z + (b.z - a.z) * t,
-        heading: Math.atan2(b.z - a.z, b.x - a.x),
+        heading: Math.atan2(b.x - a.x, b.z - a.z),
       }
     }
     travelled += seg
@@ -68,7 +78,78 @@ export function pointAt(points, distance) {
   // Past the end: sit at the last point, still facing the way the last segment ran.
   const last = points[points.length - 1]
   const prev = points[points.length - 2]
-  return { x: last.x, z: last.z, heading: Math.atan2(last.z - prev.z, last.x - prev.x) }
+  return { x: last.x, z: last.z, heading: Math.atan2(last.x - prev.x, last.z - prev.z) }
+}
+
+/**
+ * Which way is right, given a unit direction of travel.
+ *
+ * A car's own left is local +X — `car_stationwagon_wheel_front_left` sits at x=+0.176 — and
+ * its front is local +Z, so right is the direction a body gets by turning its forward axis a
+ * quarter turn the other way: `(-d.z, d.x)`. Driving +x, right is +z.
+ */
+const rightOf = (d) => ({ x: -d.z, z: d.x })
+
+/**
+ * The same route, shifted sideways by `offset` to the right of the way it is driven.
+ *
+ * This is what puts a car in a lane instead of astride the centre line. The route a car
+ * follows is built from cell centres, and the carriageway is drawn centred on those same
+ * cells, so an unshifted route is exactly the road's own middle: measured on `road_straight`,
+ * the white centre line sits at local x=0 and the yellow lines at x=+/-0.62, which at the
+ * shipping tile scale of 1.2 puts the paint the car was driving straight down at 0.
+ *
+ * Corners are mitered rather than offset per point. Shifting each sampled point along its own
+ * segment's normal is the obvious shape and the wrong one: the corner vertex then lands on
+ * one leg's offset line and off the other's, so a car crossing a bend jogs sideways by a full
+ * offset and back within a frame or two. The miter puts the vertex where the two offset lines
+ * actually meet, which is the only point that belongs to both lanes.
+ *
+ * Degenerate input is returned untouched rather than repaired: a route of fewer than two
+ * points has no direction to be right of, and a zero offset is the identity — which is what
+ * lets a caller turn lane-keeping off without branching around this call.
+ */
+export function offsetPath(points, offset) {
+  if (!(Math.abs(offset) > 0) || points.length < 2) return points
+
+  // One unit direction per segment. A zero-length segment — two route points on the same
+  // cell centre, which `roadCells` can produce — has no direction of its own and inherits the
+  // one before it rather than poisoning the miter with a NaN.
+  const dirs = []
+  for (let i = 1; i < points.length; i++) {
+    const dx = points[i].x - points[i - 1].x
+    const dz = points[i].z - points[i - 1].z
+    const len = Math.hypot(dx, dz)
+    dirs.push(len > 1e-9 ? { x: dx / len, z: dz / len } : (dirs[dirs.length - 1] ?? { x: 0, z: 1 }))
+  }
+
+  return points.map((p, i) => {
+    // The first point has no segment before it and the last none after it; each borrows its
+    // only neighbour, so an end point is offset squarely rather than mitered against nothing.
+    const before = dirs[i - 1] ?? dirs[i]
+    const after = dirs[i] ?? dirs[i - 1]
+    const ra = rightOf(before)
+    const rb = rightOf(after)
+
+    let mx = ra.x + rb.x
+    let mz = ra.z + rb.z
+    const mLen = Math.hypot(mx, mz)
+    if (mLen < 1e-9) {
+      // The route doubles back on itself: the two normals cancel and no miter exists. The
+      // incoming normal is the honest answer — the car swings wide round the turn instead of
+      // being sent off to infinity, which is what dividing by that vanishing cosine would do.
+      return { x: p.x + ra.x * offset, z: p.z + ra.z * offset }
+    }
+    mx /= mLen
+    mz /= mLen
+
+    // How far along the miter to go so that both legs end up exactly `offset` from their own
+    // original line: the cosine of half the turn, which is the miter direction projected back
+    // onto either leg's normal.
+    const cos = mx * ra.x + mz * ra.z
+    const scale = offset / cos
+    return { x: p.x + mx * scale, z: p.z + mz * scale }
+  })
 }
 
 /**

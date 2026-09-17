@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { pathLength, pointAt } from '../src/world/drive-path.js'
+import * as THREE from 'three'
+import { offsetPath, pathLength, pointAt } from '../src/world/drive-path.js'
 
 // The `hexLine` tests that used to live here moved to `test/grid.test.mjs`, which exercises
 // `grid.js`'s `line` — the square lattice's four-neighbour Bresenham walk that replaced it.
@@ -31,7 +32,9 @@ test('pointAt walks along the path and faces the way it is going', () => {
   const mid = pointAt(pts, 5)
   assert.equal(mid.x, 5)
   assert.equal(mid.z, 0)
-  assert.equal(mid.heading, 0)
+  // Travelling +x. The yaw that points a +Z-fronted body that way is a quarter turn — see
+  // the yaw contract asserted below.
+  assert.ok(Math.abs(mid.heading - Math.PI / 2) < 1e-9, `heading ${mid.heading}`)
 })
 
 test('pointAt clamps at both ends rather than extrapolating', () => {
@@ -52,10 +55,31 @@ test('pointAt turns the corner', () => {
   const after = pointAt(pts, 15)
   assert.equal(after.x, 10)
   assert.equal(after.z, 5)
-  // Heading is now along +z.
-  assert.ok(Math.abs(after.heading - Math.PI / 2) < 1e-9, `heading ${after.heading}`)
+  // Heading is now along +z, which for a +Z-fronted body is no rotation at all.
+  assert.ok(Math.abs(after.heading) < 1e-9, `heading ${after.heading}`)
 })
 
+
+test('pointAt returns the yaw that aims a car down the route, not a bare direction angle', () => {
+  // The value is consumed as `setFromAxisAngle(Y_AXIS, heading)` on a kit body whose front
+  // faces local +Z — every car in city.glb is modelled that way (front wheels at z=+0.245,
+  // rear at -0.256). So the contract is not "some angle describing this direction" but "the
+  // angle that makes the body point there", and that is what this asserts — against three's
+  // own rotation rather than a rederived matrix, because the rederivation is exactly the step
+  // that was got wrong.
+  const aimed = (points, distance) => {
+    const { heading } = pointAt(points, distance)
+    return new THREE.Vector3(0, 0, 1).applyQuaternion(
+      new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), heading)
+    )
+  }
+
+  const east = aimed([{ x: 0, z: 0 }, { x: 10, z: 0 }], 5)
+  assert.ok(Math.abs(east.x - 1) < 1e-9, `driving +x, the car points x=${east.x.toFixed(3)} z=${east.z.toFixed(3)}`)
+
+  const south = aimed([{ x: 0, z: 0 }, { x: 0, z: 10 }], 5)
+  assert.ok(Math.abs(south.z - 1) < 1e-9, `driving +z, the car points x=${south.x.toFixed(3)} z=${south.z.toFixed(3)}`)
+})
 test('a single-point path is a standstill, not a crash', () => {
   const at = pointAt([{ x: 4, z: 7 }], 3)
   assert.equal(at.x, 4)
@@ -67,4 +91,71 @@ test('an empty path is a standstill at the origin', () => {
   const at = pointAt([], 3)
   assert.equal(at.x, 0)
   assert.equal(at.z, 0)
+})
+
+/** Points are compared with a tolerance: a miter runs through a square root. */
+const assertPath = (actual, expected) => {
+  assert.equal(actual.length, expected.length, `point count: ${JSON.stringify(actual)}`)
+  actual.forEach((p, i) => {
+    assert.ok(
+      Math.abs(p.x - expected[i].x) < 1e-9 && Math.abs(p.z - expected[i].z) < 1e-9,
+      `point ${i}: got (${p.x}, ${p.z}), want (${expected[i].x}, ${expected[i].z})`
+    )
+  })
+}
+
+test('offsetPath shifts a straight route to the right of the way it is driven', () => {
+  // Right of travel, not "+z": a car's own left is local +X (its front_left wheel sits at
+  // x=+0.176), so for a body driving +x, right is +z. Getting this sign wrong puts the whole
+  // colony on the left-hand side of the road — invisible in a still frame of one car, and
+  // instantly visible in two passing ones.
+  assertPath(
+    offsetPath(
+      [
+        { x: 0, z: 0 },
+        { x: 10, z: 0 },
+      ],
+      1
+    ),
+    [
+      { x: 0, z: 1 },
+      { x: 10, z: 1 },
+    ]
+  )
+})
+
+test('offsetPath miters the corner so both legs keep their full offset', () => {
+  // The naive shape — shift each sampled point along its own segment's normal — leaves the
+  // corner vertex on one leg's offset line and off the other's, so a car crossing the bend
+  // jogs sideways by the offset and back. The miter is what makes a bend hold its lane.
+  //
+  // Leg one runs +x, so its lane is the line z = 1. Leg two runs +z, so its lane is x = 9.
+  // The corner belongs where those two lines meet.
+  assertPath(
+    offsetPath(
+      [
+        { x: 0, z: 0 },
+        { x: 10, z: 0 },
+        { x: 10, z: 10 },
+      ],
+      1
+    ),
+    [
+      { x: 0, z: 1 },
+      { x: 9, z: 1 },
+      { x: 9, z: 10 },
+    ]
+  )
+})
+
+test('offsetPath leaves alone a route it cannot offset', () => {
+  assertPath(offsetPath([{ x: 3, z: 4 }], 1), [{ x: 3, z: 4 }])
+  assertPath(offsetPath([], 1), [])
+  // Zero offset is the identity, which is what lets a caller turn lane-keeping off without
+  // branching around it.
+  const pts = [
+    { x: 0, z: 0 },
+    { x: 5, z: 0 },
+  ]
+  assertPath(offsetPath(pts, 0), pts)
 })

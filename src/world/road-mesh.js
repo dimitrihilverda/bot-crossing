@@ -40,6 +40,43 @@ export const CARRIAGEWAY_WIDTH = 2.4
 export const roadTileScale = () => CARRIAGEWAY_WIDTH / ROAD_TILE_SIZE
 
 /**
+ * The atlas cell the kit paints the road's yellow edge lines with, and where those lines sit
+ * across a tile in its own authored units (half-width 1).
+ *
+ * Measured off `road_straight` in `city.glb` rather than guessed: the white centre line is a
+ * 0.04-wide band at x=0 (cell 1) and the yellow lines are two thin strips at x=+/-0.62
+ * (cell 11), with the asphalt running the full +/-1. `test/road-corner-glb.test.mjs` reads
+ * these back out of the glb, so a re-exported kit that moves its markings fails a test
+ * instead of quietly putting the colony's traffic on top of its own paint.
+ */
+export const YELLOW_CELL = 11
+export const EDGE_LINE_AUTHORED = 0.62
+
+/** The same edge line in world units, once the tile is scaled to a carriageway. */
+export const EDGE_LINE_OFFSET = EDGE_LINE_AUTHORED * roadTileScale()
+
+/**
+ * How far right of the road's centre line a moving car drives: the middle of the band between
+ * the white centre line and the yellow edge line.
+ *
+ * Cars used to drive at 0 — astride the centre line, straddling the paint — because a route
+ * is built from cell centres and the carriageway is drawn centred on those same cells. See
+ * `offsetPath` in `drive-path.js`, which is what actually shifts a route here.
+ */
+export const DRIVING_LANE_OFFSET = EDGE_LINE_OFFSET / 2
+
+/**
+ * How far right of the centre line a parked car stands: the middle of the asphalt outside the
+ * yellow line.
+ *
+ * That band is `CARRIAGEWAY_WIDTH / 2 - EDGE_LINE_OFFSET` = 0.456 wide, which is the
+ * constraint that actually sets `CAR_SCALE` (`deliveries.js`) — a car wider than the strip
+ * cannot be parked in it without standing on the paint or hanging off the kerb, and the glb
+ * test asserts it does not.
+ */
+export const PARKING_LANE_OFFSET = (EDGE_LINE_OFFSET + CARRIAGEWAY_WIDTH / 2) / 2
+
+/**
  * How far above the sampled ground a carriageway patch's tile sits. A tile's `y` places its
  * *base*, not its centre (`road_straight`'s own bounding box runs from local y=0 to y=0.1,
  * not -0.05 to 0.05), so laying the base at `groundY` exactly would make it touch the

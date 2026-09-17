@@ -1,6 +1,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { NodeIO } from '@gltf-transform/core'
+import {
+  CARRIAGEWAY_WIDTH,
+  DRIVING_LANE_OFFSET,
+  EDGE_LINE_AUTHORED,
+  PARKING_LANE_OFFSET,
+  YELLOW_CELL,
+  roadTileScale,
+} from '../src/world/road-mesh.js'
+import { CAR_BODY_WIDTH, CAR_SCALE } from '../src/world/deliveries.js'
 
 const COLS = 8
 const ROWS = 4
@@ -109,4 +118,30 @@ test('road_straight_crossing runs along Z, a drop-in replacement for road_straig
   const amber = cells.get(11)
   assert.ok(near(amber.x0, -0.62) && near(amber.x1, 0.62), `edge lines x ${amber.x0}..${amber.x1}`)
   assert.ok(near(amber.z0, -1) && near(amber.z1, 1), `edge lines z ${amber.z0}..${amber.z1}`)
+})
+
+test('a car fits the lane and the parking strip the kit actually painted', () => {
+  // The numbers a car is placed by are derived from paint this test reads back off the tile,
+  // so a re-exported kit that moves its markings fails here rather than silently putting the
+  // colony's traffic on top of its own road markings.
+  const yellow = byAtlasCell('road_straight').get(YELLOW_CELL)
+  assert.ok(yellow, 'road_straight has no yellow paint')
+  assert.ok(
+    near(yellow.x1, EDGE_LINE_AUTHORED) && near(yellow.x0, -EDGE_LINE_AUTHORED),
+    `edge lines at x ${yellow.x0.toFixed(3)}..${yellow.x1.toFixed(3)}, expected +/-${EDGE_LINE_AUTHORED}`
+  )
+
+  const halfCar = (CAR_BODY_WIDTH * CAR_SCALE) / 2
+  const edge = EDGE_LINE_AUTHORED * roadTileScale()
+  const kerb = CARRIAGEWAY_WIDTH / 2
+
+  // Running lane: between the white centre line (x=0) and the yellow one, touching neither.
+  assert.ok(DRIVING_LANE_OFFSET - halfCar > 0, `car crosses the centre line by ${(halfCar - DRIVING_LANE_OFFSET).toFixed(3)}`)
+  assert.ok(DRIVING_LANE_OFFSET + halfCar < edge, `car crosses the edge line by ${(DRIVING_LANE_OFFSET + halfCar - edge).toFixed(3)}`)
+
+  // Parking strip: the asphalt outside the yellow line. A car that does not fit between the
+  // paint and the kerb is a car that has to be made smaller — which is the whole reason
+  // CAR_SCALE is what it is.
+  assert.ok(PARKING_LANE_OFFSET - halfCar > edge, `parked car sits on the edge line by ${(edge - (PARKING_LANE_OFFSET - halfCar)).toFixed(3)}`)
+  assert.ok(PARKING_LANE_OFFSET + halfCar < kerb, `parked car hangs off the asphalt by ${(PARKING_LANE_OFFSET + halfCar - kerb).toFixed(3)}`)
 })

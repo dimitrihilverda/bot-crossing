@@ -26,8 +26,29 @@ export const CAR_PARTS = Object.freeze({
   wheelRearRight: 'car_stationwagon_wheel_rear_right',
 })
 
-/** Authored on the city pack's grid and scaled once, the way HOUSE_SCALE does in houses.js. */
-export const CAR_SCALE = 1.45
+/**
+ * The car body's own width across, in the city pack's authored units.
+ *
+ * Measured from city.glb rather than guessed: every car body in the pack is 0.419 across X and
+ * 0.806 to 0.938 along Z. That is also how we know the long axis — and so the front — is Z,
+ * which is what `pointAt`'s yaw convention in `drive-path.js` depends on. Exported because the
+ * scale below is chosen against a width on the road, and the two numbers have to meet
+ * somewhere a test can read them.
+ */
+export const CAR_BODY_WIDTH = 0.419
+
+/**
+ * Authored on the city pack's grid and scaled once, the way HOUSE_SCALE does in houses.js.
+ *
+ * 1.05, down from the 1.45 that shipped through stage 7, and not a matter of taste:
+ * `road_straight` paints its yellow edge lines at +/-0.62 authored, so once the tile is scaled
+ * to a carriageway the asphalt outside that paint — where a car parks — is 0.456 wide. At 1.45
+ * a car is 0.61 across and cannot stand there without either sitting on the paint or hanging
+ * off the kerb. At 1.05 it is 0.44 and fits with a little room on each side.
+ * `test/road-corner-glb.test.mjs` asserts that fit against markings read back out of the glb,
+ * so this cannot drift up again unnoticed.
+ */
+export const CAR_SCALE = 1.05
 
 /**
  * What the car carries on its roof. A node name from the *furniture* kit, verified against
@@ -50,10 +71,11 @@ export const LOAD_PART = 'armchair'
  * measured width, which means it stays right if `CAR_SCALE` ever moves.
  *
  * Six tenths, not nine: the body's widest point is its wheel arches, and the roof between
- * them is narrower than that. At the shipping `CAR_SCALE` this comes out at a load 0.36 wide
- * and 0.28 tall on a car 0.61 wide and 0.49 tall — about four fifths of the size the same
- * armchair appears at inside a house, which is the independent check that it is in the right
- * ballpark rather than a number chosen to look nice.
+ * them is narrower than that. Being a fraction it rides along with `CAR_SCALE` — at the
+ * shipping scale that is a load about 0.26 wide on a car 0.44 wide, the same proportion it
+ * had when the car was larger, and still under the size the same armchair appears at inside
+ * a house, which is the independent check that it is in the right ballpark rather than a
+ * number chosen to look nice.
  */
 const LOAD_WIDTH = 0.6
 
@@ -61,12 +83,20 @@ const LOAD_WIDTH = 0.6
 const LOAD_SEAT = 0.02
 
 /**
- * Wheel radius in world units: half `car_stationwagon_wheel_front_left`'s own bounding-box
- * height (0.1446 / 2 = 0.0723) times CAR_SCALE. Measured from city.glb, not guessed —
- * re-measure with step 3a's script if CAR_SCALE changes, or the wheels will visibly skid
- * instead of roll.
+ * Half `car_stationwagon_wheel_front_left`'s own bounding-box height (0.1446 / 2), measured
+ * from city.glb rather than guessed.
  */
-export const WHEEL_RADIUS = 0.1048
+export const WHEEL_AUTHORED_RADIUS = 0.0723
+
+/**
+ * Wheel radius in world units.
+ *
+ * Derived from `CAR_SCALE` instead of written out as the product. It used to be the literal
+ * 0.1048, with a comment telling whoever changed the scale to re-measure it — and a comment is
+ * not a mechanism. A scale change with a stale radius here does not throw: it makes every
+ * wheel in the colony skid instead of roll, exactly the kind of fault nobody goes looking for.
+ */
+export const WHEEL_RADIUS = WHEEL_AUTHORED_RADIUS * CAR_SCALE
 
 /**
  * World units per second. Tuned by eye in step 7; a colony crossing should take a few seconds.

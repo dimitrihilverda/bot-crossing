@@ -24,10 +24,11 @@ import {
   kerbBack,
   driveStep,
   ridesAlong,
+  offsetPath,
 } from '../world/drive-path.js'
 import { planStreets } from '../world/streets.js'
 import { roadCells } from '../world/road-path.js'
-import { createRoads } from '../world/road-mesh.js'
+import { createRoads, DRIVING_LANE_OFFSET } from '../world/road-mesh.js'
 import { createTown, townStamp } from '../world/town-mesh.js'
 import { keepClearCells } from '../world/town-plan.js'
 import { Deliveries, CAR_SPEED } from '../world/deliveries.js'
@@ -1293,24 +1294,39 @@ export class Colony {
       return { points: [{ x: depot.x, z: depot.z }], length: 0 }
     }
 
-    const key = `${vehicle.addressSeed}|${this._streetStamp}`
-    let route = this._trafficRoutes.get(key)
+    const cacheKey = `${vehicle.addressSeed}|${this._streetStamp}`
+    let route = this._trafficRoutes.get(cacheKey)
     if (!route) {
       const house = houses[vehicle.addressSeed % houses.length]
       const houseCell = worldToCell(house.mesh.position.x, house.mesh.position.z)
-      const points = roadCells(SHIP_CELL_FOR_STREETS, houseCell, this.streets?.all).map((c) => cellWorld(c.x, c.z))
+      // Ambient traffic has no business on a plot: it drives the streets and waits at the
+      // kerb. `roadCells` ends at the house's own cell, which is by definition not a street
+      // cell, so the tail is trimmed back to the last cell that is one. Without this every
+      // ambient car turned off the carriageway and drove diagonally across the verge on to
+      // somebody's garden — a delivery belongs there and keeps its own `kerbBack` leg, but
+      // these cars are traffic, not visitors.
+      const streets = this.streets?.all
+      const cells = roadCells(SHIP_CELL_FOR_STREETS, houseCell, streets)
+      let last = cells.length
+      if (streets) {
+        while (last > 1 && !streets.has(key(cells[last - 1].x, cells[last - 1].z))) last--
+      }
+      const points = offsetPath(
+        cells.slice(0, last).map((c) => cellWorld(c.x, c.z)),
+        DRIVING_LANE_OFFSET
+      )
       route = { points, length: pathLength(points) }
-      this._trafficRoutes.set(key, route)
+      this._trafficRoutes.set(cacheKey, route)
     }
 
     // The vehicle has moved on to a different address since the last time this ran — a
     // round trip re-seeds `addressSeed` (see `stepVehicle`'s `'back'` phase in `traffic.js`)
     // — so its previous cache entry is now unreachable by any key this method will look up
     // again for it, and is dropped here rather than left to sit forever.
-    if (vehicle._routeKey && vehicle._routeKey !== key) {
+    if (vehicle._routeKey && vehicle._routeKey !== cacheKey) {
       this._trafficRoutes.delete(vehicle._routeKey)
     }
-    vehicle._routeKey = key
+    vehicle._routeKey = cacheKey
     return route
   }
 
@@ -1343,7 +1359,13 @@ export class Colony {
     // The cell sequence is the only thing the streets change. Everything below — the kerb
     // pull-back, the cache key, the route object — is stage 2's, verified by hand over 600
     // frames, and is deliberately left alone.
-    const points = roadCells(start, end, this.streets?.all).map((c) => cellWorld(c.x, c.z))
+    // Shifted off the centre line into the right-hand lane. A route is built from cell
+    // centres and the carriageway is drawn centred on those same cells, so an unshifted
+    // route runs straight down the road's own paint — see `offsetPath` in `drive-path.js`.
+    const points = offsetPath(
+      roadCells(start, end, this.streets?.all).map((c) => cellWorld(c.x, c.z)),
+      DRIVING_LANE_OFFSET
+    )
 
     // The last cell centre is not the address: parking on it leaves the car a half-cell short
     // of the house it was sent to, or sitting in a neighbour's garden. The house's own centre
