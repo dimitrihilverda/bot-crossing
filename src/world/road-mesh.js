@@ -464,6 +464,25 @@ export function cellFurniture(cell, streetKeys, cellSize) {
       scale: 1.6,
       lift: ROAD_SURFACE_LIFT,
     })
+
+    // A tree on the lamp's own side, two steps out where the lamp is one, so the two alternate
+    // down a street rather than standing together. Its own hash stream again, so a planted arm
+    // is not the same arm that got a bench.
+    const th = cellHash({ x: cell.x * 7 - i, z: cell.z * 43 + i })
+    if (mod(th, 100) < TREE_PERCENT) {
+      const tree = STREET_TREES[mod(th >> 5, STREET_TREES.length)]
+      out.push({
+        part: tree.part,
+        kit: 'forest',
+        x: cx + d.x * step * 2 + lampSide * perp.x * kerb,
+        z: cz + d.z * step * 2 + lampSide * perp.z * kerb,
+        // A canopy has no front. A quarter turn from its own hash is what keeps a row of the
+        // same part from reading as one model repeated.
+        ry: (mod(th >> 13, 4) * Math.PI) / 2,
+        scale: tree.scale,
+        lift: ROAD_SURFACE_LIFT,
+      })
+    }
   })
 
   if (arms.length >= 3) {
@@ -558,6 +577,11 @@ export const FURNITURE_LOCAL_BBOX = Object.freeze({
   firehydrant: { xmin: -0.06774556636810303, xmax: 0.06774961948394775, zmin: -0.06509828567504883, zmax: 0.0662224292755127 },
   trash_A: { xmin: -0.060088641941547394, xmax: 0.06668513268232346, zmin: -0.0666484460234642, zmax: 0.0666484460234642 },
   trash_B: { xmin: -0.026508506387472153, xmax: 0.041553303599357605, zmin: -0.032371584326028824, zmax: 0.038469985127449036 },
+  // The street trees, measured from forest.glb. Their canopies are wide enough that the slot
+  // they reserve is most of a terrace bay — which is the point: a tree is not something a
+  // building may be built through, and a row that ignored them would put a wall in a canopy.
+  Tree_4_A_Color1: { xmin: -0.9600079655647278, xmax: 1.0473434925079346, zmin: -1.0196812152862549, zmax: 0.9846721291542053 },
+  Tree_1_A_Color1: { xmin: -1.9345909357070923, xmax: 1.2464021444320679, zmin: -1.6255630254745483, zmax: 1.6255637407302856 },
 })
 
 /**
@@ -588,6 +612,28 @@ const PROP_PERCENT = 55
 
 /** The props that have a front worth pointing at the road; the rest read the same either way. */
 const PROPS_THAT_FACE = new Set(['bench', 'dumpster'])
+
+/**
+ * The trees that line a street, and what each is scaled by.
+ *
+ * From the **forest** kit, not the city one — City Builder Bits has no tree — which is why
+ * these entries carry a `kit` and everything else on the verge does not. The two packs have
+ * their own atlases and so cannot share a material or a mesh: `createRoads` builds the city
+ * parts, `createStreetTrees` builds these, and `cellFurniture` is what both read so a tree
+ * takes part in `reservedSlots` like any other obstacle.
+ *
+ * Both scales bring their part to about 2.2 units tall, which is a little over a streetlight
+ * (0.96 authored at 1.6 = 1.54) — a street tree that a lamp out-tops is not a street tree.
+ * `Tree_4_A` is the narrow one and does most of the work; `Tree_1_A` is broader and rounder,
+ * so a row of them is not a colonnade of the same shape repeated.
+ */
+export const STREET_TREES = Object.freeze([
+  { part: 'Tree_4_A_Color1', scale: 0.42 },
+  { part: 'Tree_1_A_Color1', scale: 0.53 },
+])
+
+/** How many of a furnished cell's arms are planted, in hundredths. */
+const TREE_PERCENT = 60
 
 /**
  * The world-space, axis-aligned box one piece of verge furniture actually occupies: its local
@@ -733,6 +779,9 @@ export function createRoads({ streets, groundAt, apron = new Set() }) {
   // something on the road without recomputing where the road is. `parkedCars`
   // (`traffic.js`) is the one consumer: it needs to know which tiles are plain straight
   // runs, and a zebra is not one.
+  // And the verge beside it. `createStreetTrees` is the consumer: the trees among this list
+  // are forest-kit parts, which `place` above skips because they are not in the city kit.
+  group.userData.verge = furniture
   group.userData.carriageway = roadTiles
 
   return group

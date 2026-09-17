@@ -32,6 +32,7 @@ import { roadCells } from '../world/road-path.js'
 import { createRoads, DRIVING_LANE_OFFSET, PARKING_LANE_OFFSET, roadSurfaceY } from '../world/road-mesh.js'
 import { createTown, townStamp } from '../world/town-mesh.js'
 import { createBicycles } from '../world/bicycles.js'
+import { createStreetTrees } from '../world/street-trees.js'
 import { keepClearCells } from '../world/town-plan.js'
 import { Deliveries, CAR_GROUND_DROP, CAR_SPEED } from '../world/deliveries.js'
 import { TrafficCars } from '../world/traffic-cars.js'
@@ -572,6 +573,17 @@ export class Colony {
       groundAt: (x, z) => this.groundAt(x, z),
     })
     this.worldGroup.add(this.bikeGroup)
+
+    // The trees along those same streets. They come out of `cellFurniture` like the lamps and
+    // signals do — which is what makes a terrace leave room for one — but out of the forest
+    // kit rather than the city kit, so they are their own mesh.
+    this.treeGroup?.userData.dispose?.()
+    if (this.treeGroup) this.worldGroup.remove(this.treeGroup)
+    this.treeGroup = createStreetTrees({
+      furniture: this.roadGroup.userData.verge ?? [],
+      groundAt: (x, z) => this.groundAt(x, z),
+    })
+    this.worldGroup.add(this.treeGroup)
     const layout = allocateCells(projectList, this.plotCells, this.streets.all)
 
     // Every cell the colony itself occupies: every plot's cells, plus the depot's own —
@@ -1630,6 +1642,7 @@ export class Colony {
     this.traffic.dispose()
     this.roadGroup?.userData.dispose?.()
     this.bikeGroup?.userData.dispose?.()
+    this.treeGroup?.userData.dispose?.()
     this.townGroup?.userData.dispose?.()
     disposeTree(this.worldGroup)
     disposeTree(this.plotGroup)

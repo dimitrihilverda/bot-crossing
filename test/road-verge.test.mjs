@@ -7,6 +7,7 @@ import {
   ROAD_SURFACE_LIFT,
   SUBGRID,
   TRAFFIC_LIGHT_PARTS,
+  STREET_TREES,
   VERGE_PROPS,
   furnitureWorldBounds,
 } from '../src/world/road-mesh.js'
@@ -406,6 +407,52 @@ test('every prop the verge places has a measured footprint', () => {
     assert.ok(
       furnitureWorldBounds({ part: prop, x: 0, z: 0, ry: 0, scale: 1 }),
       `${prop} is placed on the verge but has no measured footprint, so a wall may be built through it`
+    )
+  }
+})
+
+test('a furnished street is lined with trees', () => {
+  const streets = planStreets()
+  const parts = new Set(vergeFurniture(streets.cells, CELL_SIZE).map((f) => f.part))
+  const planted = STREET_TREES.filter((t) => parts.has(t.part))
+  assert.ok(planted.length === STREET_TREES.length, `only ${planted.length} of ${STREET_TREES.length} tree kinds were ever planted`)
+})
+
+test('a street tree comes from the forest kit and says so', () => {
+  // Everything else on the verge is a city-kit part, and the two packs have different atlases,
+  // so they cannot share a material or a mesh. A tree that does not carry its kit would be
+  // handed to the road builder, silently fail `hasPart(part, 'city')`, and never be drawn —
+  // a missing tree rather than an error.
+  const streets = planStreets()
+  const names = new Set(STREET_TREES.map((t) => t.part))
+  for (const f of vergeFurniture(streets.cells, CELL_SIZE)) {
+    if (names.has(f.part)) assert.equal(f.kit, 'forest', `${f.part} is not marked as a forest part`)
+    else assert.ok(f.kit === undefined || f.kit === 'city', `${f.part} claims kit ${f.kit}`)
+  }
+})
+
+test("a street tree's trunk stands clear of the carriageway", () => {
+  // The canopy may overhang the road — that is what a street tree does — but the trunk may
+  // not be in it.
+  const streets = planStreets()
+  const names = new Set(STREET_TREES.map((t) => t.part))
+  const half = CARRIAGEWAY_WIDTH / 2
+  for (const f of vergeFurniture(streets.cells, CELL_SIZE)) {
+    if (!names.has(f.part)) continue
+    const cellX = Math.round(f.x / CELL_SIZE) * CELL_SIZE
+    const cellZ = Math.round(f.z / CELL_SIZE) * CELL_SIZE
+    const across = Math.max(Math.abs(f.x - cellX), Math.abs(f.z - cellZ))
+    assert.ok(across >= half, `a trunk stands ${across.toFixed(2)} from a centre line, inside the ${half} carriageway`)
+  }
+})
+
+test('every street tree has a measured footprint', () => {
+  // Same rule as the props: a tree with no bounds is one `reservedSlots` cannot see, and a
+  // terrace will be built straight through it.
+  for (const tree of STREET_TREES) {
+    assert.ok(
+      furnitureWorldBounds({ part: tree.part, x: 0, z: 0, ry: 0, scale: tree.scale }),
+      `${tree.part} is planted but has no measured footprint`
     )
   }
 })
