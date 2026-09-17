@@ -111,3 +111,43 @@ test('the real street network tiles cleanly: every cell gets tiles, and no two t
     seen.add(k)
   }
 })
+
+test('a connected cell is given an apron, and no carriageway of its own', () => {
+  // The depot's cell may never carry a street — it is protected, because a carriageway there
+  // would be tarmac under a building. So it is handed to `carriagewayTiles` as a *connection*
+  // instead: the street beside it grows an arm reaching to their shared edge, and the depot
+  // cell itself stays bare. That arm is what a delivery pulls out on to instead of grass.
+  const streets = [
+    { x: 0, z: -1 },
+    { x: 0, z: 0 },
+    { x: 0, z: 1 },
+  ]
+  const depot = { x: -1, z: 0 }
+  const cellOf = (t) => ({ x: Math.round(t.x / CELL_SIZE), z: Math.round(t.z / CELL_SIZE) })
+
+  const plain = carriagewayTiles(streets, CELL_SIZE)
+  const withApron = carriagewayTiles(streets, CELL_SIZE, new Set([`${depot.x},${depot.z}`]))
+
+  assert.ok(withApron.length > plain.length, 'the apron laid no tarmac at all')
+  for (const tile of withApron) {
+    assert.notDeepEqual(cellOf(tile), depot, `a tile was laid inside the depot's own cell at ${tile.x},${tile.z}`)
+  }
+
+  // The street the depot faces now meets three ways, not two, and says so with its tile.
+  const centreOf = (tiles) => tiles.find((t) => t.x === 0 && t.z === 0)
+  assert.equal(centreOf(plain).part, 'road_straight')
+  assert.equal(centreOf(withApron).part, 'road_tsplit')
+})
+
+test('an apron beside nothing changes nothing', () => {
+  // A connection that touches no street cell must not conjure one, or a depot in the middle of
+  // a field would grow a slip road to nowhere.
+  const streets = [
+    { x: 0, z: 0 },
+    { x: 0, z: 1 },
+  ]
+  assert.deepEqual(
+    carriagewayTiles(streets, CELL_SIZE, new Set(['9,9'])),
+    carriagewayTiles(streets, CELL_SIZE)
+  )
+})

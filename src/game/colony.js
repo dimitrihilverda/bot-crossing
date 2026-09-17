@@ -8,6 +8,7 @@ import {
   setColonySpacing,
   cellWorld,
   shipPosition,
+  DEPOT_ROAD_SHIFT,
   createLabel,
   createBanner,
   hashString,
@@ -26,7 +27,7 @@ import {
   ridesAlong,
   drivingLanes,
 } from '../world/drive-path.js'
-import { planStreets } from '../world/streets.js'
+import { depotApproach, planStreets } from '../world/streets.js'
 import { roadCells } from '../world/road-path.js'
 import { createRoads, DRIVING_LANE_OFFSET, PARKING_LANE_OFFSET, roadSurfaceY } from '../world/road-mesh.js'
 import { createTown, townStamp } from '../world/town-mesh.js'
@@ -209,7 +210,10 @@ export class Colony {
     this.worldGroup.name = 'world'
     scene.add(this.worldGroup)
 
-    this.ship = new Ship(scene, shipPosition())
+    // Where the depot actually stands. It starts at its cell centre and leans toward the road
+    // once the streets are known — see the street-planning block below.
+    this._shipAnchor = shipPosition()
+    this.ship = new Ship(scene, this._shipAnchor)
     this.astronauts = new Astronauts(scene, settings)
     this.astronauts.world = this._world()
     // Sized for the largest preset rather than the current one: unlike the astronaut meshes these
@@ -277,7 +281,7 @@ export class Colony {
     // The ship has legs, and legs have to reach the ground. Its landing spot is a fixed
     // cell, but the height of that spot is the planet's, so it is set here rather than once
     // at construction — a world with more relief would otherwise leave it hovering.
-    const ship = shipPosition()
+    const ship = this._shipAnchor
     this.ship.group.position.y = terrainHeight(ship.x, ship.z, this.planet)
 
     this._dustTint.set(this.planet.ground.high)
@@ -309,7 +313,7 @@ export class Colony {
         clear.push({ x: plot.center.x + local.x, z: plot.center.z + local.z, r: 8.6 })
       }
     }
-    const ship = shipPosition()
+    const ship = this._shipAnchor
     clear.push({ x: ship.x, z: ship.z, r: 7.5 })
     if (this.streets) {
       clear.push(...keepClearCells({ streets: this.streets.all, claimed: this._claimedCells || new Set() }))
@@ -525,7 +529,26 @@ export class Colony {
     // does, which is a poll-rate event, and a whole street network is two draw calls.
     this.roadGroup?.userData.dispose?.()
     if (this.roadGroup) this.worldGroup.remove(this.roadGroup)
-    this.roadGroup = createRoads({ streets: this.streets, groundAt: (x, z) => this.groundAt(x, z) })
+    // The depot leans toward whichever street runs beside it, and that street lays an apron out
+    // to their shared edge. Its own cell can never carry a carriageway — it is a
+    // `PROTECTED_CELL`, because that would be tarmac under a building — so this is as close to
+    // the road as a depot gets: it fronts the street instead of standing in the middle of its
+    // own field, and a delivery pulls out of the yard on to tarmac rather than on to grass.
+    const approach = depotApproach(SHIP_CELL_FOR_STREETS, this.streets.all)
+    this._shipAnchor.copy(shipPosition())
+    if (approach) {
+      this._shipAnchor.x += approach.x * DEPOT_ROAD_SHIFT
+      this._shipAnchor.z += approach.z * DEPOT_ROAD_SHIFT
+    }
+    this.ship.group.position.x = this._shipAnchor.x
+    this.ship.group.position.z = this._shipAnchor.z
+    this.ship.group.position.y = terrainHeight(this._shipAnchor.x, this._shipAnchor.z, this.planet)
+
+    this.roadGroup = createRoads({
+      streets: this.streets,
+      groundAt: (x, z) => this.groundAt(x, z),
+      apron: new Set([key(SHIP_CELL_FOR_STREETS.x, SHIP_CELL_FOR_STREETS.z)]),
+    })
     this.worldGroup.add(this.roadGroup)
     // Cars standing at the kerb. Rebuilt only when the streets are — they are scenery, and
     // `parkedCars` is deterministic in each tile's own position, so claiming a plot on the
@@ -843,7 +866,7 @@ export class Colony {
       }
     }
 
-    const ship = shipPosition()
+    const ship = this._shipAnchor
     obstacles.push({ x: ship.x, z: ship.z, r: 3.4 + AGENT_RADIUS })
     this.nav.rebuild(obstacles)
   }
@@ -1396,7 +1419,7 @@ export class Colony {
     // Nowhere to drive between: fewer than two street cells, which is where every colony
     // starts and what it falls back to if the plan is ever empty.
     if (!ends) {
-      const depot = shipPosition()
+      const depot = this._shipAnchor
       const standstill = [{ x: depot.x, z: depot.z }]
       return { points: standstill, back: standstill, length: 0, backLength: 0 }
     }
@@ -1462,7 +1485,7 @@ export class Colony {
       return cached
     }
 
-    const depot = shipPosition()
+    const depot = this._shipAnchor
     const start = worldToCell(depot.x, depot.z)
     const end = worldToCell(p.x, p.z)
     // The cell sequence is the only thing the streets change. Everything below — the kerb

@@ -1,9 +1,17 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { planStreets } from '../src/world/streets.js'
-import { allocateCells, colonyAnchor, shipPosition, worldToCell, cellWorld } from '../src/world/plots.js'
-import { distance } from '../src/world/grid.js'
+import { depotApproach, planStreets } from '../src/world/streets.js'
+import {
+  allocateCells,
+  colonyAnchor,
+  DEPOT_CLEAR_RADIUS,
+  DEPOT_ROAD_SHIFT,
+  shipPosition,
+  worldToCell,
+  cellWorld,
+} from '../src/world/plots.js'
+import { CELL_SIZE, distance } from '../src/world/grid.js'
 import { PROTECTED_CELLS } from '../src/world/street-plan.js'
 
 const k = (c) => `${c.x},${c.z}`
@@ -278,4 +286,39 @@ test('colony.js reads square cells, never the old axial fields', () => {
   const src = readFileSync('src/game/colony.js', 'utf8')
   assert.doesNotMatch(src, /cellWorld\([^)]*\.q\b/, 'a cellWorld call still reads .q')
   assert.doesNotMatch(src, /\bc\.q\b|\bc\.r\b|\bcell\.q\b|\bcell\.r\b/, 'a cell field is still read as .q/.r')
+})
+
+test('the depot faces whichever street runs beside it', () => {
+  const streets = planStreets()
+  const depot = worldToCell(shipPosition().x, shipPosition().z)
+  const dir = depotApproach(depot, streets.all)
+  assert.ok(dir, 'the depot has no street beside it at all')
+  assert.ok(
+    streets.all.has(`${depot.x + dir.x},${depot.z + dir.z}`),
+    `the depot was pointed at ${JSON.stringify(dir)}, which is not a street`
+  )
+  // One cell, on one axis — a diagonal has no carriageway to meet.
+  assert.equal(Math.abs(dir.x) + Math.abs(dir.z), 1)
+})
+
+test('a depot with no street beside it faces nowhere rather than guessing', () => {
+  assert.equal(depotApproach({ x: 0, z: 0 }, new Set()), null)
+})
+
+test('the depot stays inside its own cell once it has been moved to the road', () => {
+  // The cell is reserved for the depot and the street plan is built around it, so the shift
+  // toward the road is only ever a shift *within* that cell. If this ever rounds into a
+  // neighbour, a plot and the depot are both entitled to the same ground.
+  const streets = planStreets()
+  const before = worldToCell(shipPosition().x, shipPosition().z)
+  const dir = depotApproach(before, streets.all)
+  const moved = shipPosition()
+  moved.x += dir.x * DEPOT_ROAD_SHIFT
+  moved.z += dir.z * DEPOT_ROAD_SHIFT
+  const after = worldToCell(moved.x, moved.z)
+  assert.deepEqual({ x: after.x, z: after.z }, { x: before.x, z: before.z })
+
+  // And its own keep-clear circle has to stay inside the cell too, or crew are routed around
+  // something standing in the neighbour's ground.
+  assert.ok(DEPOT_ROAD_SHIFT + DEPOT_CLEAR_RADIUS < CELL_SIZE / 2, 'the depot now overhangs its cell')
 })

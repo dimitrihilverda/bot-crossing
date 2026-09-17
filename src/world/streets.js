@@ -23,3 +23,33 @@ export function planStreets({ seed = STREET_SEED, radius = TOWN_CELL_RADIUS } = 
   const cells = planStreetCells(seed, radius)
   return { all: new Set(cells.map((c) => key(c.x, c.z))), cells }
 }
+
+/** The four cells a cell touches, in a fixed order so the answer never depends on iteration. */
+const APPROACHES = Object.freeze([
+  { x: 1, z: 0 },
+  { x: -1, z: 0 },
+  { x: 0, z: 1 },
+  { x: 0, z: -1 },
+])
+
+/**
+ * Which way the depot faces the road: a unit direction toward a street cell beside it.
+ *
+ * No street may run through the depot's own cell — it is a `PROTECTED_CELL`, because a
+ * carriageway there would be tarmac under a building — so the closest the depot can get to the
+ * road is to lean toward it across its own cell and let an apron cover the rest. This decides
+ * which way it leans, and which neighbour lays that apron.
+ *
+ * East first, then west, south, north: a fixed order rather than whichever the set happens to
+ * yield, so the depot does not turn to face a different street because the plan was built in a
+ * different order.
+ *
+ * @returns a unit direction, or `null` when no street touches the cell at all — in which case
+ *   the depot stays where it is rather than leaning at a guess.
+ */
+export function depotApproach(cell, streets) {
+  for (const d of APPROACHES) {
+    if (streets.has(key(cell.x + d.x, cell.z + d.z))) return d
+  }
+  return null
+}

@@ -350,6 +350,29 @@ function growBlob(cells, want, free, anchor = null) {
   }
 }
 
+/**
+ * How far around the depot the ground is kept clear of crew.
+ *
+ * The same 3.4 `colony.js` has always pushed walking crew out of; named here because it is now
+ * also the bound on how far the depot may be shifted toward the road.
+ */
+export const DEPOT_CLEAR_RADIUS = 3.4
+
+/**
+ * How far the depot stands from the middle of its cell, toward the street beside it.
+ *
+ * The depot used to sit dead centre in its own cell, which put it in the middle of a field
+ * with its yard opening on to grass. It fronts the road now — but it can only lean, not move:
+ * `SHIP_CELL` is reserved against plots and protected in the street plan, and the whole layout
+ * is built around that cell being the depot's.
+ *
+ * 2.4, one carriageway tile, which is as far as it can go: at that shift its keep-clear circle
+ * reaches 5.8 of the cell's 6, so the depot stays inside the ground it owns and the apron
+ * (`carriagewayTiles`, given this cell as a connection) covers the rest of the way to the
+ * carriageway. A test pins both halves of that.
+ */
+export const DEPOT_ROAD_SHIFT = 2.4
+
 export const shipPosition = () => {
   const { x, z } = cellWorld(SHIP_CELL.x, SHIP_CELL.z)
   return new THREE.Vector3(x, 0, z)

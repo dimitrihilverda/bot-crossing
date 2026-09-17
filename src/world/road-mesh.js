@@ -220,14 +220,25 @@ export function tileFor(arms) {
  * Order-free by construction: a cell's tiles depend only on its own four neighbours, never on
  * a walk order. That is what retired `ringRuns` and the `closed` flag.
  *
+ * A cell in `connected` counts as a neighbour worth reaching but lays no carriageway of its
+ * own: the street beside it grows an arm out to their shared edge, and the cell itself stays
+ * bare. That is how the depot gets an apron. Its cell is a `PROTECTED_CELL` and may never
+ * carry a street — a carriageway there would be tarmac under a building — but without some
+ * tarmac reaching it, every delivery pulls out of the yard on to grass.
+ *
  * @param streetCells every street cell, `{x, z}`
  * @param cellSize world units per cell
+ * @param connected keys of cells to reach but not to pave, as `"x,z"`
  * @returns `[{x, z, part, ry}]` — world position, kit part, and Y rotation in radians
  */
-export function carriagewayTiles(streetCells, cellSize) {
+export function carriagewayTiles(streetCells, cellSize, connected = new Set()) {
   const keys = new Set(streetCells.map((c) => `${c.x},${c.z}`))
+  const armsOf = (c) =>
+    [N, S, E, W].filter((d) => {
+      const k = `${c.x + d.x},${c.z + d.z}`
+      return keys.has(k) || connected.has(k)
+    })
   const step = cellSize / SUBGRID
-  const armsOf = (c) => [N, S, E, W].filter((d) => keys.has(`${c.x + d.x},${c.z + d.z}`))
   const out = []
   for (const c of streetCells) {
     const cx = c.x * cellSize
@@ -582,7 +593,7 @@ const JUNCTION_PART = 'road_junction'
  * @param groundAt `(x, z) => y`, the colony's own terrain sampler
  * @returns a `THREE.Group` publishing `userData.dispose()`
  */
-export function createRoads({ streets, groundAt }) {
+export function createRoads({ streets, groundAt, apron = new Set() }) {
   const group = new THREE.Group()
   group.userData.dispose = () => {}
   if (
@@ -601,7 +612,8 @@ export function createRoads({ streets, groundAt }) {
     return group
 
   const scale = roadTileScale()
-  const tiles = carriagewayTiles(streets.cells, CELL_SIZE)
+  // `apron` is the depot: reached by a street arm, never paved itself. See `carriagewayTiles`.
+  const tiles = carriagewayTiles(streets.cells, CELL_SIZE, apron)
   const furniture = vergeFurniture(streets.cells, CELL_SIZE)
 
   // A zebra crossing replaces the carriageway tile it stands on: `vergeFurniture` gives it
