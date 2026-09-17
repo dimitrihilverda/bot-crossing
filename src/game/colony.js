@@ -31,6 +31,7 @@ import { depotApproach, planStreets } from '../world/streets.js'
 import { roadCells } from '../world/road-path.js'
 import { createRoads, DRIVING_LANE_OFFSET, PARKING_LANE_OFFSET, roadSurfaceY } from '../world/road-mesh.js'
 import { createTown, townStamp } from '../world/town-mesh.js'
+import { createBicycles } from '../world/bicycles.js'
 import { keepClearCells } from '../world/town-plan.js'
 import { Deliveries, CAR_GROUND_DROP, CAR_SPEED } from '../world/deliveries.js'
 import { TrafficCars } from '../world/traffic-cars.js'
@@ -38,6 +39,7 @@ import {
   HEADWAY,
   headwayFactor,
   newVehicle,
+  parkedBikes,
   parkedCars,
   routeEndpoints,
   stepVehicle,
@@ -554,9 +556,22 @@ export class Colony {
     // `parkedCars` is deterministic in each tile's own position, so claiming a plot on the
     // far side of the colony does not reshuffle a street here. `y` is sampled once, for the
     // same reason the road tiles sample it: the ground under a street rolls between plots.
-    this._parkedCars = parkedCars(this.roadGroup.userData.carriageway ?? [], PARKING_LANE_OFFSET, PARKED_SEED).map(
-      (car) => ({ ...car, y: this._carY(car.x, car.z) })
-    )
+    const carriageway = this.roadGroup.userData.carriageway ?? []
+    this._parkedCars = parkedCars(carriageway, PARKING_LANE_OFFSET, PARKED_SEED).map((car) => ({
+      ...car,
+      y: this._carY(car.x, car.z),
+    }))
+
+    // Bicycles in the spaces the cars did not take — the same hash on the same kerbside
+    // spaces, so the two partition them rather than being laid out independently and
+    // overlapping. One merged mesh rather than an instanced fleet: a bicycle never moves.
+    this.bikeGroup?.userData.dispose?.()
+    if (this.bikeGroup) this.worldGroup.remove(this.bikeGroup)
+    this.bikeGroup = createBicycles({
+      bikes: parkedBikes(carriageway, PARKING_LANE_OFFSET, PARKED_SEED),
+      groundAt: (x, z) => this.groundAt(x, z),
+    })
+    this.worldGroup.add(this.bikeGroup)
     const layout = allocateCells(projectList, this.plotCells, this.streets.all)
 
     // Every cell the colony itself occupies: every plot's cells, plus the depot's own —
@@ -1614,6 +1629,7 @@ export class Colony {
     this.deliveries.dispose()
     this.traffic.dispose()
     this.roadGroup?.userData.dispose?.()
+    this.bikeGroup?.userData.dispose?.()
     this.townGroup?.userData.dispose?.()
     disposeTree(this.worldGroup)
     disposeTree(this.plotGroup)

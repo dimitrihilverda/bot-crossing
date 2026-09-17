@@ -10,6 +10,7 @@ import {
   trafficCount,
   parkedCars,
   headwayFactor,
+  parkedBikes,
   routeEndpoints,
 } from '../src/world/traffic.js'
 
@@ -294,4 +295,65 @@ test('cars do not all start from the same place', () => {
   const origins = new Set()
   for (let seed = 0; seed < 40; seed++) origins.add(routeEndpoints(newVehicle(seed), 150).from)
   assert.ok(origins.size > 20, `40 cars started from only ${origins.size} places`)
+})
+
+// ── bicycles ─────────────────────────────────────────────────────────────────────────
+
+test('bicycles stand across the kerb, not along it', () => {
+  // Nose-in, the way a bike stands in a rack: a bicycle is 0.394 long and the parking strip
+  // outside the yellow line is 0.456 wide, so across is the one orientation that fits. Along
+  // the kerb it would either stick out into the running lane or have to be scaled down.
+  const bikes = parkedBikes(street(400), 0.9, 4)
+  assert.ok(bikes.length > 0, 'a 400-tile street parked no bicycles at all')
+  for (const bike of bikes) {
+    // The street runs +z, so a bicycle across it faces +/-x — a quarter turn from the street's
+    // own heading.
+    const across = Math.abs(((bike.heading % Math.PI) + Math.PI) % Math.PI)
+    assert.ok(
+      Math.abs(across - Math.PI / 2) < 1e-9,
+      `heading ${bike.heading} is along the street, not across it`
+    )
+  }
+})
+
+test('bicycles face away from the traffic they are parked beside', () => {
+  // Nose to the kerb, tail to the road — a bike pointing into the carriageway reads as one
+  // that fell over into it.
+  for (const bike of parkedBikes(street(400), 0.9, 4)) {
+    // On the -x kerb a bicycle faces -x; on the +x kerb, +x.
+    const facingMinusX = Math.abs(bike.heading - Math.PI / 2) > Math.PI / 2
+    assert.equal(bike.x < 0, facingMinusX, `bicycle at x=${bike.x} faces the road`)
+  }
+})
+
+test('a bicycle never stands where a car is parked', () => {
+  // The two draw from the same hash on the same space, so a space holds either a car or a rack
+  // of bicycles and never both. This is the assertion that keeps them from being laid out
+  // independently and quietly overlapping.
+  const tiles = street(400)
+  const cars = parkedCars(tiles, 0.9, 4)
+  const bikes = parkedBikes(tiles, 0.9, 4)
+  assert.ok(cars.length > 0 && bikes.length > 0, 'nothing to compare')
+  for (const car of cars) {
+    for (const bike of bikes) {
+      const gap = Math.hypot(car.x - bike.x, car.z - bike.z)
+      assert.ok(gap > 0.5, `a bicycle stands ${gap.toFixed(2)} from a parked car`)
+    }
+  }
+})
+
+test('bicycles come in groups, not one to a space', () => {
+  // One bicycle on its own reads as litter; a rack of them reads as a street. Every space that
+  // gets bicycles gets more than one, side by side along the kerb.
+  const bikes = parkedBikes(street(40), 0.9, 4)
+  const spaces = new Map()
+  for (const bike of bikes) {
+    const k = `${bike.x.toFixed(2)}`
+    spaces.set(k, (spaces.get(k) ?? 0) + 1)
+  }
+  for (const [, n] of spaces) assert.ok(n > 1, 'a space held a single bicycle')
+})
+
+test('bicycle racks are deterministic, like everything else at the kerb', () => {
+  assert.deepEqual(parkedBikes(street(40), 0.9, 8), parkedBikes(street(40), 0.9, 8))
 })

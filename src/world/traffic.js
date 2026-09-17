@@ -360,3 +360,63 @@ export function headwayFactor(car, others, gap) {
 
   return factor
 }
+
+/**
+ * How many of the kerbside spaces a car did not take hold a rack of bicycles instead.
+ *
+ * Drawn from the same hash as `PARK_PERCENT`, immediately after it, so a space holds either a
+ * car or bicycles and never both — and so the two can never be laid out independently and
+ * quietly overlap.
+ */
+const BIKE_PERCENT = 26
+
+/** How many bicycles stand in one space, and how far apart along the kerb. */
+const BIKES_PER_RACK = 3
+const BIKE_PITCH = 0.62
+
+/**
+ * Bicycles at the kerb, standing across it the way they stand in a rack.
+ *
+ * **Across, not along, and not against a wall.** A bicycle leaning on a facade is the Dutch
+ * street's own image, and there is nowhere to lean one: `SET_BACK` in `town-plan.js` puts a
+ * building's outer wall 0.05 from the carriageway's edge — the pavement was removed on purpose
+ * — and a bicycle is 0.101 wide. What there *is* room for is the parking strip outside the
+ * yellow line, 0.456 wide against a bicycle's 0.394 length, so nose-in is the one orientation
+ * that fits there without either sticking into the running lane or being shrunk to fit.
+ *
+ * Nose to the kerb and tail to the road, because a bicycle pointing into the carriageway reads
+ * as one that has fallen into it. Three to a space rather than one: a single bicycle at a kerb
+ * reads as litter, a rack of them reads as a street.
+ *
+ * @param tiles carriageway tiles, as `carriagewayTiles` returns them
+ * @param offset how far from the road's centre line the rack stands — `PARKING_LANE_OFFSET`
+ * @param seed the run seed, shared with `parkedCars` so the two agree about who has which space
+ * @returns `[{x, z, heading}]`
+ */
+export function parkedBikes(tiles, offset, seed = 0) {
+  const out = []
+  for (const tile of tiles) {
+    if (tile.part !== PARKABLE_PART) continue
+    const d = { x: Math.sin(tile.ry), z: Math.cos(tile.ry) }
+    for (const side of [1, -1]) {
+      const h = tileHash(tile, side, seed)
+      const draw = h % 100
+      // The band immediately above the cars', so the two partition the same spaces.
+      if (draw < PARK_PERCENT || draw >= PARK_PERCENT + BIKE_PERCENT) continue
+
+      const x = tile.x + side * -d.z * offset
+      const z = tile.z + side * d.x * offset
+      // A quarter turn off the street's own heading, pointing away from the carriageway: the
+      // rack faces the kerb it stands against, not the traffic passing it.
+      const heading = tile.ry - side * (Math.PI / 2)
+
+      for (let i = 0; i < BIKES_PER_RACK; i++) {
+        // Spread along the kerb, centred on the space, so a rack reads as a row rather than as
+        // a heap on the tile's own centre.
+        const along = (i - (BIKES_PER_RACK - 1) / 2) * BIKE_PITCH
+        out.push({ x: x + d.x * along, z: z + d.z * along, heading })
+      }
+    }
+  }
+  return out
+}
