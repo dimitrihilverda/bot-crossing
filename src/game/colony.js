@@ -24,7 +24,7 @@ import {
   kerbBack,
   driveStep,
   ridesAlong,
-  offsetPath,
+  drivingLanes,
 } from '../world/drive-path.js'
 import { planStreets } from '../world/streets.js'
 import { roadCells } from '../world/road-path.js'
@@ -33,7 +33,7 @@ import { createTown, townStamp } from '../world/town-mesh.js'
 import { keepClearCells } from '../world/town-plan.js'
 import { Deliveries, CAR_SPEED } from '../world/deliveries.js'
 import { TrafficCars } from '../world/traffic-cars.js'
-import { newVehicle, parkedCars, stepVehicle, trafficCount } from '../world/traffic.js'
+import { HEADWAY, headwayFactor, newVehicle, parkedCars, stepVehicle, trafficCount } from '../world/traffic.js'
 import { Ship } from '../world/ship.js'
 import { Astronauts } from '../agents/astronauts.js'
 import { Indicators, BADGE } from '../agents/indicators.js'
@@ -1228,7 +1228,9 @@ export class Colony {
       // them idling on the depot pad for every thread the colony has ever seen.
       if (entry.driven <= 0 && !wants) continue
 
-      const at = pointAt(route.points, entry.driven)
+      // `wants` is also which way this car is going: out to the address, or home again. The
+      // lane follows from that, the same as it does for ambient traffic.
+      const at = this._sampleLane(route, entry.driven, wants)
       vehicles.push({
         x: at.x,
         // The route is drawn cell to cell, but the ground under it is not flat: plots sit on
@@ -1277,13 +1279,33 @@ export class Colony {
     }
 
     const houses = [...this.buildings.values()]
+
+    // Where each car stands *before* anything moves. Two passes rather than one, so the gap a
+    // car keeps is measured against this frame's positions instead of last frame's: with
+    // forty cars the extra `pointAt` per car is nothing, and a frame of lag in a following
+    // rule is exactly how a queue starts oscillating.
+    const routes = []
+    const standing = []
+    for (const vehicle of this._trafficVehicles) {
+      const route = this._trafficRouteFor(vehicle, houses)
+      routes.push(route)
+      standing.push(this._sampleRoute(route, vehicle))
+    }
+
     const rendered = []
     for (let i = 0; i < this._trafficVehicles.length; i++) {
-      const route = this._trafficRouteFor(this._trafficVehicles[i], houses)
-      const vehicle = stepVehicle(this._trafficVehicles[i], dt, route.length, Math.random)
+      const route = routes[i]
+      // `standing` holds this car's own entry too; `headwayFactor` skips it by identity.
+      const vehicle = stepVehicle(
+        this._trafficVehicles[i],
+        dt,
+        route.length,
+        Math.random,
+        headwayFactor(standing[i], standing, HEADWAY)
+      )
       this._trafficVehicles[i] = vehicle
 
-      const at = pointAt(route.points, vehicle.driven)
+      const at = this._sampleRoute(route, vehicle)
       rendered.push({
         x: at.x,
         // Sampled the same way `_updateDeliveries` samples it, for the same reason: the
@@ -1304,6 +1326,31 @@ export class Colony {
   }
 
   /**
+   * Where a car is, on the lane it is actually driving.
+   *
+   * A round trip is two journeys, and each keeps to its own right, so the way home is its own
+   * polyline running the other way (`drivingLanes` in `drive-path.js`). Sampling the outbound
+   * line for both is what had every car drive its whole return leg backwards down the wrong
+   * side of the road.
+   *
+   * Progress crosses between them as a **fraction**, not as a distance: offsetting a route
+   * right and offsetting it left cut its corners by different amounts, so the two lanes are
+   * not the same length and `driven` does not mean the same thing on both. A car turning round
+   * does jump across the road once — it is standing still when it happens, which is the
+   * cheapest place for a U-turn nobody animated.
+   */
+  _sampleLane(route, driven, outbound) {
+    if (outbound || !route.back) return pointAt(route.points, driven)
+    const travelled = route.length > 0 ? driven / route.length : 0
+    return pointAt(route.back, (1 - travelled) * route.backLength)
+  }
+
+  /** The same, for an ambient vehicle, whose direction of travel is carried by its phase. */
+  _sampleRoute(route, vehicle) {
+    return this._sampleLane(route, vehicle.driven, vehicle.phase === 'out' || vehicle.phase === 'parked')
+  }
+
+  /**
    * The route from the depot to one traffic vehicle's address.
    *
    * Cached in `this._trafficRoutes`, keyed on `addressSeed` plus `this._streetStamp`, for
@@ -1318,7 +1365,8 @@ export class Colony {
   _trafficRouteFor(vehicle, houses) {
     if (houses.length === 0) {
       const depot = shipPosition()
-      return { points: [{ x: depot.x, z: depot.z }], length: 0 }
+      const standstill = [{ x: depot.x, z: depot.z }]
+      return { points: standstill, back: standstill, length: 0, backLength: 0 }
     }
 
     const cacheKey = `${vehicle.addressSeed}|${this._streetStamp}`
@@ -1338,11 +1386,19 @@ export class Colony {
       if (streets) {
         while (last > 1 && !streets.has(key(cells[last - 1].x, cells[last - 1].z))) last--
       }
-      const points = offsetPath(
+      const lanes = drivingLanes(
         cells.slice(0, last).map((c) => cellWorld(c.x, c.z)),
         DRIVING_LANE_OFFSET
       )
-      route = { points, length: pathLength(points) }
+      // Two lanes, and their lengths are deliberately not assumed equal: offsetting right and
+      // offsetting left cut a corner by different amounts. Progress is carried as a fraction
+      // of the journey rather than as a distance shared between them — see `_sampleRoute`.
+      route = {
+        points: lanes.out,
+        back: lanes.back,
+        length: pathLength(lanes.out),
+        backLength: pathLength(lanes.back),
+      }
       this._trafficRoutes.set(cacheKey, route)
     }
 
@@ -1386,13 +1442,15 @@ export class Colony {
     // The cell sequence is the only thing the streets change. Everything below — the kerb
     // pull-back, the cache key, the route object — is stage 2's, verified by hand over 600
     // frames, and is deliberately left alone.
-    // Shifted off the centre line into the right-hand lane. A route is built from cell
-    // centres and the carriageway is drawn centred on those same cells, so an unshifted
-    // route runs straight down the road's own paint — see `offsetPath` in `drive-path.js`.
-    const points = offsetPath(
+    // Shifted off the centre line into the right-hand lane, once for each direction. A route
+    // is built from cell centres and the carriageway is drawn centred on those same cells, so
+    // an unshifted route runs straight down the road's own paint, and a single shifted one has
+    // the car come home on the wrong side of it — see `drivingLanes` in `drive-path.js`.
+    const lanes = drivingLanes(
       roadCells(start, end, this.streets?.all).map((c) => cellWorld(c.x, c.z)),
       DRIVING_LANE_OFFSET
     )
+    const points = lanes.out
 
     // The last cell centre is not the address: parking on it leaves the car a half-cell short
     // of the house it was sent to, or sitting in a neighbour's garden. The house's own centre
@@ -1418,8 +1476,21 @@ export class Colony {
       }
     }
     points[points.length - 1] = kerb
+    // The way home starts from the same kerb the way out ended at, or the car would leave from
+    // a point half a cell away from the one it parked on.
+    lanes.back[0] = { x: kerb.x, z: kerb.z }
 
-    const route = { plot: entry.plot, slot: entry.slot, x: p.x, z: p.z, streets: this._streetStamp, points, length: pathLength(points) }
+    const route = {
+      plot: entry.plot,
+      slot: entry.slot,
+      x: p.x,
+      z: p.z,
+      streets: this._streetStamp,
+      points,
+      back: lanes.back,
+      length: pathLength(points),
+      backLength: pathLength(lanes.back),
+    }
     entry.route = route
     return route
   }

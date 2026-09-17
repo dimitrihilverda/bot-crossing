@@ -9,6 +9,7 @@ import {
   stepVehicle,
   trafficCount,
   parkedCars,
+  headwayFactor,
 } from '../src/world/traffic.js'
 
 test('a vehicle walks its four phases in order', () => {
@@ -195,4 +196,57 @@ test('a street does not park more cars than it has room for', () => {
 
 test("parked cars do not roll: their wheels have no distance to turn on", () => {
   for (const car of parkedCars(street(100), 0.9, 2)) assert.equal(car.distance, 0)
+})
+
+// ── keeping a gap ────────────────────────────────────────────────────────────────────
+
+/** A car at the origin, facing +z (heading 0 under `pointAt`'s convention). */
+const northbound = (x, z) => ({ x, z, heading: 0 })
+const southbound = (x, z) => ({ x, z, heading: Math.PI })
+
+test('a car with the road to itself drives at full speed', () => {
+  assert.equal(headwayFactor(northbound(0, 0), [], 1.6), 1)
+  assert.equal(headwayFactor(northbound(0, 0), [northbound(0, 40)], 1.6), 1)
+})
+
+test('a car closing on the one in front slows in proportion to the gap', () => {
+  // Half the gap left, half the speed. Tapering rather than switching is what makes a queue
+  // settle instead of stuttering: a car that only ever ran or stopped would judder behind
+  // anything that waits, and ambient traffic must not draw the eye.
+  assert.equal(headwayFactor(northbound(0, 0), [northbound(0, 0.8)], 1.6), 0.5)
+  assert.equal(headwayFactor(northbound(0, 0), [northbound(0, 0.4)], 1.6), 0.25)
+})
+
+test('a car does not brake for one behind it', () => {
+  assert.equal(headwayFactor(northbound(0, 0), [northbound(0, -0.8)], 1.6), 1)
+})
+
+test('a car does not brake for oncoming traffic', () => {
+  // The two directions drive on opposite sides of the centre line, so a car coming the other
+  // way passes close and must be ignored. Braking for it would stop every car in the colony
+  // dead every time it met one — the single most likely way for this rule to ruin the street.
+  assert.equal(headwayFactor(northbound(0, 0), [southbound(0.7, 0.8)], 1.6), 1)
+})
+
+test('a car does not brake for one crossing at a junction', () => {
+  // Crossing traffic is deliberately out of scope: cars have no right of way and no junction
+  // to negotiate, so two may still pass through each other at a crossroads. Braking on a
+  // perpendicular neighbour would instead deadlock every junction in the town.
+  assert.equal(headwayFactor(northbound(0, 0), [{ x: 0.2, z: 0.8, heading: Math.PI / 2 }], 1.6), 1)
+})
+
+test('a car brakes for the nearest thing in front, not the first one it looks at', () => {
+  const others = [northbound(0, 1.2), northbound(0, 0.4), northbound(0, 0.8)]
+  assert.equal(headwayFactor(northbound(0, 0), others, 1.6), 0.25)
+})
+
+test('a throttled vehicle stops moving but still counts down its wait', () => {
+  // The scale belongs on the step, not on `dt`: a car held at a standstill behind another
+  // must not also have its dwell frozen, or a queue at an address would never clear.
+  const moving = { phase: 'out', driven: 5, dwell: 0 }
+  assert.equal(stepVehicle(moving, 1 / 60, 100, () => 0.5, 0).driven, 5)
+  assert.ok(stepVehicle(moving, 1 / 60, 100, () => 0.5, 1).driven > 5)
+
+  const waiting = { phase: 'waiting', driven: 100, dwell: 4 }
+  assert.ok(stepVehicle(waiting, 1, 100, () => 0.5, 0).dwell < 4, 'a blocked car never finishes waiting')
 })

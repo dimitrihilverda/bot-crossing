@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import * as THREE from 'three'
-import { offsetPath, pathLength, pointAt } from '../src/world/drive-path.js'
+import { drivingLanes, offsetPath, pathLength, pointAt } from '../src/world/drive-path.js'
 
 // The `hexLine` tests that used to live here moved to `test/grid.test.mjs`, which exercises
 // `grid.js`'s `line` — the square lattice's four-neighbour Bresenham walk that replaced it.
@@ -158,4 +158,42 @@ test('offsetPath leaves alone a route it cannot offset', () => {
     { x: 5, z: 0 },
   ]
   assertPath(offsetPath(pts, 0), pts)
+})
+
+test('driving there and driving back are two different lanes, each on its own right', () => {
+  // A route is one line of cell centres, but a round trip is two journeys in opposite
+  // directions, and "keep right" means something different for each. Sampling one polyline
+  // for both is what had every car driving its whole return leg in reverse down the wrong
+  // side of the road — invisible while cars were also 90 degrees sideways, obvious the moment
+  // they were not.
+  const centre = [
+    { x: 0, z: 0 },
+    { x: 10, z: 0 },
+  ]
+  const { out, back } = drivingLanes(centre, 1)
+
+  // Driving +x, right is +z.
+  assertPath(out, [
+    { x: 0, z: 1 },
+    { x: 10, z: 1 },
+  ])
+  // Coming back the other way, right is -z — and the line starts where the outbound one ended.
+  assertPath(back, [
+    { x: 10, z: -1 },
+    { x: 0, z: -1 },
+  ])
+})
+
+test('the two lanes of a round trip never share a point', () => {
+  const centre = [
+    { x: 0, z: 0 },
+    { x: 12, z: 0 },
+    { x: 12, z: 12 },
+  ]
+  const { out, back } = drivingLanes(centre, 0.4)
+  for (const a of out) {
+    for (const b of back) {
+      assert.ok(Math.hypot(a.x - b.x, a.z - b.z) > 1e-6, `lanes meet at (${a.x}, ${a.z})`)
+    }
+  }
 })

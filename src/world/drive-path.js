@@ -269,3 +269,24 @@ export function ridesAlong(state, badged) {
   if (state !== RIDING_STATE) return false
   return !badged
 }
+
+/**
+ * The two lanes of a round trip: the way out, and the way home.
+ *
+ * A route is a single line of cell centres, but a round trip is two journeys in opposite
+ * directions, and "keep right" means a different side of that line for each. Sampling one
+ * polyline for both — which is what this replaced — puts a car on the wrong side of the road
+ * for its whole return leg, facing the way it came. That was invisible while every car was
+ * also 90 degrees sideways, and obvious the moment they were not.
+ *
+ * The way home is the route reversed and then offset, not the offset route reversed by the
+ * caller: offsetting after the reversal is what makes the shift land on the right of the *new*
+ * direction, which is the whole point.
+ *
+ * @param points the centre line, cell centre to cell centre
+ * @param offset how far right of it to drive
+ * @returns `{ out, back }`, two polylines that never share a point
+ */
+export function drivingLanes(points, offset) {
+  return { out: offsetPath(points, offset), back: offsetPath([...points].reverse(), offset) }
+}

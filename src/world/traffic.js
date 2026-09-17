@@ -44,9 +44,9 @@ const THREADS_PER_VEHICLE = 4
  * was doubled and the parked share cut (`PARK_PERCENT`) — the balance between the two is what
  * makes a street look driven rather than photographed.
  *
- * Cars do not avoid one another and never will: at this density two can occupy the same piece
- * of road, which at a glance reads as traffic and on close inspection reads as two cars in the
- * same place. That is the trade this number is bought with.
+ * What makes this density affordable is `headwayFactor`: cars following one another ease off
+ * rather than driving through each other. Crossing traffic still can — see that function for
+ * why braking on it would be worse than the overlap it prevents.
  */
 const CELLS_PER_AMBIENT_CAR = 3
 
@@ -138,7 +138,7 @@ export function newVehicle(seed) {
  * positive distance short of its target forever, and the last piece of furniture in every
  * house was never drawn.
  */
-export function stepVehicle(vehicle, dt, routeLength, random) {
+export function stepVehicle(vehicle, dt, routeLength, random, speedScale = 1) {
   // No time has passed, so nothing happens — including the pull-away from `parked`. A
   // transition that fires on a zero-length frame is the same class of bug as one that fires
   // a frame late, and a negative `dt` would otherwise drive `driven` unboundedly away from
@@ -146,7 +146,7 @@ export function stepVehicle(vehicle, dt, routeLength, random) {
   // guards its own input the same way.
   if (!(dt > 0)) return vehicle
 
-  const step = TRAFFIC_SPEED * dt
+  const step = TRAFFIC_SPEED * dt * speedScale
   const next = { ...vehicle }
 
   if (next.phase === 'parked') {
@@ -266,4 +266,68 @@ export function parkedCars(tiles, offset, seed = 0) {
     }
   }
   return out
+}
+
+/**
+ * How close, centre to centre, a car will let itself get to the one in front.
+ *
+ * A little over one car length (0.938 authored times `CAR_SCALE`), so a queue settles nose to
+ * tail with a gap rather than with bodies overlapping.
+ */
+export const HEADWAY = 1.6
+
+/**
+ * Whether two cars are going the same way closely enough for one to be following the other.
+ *
+ * Half a right angle either side. Anything blunter and a car brakes for one crossing a
+ * junction; anything sharper and it stops seeing the car it is actually behind as it rounds
+ * a bend.
+ */
+const SAME_WAY = Math.cos(Math.PI / 4)
+
+/**
+ * What fraction of its step a car may take this frame, given the other cars on the road.
+ *
+ * 1 with a clear road, tapering to 0 as the gap to the car in front closes. Tapering rather
+ * than switching between go and stop: a car that only ever ran or stopped would judder behind
+ * anything that waits, and ambient traffic exists precisely not to draw the eye.
+ *
+ * Three things are deliberately *not* braked for, and each is a way this rule could ruin the
+ * street rather than improve it:
+ *
+ *  - **A car behind.** Obvious, but it is the difference between a queue and a deadlock.
+ *  - **Oncoming traffic.** The two directions drive either side of the centre line and pass
+ *    within a car's width of each other. Braking there would stop every car in the colony
+ *    dead every time it met one.
+ *  - **Anything crossing.** Cars have no right of way and no junction logic, so two may still
+ *    pass through each other at a crossroads. That is a visible flaw at close range; braking
+ *    on a perpendicular neighbour instead deadlocks every junction in the town, which is
+ *    worse, and giving them real priority rules is a different piece of work.
+ *
+ * Parked cars are not passed in and must not be: they stand in the kerbside strip, well clear
+ * of the running lane, and a moving car that braked for them would crawl the whole street.
+ *
+ * @param car `{x, z, heading}` — the car deciding how fast to go
+ * @param others the other *moving* cars, in the same shape; `car` itself may be among them
+ * @param gap the distance at which it starts to ease off, normally `HEADWAY`
+ */
+export function headwayFactor(car, others, gap) {
+  const fx = Math.sin(car.heading)
+  const fz = Math.cos(car.heading)
+  let factor = 1
+
+  for (const other of others) {
+    if (other === car) continue
+    const dx = other.x - car.x
+    const dz = other.z - car.z
+    const distance = Math.hypot(dx, dz)
+    if (!(distance > 0) || distance >= gap) continue
+    // In front, not behind or alongside.
+    if (dx * fx + dz * fz <= 0) continue
+    // Going the same way, so this is a car to follow rather than one to meet or to cross.
+    if (Math.sin(other.heading) * fx + Math.cos(other.heading) * fz < SAME_WAY) continue
+    factor = Math.min(factor, distance / gap)
+  }
+
+  return factor
 }
