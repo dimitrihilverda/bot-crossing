@@ -44,8 +44,28 @@ export const STREET_SEED = 20260916
 export const MIN_BLOCK = 1
 export const MAX_BLOCK = 2
 
-/** How often a cut steps sideways partway along, and how often it stops short of one end. */
-export const JOG_CHANCE = 0.45
+/**
+ * How often a cut steps sideways partway along, and how often it stops short of one end.
+ *
+ * Raised from 0.45 to 0.75 in the playful revision. At 0.45 the guard below only ever tried the
+ * one randomly-chosen sideways direction and only ever jogged once per cut, so — even though
+ * the chance itself looked generous — nearly every roll landed on a direction `options`
+ * rejected (the far side of the span, or a step that would cross a protected cell) and the cut
+ * just ran straight. Measured on the real network at the old chance and the old
+ * single-direction, single-jog logic: 6 bends out of 172 street cells. Trying both directions
+ * and allowing a cut to jog more than once (see `slice` below) fixes the mechanism; this raise
+ * is what then makes it fire often enough that a long street visibly wanders instead of
+ * stepping once — measured on the real network at 0.75 with the new mechanism: 31 bends out of
+ * 150 street cells (fewer street cells overall than before, not more: a cut that jogs several
+ * times excludes a wider band of its rectangle from further slicing — see the children
+ * rectangle computed from `legAts`' own min/max below — so a heavily-jogged network trades some
+ * of the *extra* streets a straight grid would have cut into that space for the turns
+ * themselves). Checked against everything that depends on street density: the median route
+ * still tiles at least 0.6 on-street (`test/route-on-street.test.mjs`) and every one of the
+ * 40-project spread still gets its cells (same test, and `test/streets.test.mjs`'s own growth
+ * test); see `test/street-plan.test.mjs`'s bend-count test for the pinned before/after.
+ */
+export const JOG_CHANCE = 0.75
 export const DEAD_END_CHANCE = 0.3
 
 /**
@@ -87,39 +107,63 @@ function slice(rect, rand, add) {
   const at = options[Math.floor(rand() * options.length)]
 
   const span = acrossHi - acrossLo + 1
-  let shift = 0
-  let jogAt = 0
-  if (span >= 4 && rand() < JOG_CHANCE) {
-    const dir = rand() < 0.5 ? -1 : 1
-    if (options.includes(at + dir)) {
-      shift = dir
-      // Strictly inside the span, so both legs of the jog exist.
-      jogAt = acrossLo + 1 + Math.floor(rand() * (span - 2))
-    }
-  }
-
-  // A dead end: the cut stops short of one end, leaving a street that goes nowhere. Only on
-  // an unjogged cut — trimming a jogged one can remove a whole leg.
-  let runLo = acrossLo
-  let runHi = acrossHi
-  if (shift === 0 && span >= 5 && rand() < DEAD_END_CHANCE) {
-    const trim = 1 + Math.floor(rand() * 2)
-    if (rand() < 0.5) runLo += trim
-    else runHi -= trim
-  }
-
   const put = (at_, across) => (cutX ? add(at_, across) : add(across, at_))
-  if (shift === 0) {
-    for (let a = runLo; a <= runHi; a++) put(at, a)
+
+  // `legs` is the cut's own path across the span, as `{ at, across }` pairs — usually one
+  // entry per across-index, but two at every jog point (see below). Kept separate from the
+  // `put` calls themselves so the children rectangles can be measured from the same list that
+  // was actually drawn, whichever branch below built it.
+  const legs = []
+
+  if (span >= 4 && rand() < JOG_CHANCE) {
+    // A jogging cut: walk the whole span, trying a sideways step at every interior index
+    // rather than once partway along — so a long street can wander several times, not just
+    // bend once. Both sideways directions are tried before giving up on a step: a jog is
+    // skipped only when neither `at + dir` nor `at - dir` is a legal position for the *whole*
+    // span (the same conservative, whole-span check `options` already encodes for the base
+    // cut) — trying only the randomly-chosen direction, as the previous revision did, rejected
+    // a jog whenever chance alone picked the side that happened to be blocked, which is why
+    // the old mechanism produced almost no bends despite its own chance looking generous.
+    let cur = at
+    for (let a = acrossLo; a <= acrossHi; a++) {
+      legs.push({ at: cur, across: a })
+      // No jog at the first or last index: a step there would leave one leg with nothing in
+      // it. `a === acrossHi` is checked as a `continue` rather than folded into the loop
+      // bound, because the current position still has to be recorded for that final index.
+      if (a === acrossLo || a === acrossHi) continue
+      if (rand() < JOG_CHANCE) {
+        const dir = rand() < 0.5 ? -1 : 1
+        let next = null
+        if (options.includes(cur + dir)) next = cur + dir
+        else if (options.includes(cur - dir)) next = cur - dir
+        if (next !== null) {
+          // The elbow: both the old and the new position are drawn at this same across-index,
+          // exactly as the single-jog version drew both legs at `jogAt`. That shared index is
+          // what keeps the cut one connected run rather than two cells diagonally adjacent
+          // (and therefore, on this square lattice, not adjacent at all).
+          legs.push({ at: next, across: a })
+          cur = next
+        }
+      }
+    }
   } else {
-    // The two legs both include `jogAt`, and those two cells differ by one along the cut
-    // axis — that adjacency is the step across, and it is why a jog stays connected.
-    for (let a = runLo; a <= jogAt; a++) put(at, a)
-    for (let a = jogAt; a <= runHi; a++) put(at + shift, a)
+    // A dead end: the cut stops short of one end, leaving a street that goes nowhere. Only on
+    // an unjogged cut — trimming a jogged one can remove a whole leg.
+    let runLo = acrossLo
+    let runHi = acrossHi
+    if (span >= 5 && rand() < DEAD_END_CHANCE) {
+      const trim = 1 + Math.floor(rand() * 2)
+      if (rand() < 0.5) runLo += trim
+      else runHi -= trim
+    }
+    for (let a = runLo; a <= runHi; a++) legs.push({ at, across: a })
   }
 
-  const cLo = Math.min(at, at + shift)
-  const cHi = Math.max(at, at + shift)
+  for (const leg of legs) put(leg.at, leg.across)
+
+  const legAts = legs.map((l) => l.at)
+  const cLo = Math.min(...legAts)
+  const cHi = Math.max(...legAts)
   const children = cutX
     ? [{ ...rect, x1: cLo - 1 }, { ...rect, x0: cHi + 1 }]
     : [{ ...rect, z1: cLo - 1 }, { ...rect, z0: cHi + 1 }]

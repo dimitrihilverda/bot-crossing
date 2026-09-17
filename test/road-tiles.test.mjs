@@ -18,11 +18,12 @@ const rot = (d, k) => {
 const asKeys = (dirs) => dirs.map((d) => `${d.x},${d.z}`).sort().join(' ')
 
 test('a corner is turned so its ports land on its actual arms', () => {
-  // road_corner's modelled ports, pinned by road-corner-glb.test.mjs.
+  // road_corner_curved's modelled ports, pinned by road-corner-glb.test.mjs — measured
+  // separately from road_corner's, not assumed to match, and they came back identical: [S, E].
   const base = [S, E]
   for (const arms of [[S, E], [E, N], [N, W], [W, S]]) {
     const { part, k } = tileFor(arms)
-    assert.equal(part, 'road_corner', `${asKeys(arms)} should be a corner`)
+    assert.equal(part, 'road_corner_curved', `${asKeys(arms)} should be a curved corner`)
     assert.equal(asKeys(base.map((d) => rot(d, k))), asKeys(arms), `${asKeys(arms)} got k=${k}`)
   }
 })

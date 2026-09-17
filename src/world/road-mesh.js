@@ -7,17 +7,23 @@ import { inTown } from './town-plan.js'
 
 /**
  * The street surface and its verge: a carriageway down the middle of each street cell, and —
- * for a cell that actually borders the town rather than open countryside — pavement,
- * streetlights, zebra crossings and traffic lights along it.
+ * for a cell that actually borders the town rather than open countryside — streetlights, zebra
+ * crossings and traffic lights along it.
  *
- * A street cell is not a paved cell. A cell is 12 units across — far wider than the
- * 2.4-wide carriageway needs — so paving one edge to edge would read as a plaza. The
- * carriageway runs down the middle and the rest is verge.
+ * There is no pavement. An earlier revision paved a footway alongside the carriageway, first
+ * to the cell's own boundary, then narrowed to a single kerb-hugging strip — both reverted in
+ * the playful revision: the owner asked for the pavement gone entirely, since a footway wider
+ * than the carriageway itself was wrong on its own terms and every attempt to tune its width
+ * only made the town read worse. A street cell is 12 units across — far wider than the
+ * 2.4-wide carriageway needs — but the rest of it is now bare verge, not paved surface; the
+ * town's buildings stand at its edge instead (see `SET_BACK` in `town-plan.js`).
  *
- * Every bend on this square lattice is a right angle (see `grid.js`), so a bend gets a real
- * `road_corner` tile, and a three- or four-way meeting gets `road_tsplit` or `road_junction`.
- * Which piece a cell needs, and which way it is turned, comes from `tileFor` — a function of
- * that cell's own street neighbours, not of any path walked through them.
+ * Every bend on this square lattice turns its two arms through a right angle (see `grid.js`),
+ * but the piece that draws it is no longer the hard-edged `road_corner` — the reference render
+ * KayKit's own promo art shows curved corners, so a bend now places `road_corner_curved`
+ * instead, and a three- or four-way meeting gets `road_tsplit` or `road_junction`. Which piece
+ * a cell needs, and which way it is turned, comes from `tileFor` — a function of that cell's
+ * own street neighbours, not of any path walked through them.
  */
 
 /** Every road piece in the kit is a 2 x 2 square tile, 0.1 thick, centred on the origin. */
@@ -95,12 +101,20 @@ const W = { x: -1, z: 0 }
 /**
  * The directions each piece's road leaves through, in its unrotated form. Measured from
  * `city.glb` and pinned by `road-corner-glb.test.mjs`: `road_straight` runs along its own Z,
- * and `road_corner` joins its +Z edge to its +X edge.
+ * and `road_corner_curved` joins its +Z edge to its +X edge.
  *
  * This is the fact the previous implementation guessed. It turned a corner by the *incoming*
  * heading alone, which cannot work — a bend is defined by two directions, and four headings
  * cannot name eight bends. Here the arms are the input, so the rotation is determined rather
  * than inferred.
+ *
+ * `CORNER_ARMS` names `road_corner_curved`'s own ports, not `road_corner`'s copied over on the
+ * assumption the two share a rotation table. They were measured separately (same atlas-cell
+ * method, see `road-corner-glb.test.mjs`'s own test for the curved part) precisely because nothing
+ * guarantees a rounded variant of a piece keeps the straight-edged one's port layout — and they
+ * came back identical: white centre arc x -0.02..0.90, z -0.02..0.90, amber arcs x -0.62..1.00,
+ * z -0.62..1.00, the same +Z-to-+X join `road_corner` has. So `CORNER_ARMS` carries over
+ * unchanged, but as a measured fact about the curved part in its own right, not an inherited one.
  */
 const STRAIGHT_ARMS = [N, S]
 const CORNER_ARMS = [S, E]
@@ -121,7 +135,7 @@ export function tileFor(arms) {
       ? { part: 'road_tsplit', arms: TSPLIT_ARMS }
       : arms.length === 1 || opposite
         ? { part: 'road_straight', arms: STRAIGHT_ARMS }
-        : { part: 'road_corner', arms: CORNER_ARMS }
+        : { part: 'road_corner_curved', arms: CORNER_ARMS }
   // A dead end has one arm and gets a straight laid along it: only the axis matters, so its
   // single arm is widened to the full port pair before matching.
   const want = arms.length === 1 ? [arms[0], { x: -arms[0].x, z: -arms[0].z }] : arms
@@ -182,7 +196,6 @@ export function carriagewayTiles(streetCells, cellSize) {
 // ── verge furniture ──────────────────────────────────────────────────────────────────
 
 /** The furniture pieces this module draws, all from the city atlas. */
-const PAVEMENT_PART = 'base'
 const LAMP_PART = 'streetlight'
 const CROSSING_PART = 'road_straight_crossing'
 /**
@@ -194,16 +207,17 @@ const CROSSING_PART = 'road_straight_crossing'
 export const TRAFFIC_LIGHT_PARTS = Object.freeze(['trafficlight_A', 'trafficlight_B'])
 
 /**
- * How far the pavement's kerb stands above the carriageway. `base` and the road surface UV
- * into the same atlas swatch (cell 2, `#818c91`) — the same grey — so a kerb cannot read as a
- * colour change, only as a height step and the shadow it casts. Streetlights and traffic
- * lights use the same figure for their own lift: both now stand within the pavement's own
- * footprint (the lamp on the kerb band's centre line, the signal on the corner tile near the
- * junction — see the offsets in `vergeFurniture`'s own doc comment below), not out on bare
- * terrain beyond it, so sharing the pavement's lift reads correctly for all three. Pinned by
- * a test: swapping this for `ROAD_SURFACE_LIFT` (kerb flush with the carriageway) must fail it.
+ * How far past the carriageway's own edge a piece of kerbside furniture stands — a lamp or a
+ * traffic light, now that there is no pavement to place either "on". Half the carriageway
+ * width (`CARRIAGEWAY_WIDTH / 2` = 1.2) is where the asphalt itself ends; this adds a small
+ * margin so a lamp post or a signal pole's own base does not sit flush with (and, given any
+ * floating-point slack, occasionally inside) the outermost carriageway tile. 0.6 is that
+ * margin — half the sub-grid step (`CELL_SIZE / SUBGRID` = 2.4) — chosen only to be
+ * comfortably larger than either fixture's own footprint (a `streetlight` mast measures
+ * ±0.035 unscaled, a few hundredths of a unit even at this module's largest furniture scale)
+ * while still reading as "at the roadside" rather than out in open verge.
  */
-export const VERGE_LIFT = ROAD_SURFACE_LIFT * 8
+const KERB_CLEARANCE = 0.6
 
 /** A JS `%` can come back negative; this never does. */
 const mod = (n, m) => ((n % m) + m) % m
@@ -239,52 +253,21 @@ function isFurnished(cell, streetKeys) {
  * the road surface itself: one street cell at a time, from that cell's own arms.
  *
  * Gated by `isFurnished` (R11) — a cell that fails it contributes nothing here, so the
- * network's country-lane stretches stay bare carriageway with no kerb, lamp or light.
+ * network's country-lane stretches stay bare carriageway with no lamp or light. There is no
+ * pavement to gate here any more either; R11 now governs only the three things left in this
+ * list.
  *
- * - **Pavement.** A footway, not a plaza: for each arm, one `base` tile per side, at the same
- *   two sub-grid steps `carriagewayTiles` lays along that arm, offset one sub-grid step
- *   perpendicular so no tile lands on the carriageway itself. That alone lays an unbroken band
- *   the full length of the arm, from flush with the centre tile (perpendicular offset 1 step's
- *   inner edge sits at the carriageway's own edge, 1.2 world units off the centre line) out to
- *   1 step's outer edge, at 3.6 — the single sub-grid tile immediately outside the kerb, not
- *   the whole 4.8-unit verge.
- *
- *   A widened version of this band — paving the *whole* verge, both perpendicular steps out
- *   to the cell's own boundary at 6.0 — was tried in an earlier revision and reverted: it read
- *   as a grey plaza rather than a pavement, and it pushed the town's buildings *away* from the
- *   street rather than toward it, since `SET_BACK` in `town-plan.js` was kept flush with
- *   whatever the paved band's own outer edge was. The owner's actual complaint — buildings
- *   reading as far from the road — is fixed the other way: the footway stays this narrow, and
- *   the 2.4-unit verge it no longer covers is where the block's own terrace now stands (see
- *   `SET_BACK`'s own doc comment in `town-plan.js`).
- *
- *   That band alone still breaks at a turn: where two perpendicular arms meet, each arm's own
- *   strip stops one step short of the cell's true corner, leaving a notch in the outer
- *   quadrant between them (the "verspringing" the reference render never shows — its kerb runs
- *   straight around every corner). This closes it: for every pair of this cell's own arms that
- *   are perpendicular to each other (their dot product is 0 — opposite arms, dot −1, get no
- *   corner tile, since a straight run has no notch to close), one more `base` tile is laid at
- *   2 steps out on each of their two axes at once — the shared outer corner both arms' own
- *   strips fall just short of. That tile is flush with both arms' own outer (2-step) tiles and
- *   with the cell boundary on both axes, so the band now runs continuously along every arm and
- *   turns every corner with no gap, meeting the next street cell's own pavement edge to edge
- *   (or, diagonally across an intersection, corner to corner) with nothing missing between.
- *
- *   A cell with two perpendicular arms (a corner, a T-junction or a crossing) has more than
- *   one arm claim the same tile at points where their strips or corners coincide (the classic
- *   case: two perpendicular arms' inner sub-grid-step tiles are the same tile) — deduplicated
- *   below, or the count would overstate the vertex cost and this module's own "no coincident
- *   slabs" claim would be false.
- * - **Streetlights.** One per arm, standing on the kerb rather than beyond it: 1.5 sub-grid
- *   steps out along the arm (between the pavement's two along-arm tiles, at the seam where
- *   they meet) and exactly 1 sub-grid step off the centre line — the pavement band's own
- *   centre (the band runs from 1 to 2 steps off centre; 1 step is its inner edge, flush with
- *   the carriageway, so this stands mid-band, clear of the road and still visibly at the
- *   roadside rather than out on the open verge beyond the band's outer edge). No sub-grid
- *   placement this module makes ever lands at 1.5 steps along an arm, so a lamp never
- *   coincides with a pavement tile, a crossing, or the traffic light below. Which side
- *   alternates with the parity of `cell.x + cell.z`, so a street does not grow lamps down one
- *   side only.
+ * - **Streetlights.** One per arm, standing at the kerb line — just outside the carriageway's
+ *   own edge, not out in the open verge beyond it. `KERB_CLEARANCE` is the margin past
+ *   `CARRIAGEWAY_WIDTH / 2` (1.2, the carriageway's own half-width); the lamp's perpendicular
+ *   offset from the arm's centre line is `CARRIAGEWAY_WIDTH / 2 + KERB_CLEARANCE` = 1.8, close
+ *   enough to read as standing at the roadside and, since the carriageway tile it stands beside
+ *   is itself only 1.2 wide from that centre line, far enough (0.6 clear) that the two never
+ *   overlap. Along the arm it stands 1.5 sub-grid steps out — midway between the centre tile's
+ *   own edge (1 step) and the arm's outer tile (2 steps) — which no other placement in this
+ *   module ever lands on, so a lamp never coincides with a crossing or the traffic light below.
+ *   Which side alternates with the parity of `cell.x + cell.z`, so a street does not grow lamps
+ *   down one side only.
  *
  *   `streetlight` has a front: measured from `city.glb`, its cantilever arm reaches along
  *   local −X (to x −0.239) and the lit lens sits at that tip, while the mast itself is only
@@ -292,11 +275,11 @@ function isFurnished(cell, streetKeys) {
  *   is correct for only a quarter of placements. Three.js's `makeRotationY(θ)` sends local
  *   `(x, z)` to `(x cosθ + z sinθ, −x sinθ + z cosθ)`, so local `(−1, 0)` (the arm's own
  *   direction) lands on `(−cosθ, sinθ)`. Let `v` be the unit direction from the lamp toward
- *   the carriageway it should overhang — here, back across the pavement toward this arm's own
+ *   the carriageway it should overhang — here, back across the verge toward this arm's own
  *   centre line, i.e. `-lampSide * perp`. Setting `(−cosθ, sinθ) = v` gives
  *   `cosθ = −v.x, sinθ = v.z`, so `θ = atan2(v.z, −v.x)`. This derivation does not depend on
  *   the lamp's exact distance from the centre line, only on which side it stands, so moving
- *   the lamp onto the kerb leaves the facing formula itself unchanged.
+ *   the lamp to the kerb line leaves the facing formula itself unchanged.
  * - **Zebra crossings.** On a furnished cell with three or four arms (R7), one arm is chosen
  *   deterministically by `cellHash` and its outermost carriageway tile is replaced by
  *   `road_straight_crossing` at that tile's own position, scale and rotation — the same
@@ -304,18 +287,17 @@ function isFurnished(cell, streetKeys) {
  *   is what actually drops the plain tile there; this only names where the crossing goes.
  * - **Traffic lights.** One on every furnished cell with three or four arms (R7), facing the
  *   same arm the crossing on that cell governs — the sign for the crossing it stands beside.
- *   It stands at the corner of the junction rather than out by the crossing: 0.75 sub-grid
- *   steps out along the governed arm and 0.75 steps to one side, perpendicular — inside the
- *   pavement's own footprint near the inner corner nearest the carriageway (a real light does
- *   stand on the corner of the sidewalk, not out on the open verge), and clear of the
- *   carriageway itself, whose half-width (1.2) is exactly half a sub-grid step: 0.75 steps
- *   (1.8 units) leaves 0.6 units of clearance past the carriageway's own edge.
- *   No other placement in this module ever lands at 0.75 sub-grid steps on an axis — every
- *   pavement tile, streetlight and crossing sits at 1, 1.5 or 2 steps — so a traffic light
- *   can never coincide with any of them, on this cell or any other, without having to track
- *   what has already been placed (a coincident post and signal — see the 15-collision defect
- *   an earlier round of this module shipped — cannot arise from one feature's positions never
- *   sharing a step value with any other's).
+ *   It stands at the corner of the junction rather than out by the crossing: `KERB_CLEARANCE`
+ *   past the carriageway's own half-width on *both* axes at once — `CARRIAGEWAY_WIDTH / 2 +
+ *   KERB_CLEARANCE` = 1.8 out along the governed arm and the same 1.8 to one side,
+ *   perpendicular (0.75 sub-grid steps each way, since the sub-grid step is 2.4) — just clear
+ *   of the carriageway on both the approach and the cross street, the way a real signal stands
+ *   at the corner of a junction rather than out on the open verge. No other placement in this
+ *   module ever lands at 0.75 sub-grid steps on an axis — a streetlight and a crossing both sit
+ *   at 1, 1.5 or 2 steps — so a traffic light can never coincide with either, on this cell or
+ *   any other, without having to track what has already been placed (a coincident post and
+ *   signal — see the 15-collision defect an earlier round of this module shipped — cannot arise
+ *   from one feature's positions never sharing a step value with any other's).
  *
  *   `trafficlight_A` and `_B` both carry their three lens groups (red/amber/green) pinned to
  *   the model's own +Z face. Local +Z maps to `(sinθ, cosθ)` under the same rotation, so
@@ -325,17 +307,14 @@ function isFurnished(cell, streetKeys) {
  *   approaches the junction.
  *
  *   `trafficlight_C` — the same head on a gantry arm reaching to local x = −0.764 (measured
- *   from `city.glb`) — stays out of `TRAFFIC_LIGHT_PARTS` in this revision too, but the reason
- *   has changed along with the pole's position. At the old position (pole 3.6 units off the
- *   centre line, carriageway edge at 1.2) the gap the gantry needed to close was 2.4 units —
- *   over three times its own 0.764-unit reach, a hard shortfall no placement could fix. At the
- *   new position (pole 1.8 units off the centre line) the gap is only 0.6 units, *inside* the
- *   gantry's own reach — geometrically the arm could now swing back across the carriageway
- *   edge. `_C` is kept out anyway: re-admitting it is a separate decision (new reach math to
- *   verify, a different visual mix of pole and gantry signals along the network) outside this
- *   revision's scope, which is the three lamp/signal *positions* named in the brief, not the
- *   part pool. `_A`/`_B`, plain pole signals whose facing was already verified correct, are
- *   unaffected by any of this and remain the only parts this pool ever draws from.
+ *   from `city.glb`) — stays out of `TRAFFIC_LIGHT_PARTS`. At this pole position (1.8 units off
+ *   the centre line, carriageway edge at 1.2) the gap the gantry would need to close is only
+ *   0.6 units, *inside* the gantry's own 0.764-unit reach — geometrically the arm could swing
+ *   back across the carriageway edge. `_C` is kept out anyway: re-admitting it is a separate
+ *   decision (new reach math to verify, a different visual mix of pole and gantry signals along
+ *   the network) outside this revision's scope. `_A`/`_B`, plain pole signals whose facing was
+ *   already verified correct, are unaffected by any of this and remain the only parts this pool
+ *   ever draws from.
  *
  * @param streetCells every street cell, `{x, z}`
  * @param cellSize world units per cell
@@ -344,14 +323,9 @@ function isFurnished(cell, streetKeys) {
 export function vergeFurniture(streetCells, cellSize) {
   const keys = new Set(streetCells.map((c) => `${c.x},${c.z}`))
   const step = cellSize / SUBGRID
-  const scale = roadTileScale()
+  const kerb = CARRIAGEWAY_WIDTH / 2 + KERB_CLEARANCE
   const armsOf = (c) => [N, S, E, W].filter((d) => keys.has(`${c.x + d.x},${c.z + d.z}`))
   const out = []
-  // Two perpendicular arms of the same cell claim the same inner-diagonal pavement tile (see
-  // the doc comment above); keyed on the rounded position so the second arm to reach it is
-  // skipped rather than laid a second time.
-  const pavementSeen = new Set()
-  const posKey = (x, z) => `${x.toFixed(6)},${z.toFixed(6)}`
 
   for (const c of streetCells) {
     if (!isFurnished(c, keys)) continue
@@ -363,50 +337,18 @@ export function vergeFurniture(streetCells, cellSize) {
 
     for (const d of arms) {
       const perp = rot(d)
-      for (let i = 1; i <= (SUBGRID - 1) / 2; i++) {
-        for (const side of [1, -1]) {
-          const x = cx + d.x * step * i + side * perp.x * step
-          const z = cz + d.z * step * i + side * perp.z * step
-          const key = posKey(x, z)
-          if (pavementSeen.has(key)) continue
-          pavementSeen.add(key)
-          out.push({ part: PAVEMENT_PART, x, z, ry: 0, scale, lift: VERGE_LIFT })
-        }
-      }
       // v: unit direction from the lamp back to this arm's own centre line, i.e. the
-      // carriageway it should overhang. θ = atan2(v.z, -v.x) — derived above. Stands on the
-      // kerb: 1.5 steps along the arm (the seam between the pavement's two along-arm tiles),
-      // 1 step off the centre line (the pavement band's own centre, clear of the carriageway
-      // at 1 step's inner edge).
+      // carriageway it should overhang. θ = atan2(v.z, -v.x) — derived above. Stands at the
+      // kerb line: 1.5 sub-grid steps along the arm, `kerb` (1.8) off the centre line.
       const v = { x: -lampSide * perp.x, z: -lampSide * perp.z }
       out.push({
         part: LAMP_PART,
-        x: cx + d.x * step * 1.5 + lampSide * perp.x * step,
-        z: cz + d.z * step * 1.5 + lampSide * perp.z * step,
+        x: cx + d.x * step * 1.5 + lampSide * perp.x * kerb,
+        z: cz + d.z * step * 1.5 + lampSide * perp.z * kerb,
         ry: Math.atan2(v.z, -v.x),
         scale: 1.6,
-        lift: VERGE_LIFT,
+        lift: ROAD_SURFACE_LIFT,
       })
-    }
-
-    // Corner pavement: where two of this cell's own arms are perpendicular to each other, the
-    // strip each one lays (above) stops one sub-grid step short of the true outer corner
-    // between them — see the doc comment. Laying one more tile there, 2 steps out on each of
-    // both arms' own axes at once, closes that notch so the band turns the corner with no gap.
-    // Opposite arms (dot product -1, a straight run) get no corner tile — there is no notch to
-    // close there, since the two strips run parallel rather than meeting at a corner.
-    for (let i = 0; i < arms.length; i++) {
-      for (let j = i + 1; j < arms.length; j++) {
-        const d1 = arms[i]
-        const d2 = arms[j]
-        if (d1.x * d2.x + d1.z * d2.z !== 0) continue
-        const x = cx + (d1.x + d2.x) * step * 2
-        const z = cz + (d1.z + d2.z) * step * 2
-        const key = posKey(x, z)
-        if (pavementSeen.has(key)) continue
-        pavementSeen.add(key)
-        out.push({ part: PAVEMENT_PART, x, z, ry: 0, scale, lift: VERGE_LIFT })
-      }
     }
 
     if (arms.length >= 3) {
@@ -418,25 +360,23 @@ export function vergeFurniture(streetCells, cellSize) {
         x: cx + d.x * step * 2,
         z: cz + d.z * step * 2,
         ry: (along.k * Math.PI) / 2,
-        scale,
+        scale: roadTileScale(),
         lift: ROAD_SURFACE_LIFT,
       })
 
       // Faces along `d`, the governed arm's own outward direction — toward the traffic
-      // driving in along it. Stands at the corner of the junction, 0.75 sub-grid steps out
-      // along the arm and 0.75 to the far (`-perp`) side — inside the pavement's own footprint
-      // near the carriageway, clear of it (see the doc comment for the clearance figure), and
-      // off the whole- and half-step grid every other piece here uses, so it can never
-      // coincide with a pavement tile, a streetlight or a crossing.
-      // `TRAFFIC_LIGHT_PARTS` excludes `trafficlight_C`; see the doc comment above — no longer
-      // a hard reach shortfall at this position, but still out of scope for this revision.
+      // driving in along it. Stands at the junction corner, `kerb` (1.8) out along the arm and
+      // `kerb` to the far (`-perp`) side — clear of the carriageway on both axes (see the doc
+      // comment for the clearance figure), and off the whole- and half-step grid every other
+      // piece here uses, so it can never coincide with a streetlight or a crossing.
+      // `TRAFFIC_LIGHT_PARTS` excludes `trafficlight_C`; see the doc comment above.
       out.push({
         part: TRAFFIC_LIGHT_PARTS[mod(h, TRAFFIC_LIGHT_PARTS.length)],
-        x: cx + d.x * step * 0.75 - perp.x * step * 0.75,
-        z: cz + d.z * step * 0.75 - perp.z * step * 0.75,
+        x: cx + d.x * kerb - perp.x * kerb,
+        z: cz + d.z * kerb - perp.z * kerb,
         ry: Math.atan2(d.x, d.z),
         scale: 1,
-        lift: VERGE_LIFT,
+        lift: ROAD_SURFACE_LIFT,
       })
     }
   }
@@ -447,7 +387,13 @@ export function vergeFurniture(streetCells, cellSize) {
 
 /** The pieces this module draws, all from the city atlas. */
 const STRAIGHT_PART = 'road_straight'
-const CORNER_PART = 'road_corner'
+/**
+ * The playful revision's own change: every bend used the hard 90-degree `road_corner` before
+ * this; the reference render's corners read as rounded, so bends now place this curved piece
+ * instead. Its ports were measured separately, not assumed identical to `road_corner`'s — see
+ * `CORNER_ARMS`'s own doc comment above.
+ */
+const CORNER_PART = 'road_corner_curved'
 const TSPLIT_PART = 'road_tsplit'
 const JUNCTION_PART = 'road_junction'
 
@@ -455,7 +401,7 @@ const JUNCTION_PART = 'road_junction'
  * Build the street surface — and, where `vergeFurniture` puts one, its verge — for one
  * street plan.
  *
- * One merged geometry per kit part (`road_straight`, `road_corner`, `road_tsplit`,
+ * One merged geometry per kit part (`road_straight`, `road_corner_curved`, `road_tsplit`,
  * `road_junction`, plus whichever verge parts a real network actually uses), so the whole
  * street network is a handful of draw calls however large the colony grows — a new part
  * costs no new code, only one more entry in `composers`. Merging is what the city atlas is

@@ -86,23 +86,31 @@ import { blockContent, inTown } from './town-plan.js'
  * building variants, `GREEN_SHARE`, and last `TOWN_CELL_RADIUS` — which redraws the street
  * network too, since `street-plan.js` shares it.
  *
- * Re-measured again in the tighten revision (`MAX_BLOCK` 3 -> 2 in `street-plan.js`, the
- * pavement narrowed back to a footway and `SET_BACK` moved out to meet it — see their own doc
- * comments): the real network places 332 buildings for **760,343** vertices — up slightly
- * from the previous revision's 327 / 750,285 (more, smaller blocks means slightly more
- * frontage overall, only partly offset by the new diagonal-corner skip in `blockContent`) —
- * still comfortably under this ceiling, with 549,657 to spare. This figure, like the one
- * before it, counts only `townPlan`'s own buildings, not the street surface and verge
- * furniture `road-mesh.js` draws alongside them (carriageway, footway, lamps, signals,
- * crossings): those are cheap per piece (measured at 104-272 vertices each, depending on the
- * part) but the real network places about 2,000 of them, for **243,910** vertices total —
- * *down* from the previous revision's 285,980 despite the higher street-cell count (172, up
- * from 156), because narrowing the pavement back to one sub-grid tile per side removes far
- * more vertices than the extra street cells add. Buildings and street geometry together come
- * to 1,004,253, itself under `TOWN_VERTEX_BUDGET` — but that combined figure is not what
- * `test/town-mesh.test.mjs`'s own ceiling check measures (it sums `townPlan`'s buildings
- * only, matching this constant's own name), so it is reported here for completeness rather
- * than pinned by a test of its own. None of the levers above was needed by this revision:
+ * Re-measured again in the playful revision (curved corners, no pavement, streets that jog
+ * repeatedly, `SET_BACK` brought to the kerb line — see each constant's own doc comment): the
+ * real network places 186 buildings for **418,456** vertices — well down from the tighten
+ * revision's 332 / 760,343. Two changes pull in the same direction. First, more street cells
+ * turn, and turning costs frontage: `CORNER_SKIP_COUNT` (`town-plan.js`) now leaves two slots
+ * empty at a real or diagonal corner instead of one, because `SET_BACK`'s own increase (7.2 ->
+ * 9.0, to reach the kerb line with no footway between) put a second slot inside the collision
+ * radius that only the outermost slot used to reach — see that constant's own doc comment for
+ * the geometry, and `test/town-plan.test.mjs`'s overlap test for the measured defect (two real
+ * buildings 0.6 units deep into each other) this closes. Second, the street network itself has
+ * far more corners and fewer long straight runs (31 bends against the tighten revision's 6,
+ * `JOG_CHANCE` 0.45 -> 0.75 in `street-plan.js`), so a larger share of the town's frontage now
+ * sits at one of those corner-priced cells. The result is comfortably under this ceiling
+ * regardless, with 891,544 to spare. This figure, like the ones before it, counts only
+ * `townPlan`'s own buildings, not the street surface and verge furniture `road-mesh.js` draws
+ * alongside them (carriageway, streetlights, crossings, traffic lights — there is no pavement
+ * left to count): the real, more heavily-jogged network places fewer street cells overall than
+ * the tighten revision did (150, down from 172 — see `JOG_CHANCE`'s own doc comment for why a
+ * bendier network is not necessarily a bigger one) for **166,704** vertices total, itself well
+ * down from the tighten revision's 243,910 now that there is no footway to draw — the pavement
+ * alone was worth roughly 70,000 of that difference. Buildings and street geometry together
+ * come to 585,160, itself far under `TOWN_VERTEX_BUDGET` — but that combined figure is not what
+ * `test/town-mesh.test.mjs`'s own ceiling check measures (it sums `townPlan`'s buildings only,
+ * matching this constant's own name), so it is reported here for completeness rather than
+ * pinned by a test of its own. None of the levers above was needed by this revision:
  * `GREEN_SHARE` stays at 0.3.
  */
 export const TOWN_VERTEX_BUDGET = 1310000

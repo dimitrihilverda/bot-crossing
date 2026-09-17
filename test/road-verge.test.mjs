@@ -5,11 +5,8 @@ import {
   carriagewayTiles,
   CARRIAGEWAY_WIDTH,
   ROAD_SURFACE_LIFT,
-  VERGE_LIFT,
   SUBGRID,
   TRAFFIC_LIGHT_PARTS,
-  ROAD_TILE_SIZE,
-  roadTileScale,
 } from '../src/world/road-mesh.js'
 import { planStreets } from '../src/world/streets.js'
 import { inTown } from '../src/world/town-plan.js'
@@ -36,71 +33,21 @@ const bordersTown = (cell) =>
     return !streetKeys.has(`${n.x},${n.z}`) && inTown(n)
   })
 
+// The playful revision's own clearance figure, recomputed here rather than imported from
+// road-mesh.js: how far past the carriageway's own half-width (1.2) a lamp or a traffic light
+// stands. See road-mesh.js's own doc comment on vergeFurniture for the derivation.
+const KERB = CARRIAGEWAY_WIDTH / 2 + 0.6
+
 /** Every piece of furniture a cell can produce sits strictly inside that cell's own 12-unit
- *  footprint (max offset from centre is 2 sub-grid steps = 4.8, under the 6-unit half-width),
- *  the same way carriagewayTiles's own tiles never spill into a neighbour's footprint. So a
- *  cell's bounding box is a reliable way to ask "did this cell get any furniture at all". */
+ *  footprint (the largest offset from centre either a lamp or a light ever reaches is `KERB`,
+ *  1.8, well under the 6-unit half-width), the same way carriagewayTiles's own tiles never
+ *  spill into a neighbour's footprint. So a cell's bounding box is a reliable way to ask "did
+ *  this cell get any furniture at all". */
 const inCell = (cell) => {
   const cx = cell.x * CELL_SIZE
   const cz = cell.z * CELL_SIZE
   return furniture.filter((f) => Math.abs(f.x - cx) < CELL_SIZE / 2 && Math.abs(f.z - cz) < CELL_SIZE / 2)
 }
-
-test('pavement runs alongside the carriageway, not on it', () => {
-  const paving = of('base')
-  assert.ok(paving.length > 50, `only ${paving.length} pavement tiles`)
-
-  // A pavement tile's offset from the carriageway has to be measured on the axis
-  // *perpendicular* to the arm it belongs to, not on whichever of the two axes happens to be
-  // larger: for an arm's inner sub-grid step, the along-arm offset (one step) equals the
-  // perpendicular offset, so `max(dx, dz)` cannot tell the two apart there — and for a
-  // pavement tile with no perpendicular offset at all, the along-arm coordinate alone is
-  // still large enough to make `max` pass regardless. Proven: deleting the perpendicular
-  // offset from `vergeFurniture` (so every `base` tile lands on its arm's own centre line)
-  // still passes the old `max(dx, dz) >= CARRIAGEWAY_WIDTH / 2` assertion for every one of
-  // the 800 tiles it produces, because the along-arm coordinate carries that assertion alone.
-  //
-  // So this recomputes, independently of road-mesh.js, which axis is perpendicular for every
-  // (cell, arm) pair a furnished cell can produce — d.x === 0 means the arm runs along z, so
-  // the perpendicular axis is x, and vice versa — and checks only that axis's offset from the
-  // cell's own centre against half a carriageway width.
-  let checked = 0
-  for (const c of streets.cells) {
-    if (!bordersTown(c)) continue
-    const cx = c.x * CELL_SIZE
-    const cz = c.z * CELL_SIZE
-    for (const d of armsOf(c)) {
-      const perpAxis = d.x === 0 ? 'x' : 'z'
-      const centre = perpAxis === 'x' ? cx : cz
-      // Every pavement tile this arm can produce sits at one of two sub-grid steps along the
-      // arm; a tile search by exact along-position would re-derive the "perpendicular offset
-      // exists" fact from the module under test, so instead every actual pavement tile within
-      // this cell's own footprint is checked directly against the arm it must belong to.
-      for (const p of paving) {
-        if (Math.abs(p.x - cx) >= CELL_SIZE / 2 || Math.abs(p.z - cz) >= CELL_SIZE / 2) continue
-        // Only a tile actually laid along this arm's own axis (its non-perpendicular
-        // coordinate at one or two sub-grid steps from centre, signed to match `d`) is this
-        // arm's to check — a tile belonging to a different arm of the same cell is skipped
-        // here and picked up when that arm is its turn.
-        const alongAxis = perpAxis === 'x' ? 'z' : 'x'
-        const alongCentre = alongAxis === 'x' ? cx : cz
-        const alongOffset = (p[alongAxis] - alongCentre) * (d[alongAxis] > 0 ? 1 : -1)
-        const step = CELL_SIZE / SUBGRID
-        const isThisArm =
-          d[alongAxis] !== 0 && (Math.abs(alongOffset - step) < 1e-6 || Math.abs(alongOffset - 2 * step) < 1e-6)
-        if (!isThisArm) continue
-        checked++
-        const perpOffset = Math.abs(p[perpAxis] - centre)
-        assert.ok(
-          perpOffset >= CARRIAGEWAY_WIDTH / 2,
-          `pavement tile at ${p.x},${p.z} (arm ${JSON.stringify(d)} of cell ${c.x},${c.z}) is only ` +
-            `${perpOffset} off the carriageway's own centre line, on the ${perpAxis} axis`
-        )
-      }
-    }
-  }
-  assert.ok(checked > 50, `only checked ${checked} pavement tiles against their own arm`)
-})
 
 test('streetlights stand along the roads, not only at corners', () => {
   const lamps = of('streetlight')
@@ -117,8 +64,8 @@ test('the furniture is deterministic', () => {
 
 test('a country-lane cell — no in-town block on any of its four sides — gets no furniture at all', () => {
   // Fails if R11's gate is ever dropped, loosened (e.g. checking only street neighbours) or
-  // inverted: a real bare cell exists in the network (the same fact Task 6's report measured
-  // — 64 of 156), so this is not a vacuous pass over an empty candidate list.
+  // inverted: a real bare cell exists in the network, so this is not a vacuous pass over an
+  // empty candidate list.
   const bare = streets.cells.filter((c) => !bordersTown(c))
   assert.ok(bare.length > 0, 'no bare (country-lane) cell found in the real network to test against')
   for (const c of bare.slice(0, 5)) {
@@ -202,34 +149,19 @@ test('a crossing replaces its arm\'s outermost carriageway tile exactly — same
   }
 })
 
-// ── minor findings: dedup, VERGE_LIFT, and no coincident furniture ─────────────────────────
+// ── minor findings: no coincident furniture ─────────────────────────────────────────────
 
 test('no two pieces of verge furniture occupy the same x/z', () => {
   // Mirrors the no-coincident-tiles assertion road-tiles.test.mjs makes for the carriageway
-  // itself. Catches both the 45 duplicate inner-diagonal pavement tiles two perpendicular
-  // arms of the same cell used to both emit, and a traffic light standing inside a
-  // streetlight at the verge's diagonal corners.
+  // itself. With no pavement left to place, this now guards only the streetlight/crossing/
+  // traffic-light trio, but the risk it catches is the same one the old dedup bug was: a
+  // traffic light standing inside a streetlight at a verge's diagonal corners.
   const seen = new Map()
   for (const f of furniture) {
     const k = `${f.x.toFixed(4)},${f.z.toFixed(4)}`
     assert.ok(!seen.has(k), `${seen.get(k)} and ${f.part} land on the same spot at ${k}`)
     seen.set(k, f.part)
   }
-})
-
-test('the kerb is a height step, not a colour change: pavement lifts clear of the carriageway', () => {
-  // `base` and the road surface UV into the same atlas swatch (cell 2), so the only thing
-  // that can make a kerb read as a kerb is a real vertical gap. Pinned directly: setting
-  // VERGE_LIFT equal to ROAD_SURFACE_LIFT (kerb flush with the carriageway, an invisible
-  // same-grey apron) used to pass every other test in this suite.
-  assert.ok(VERGE_LIFT > ROAD_SURFACE_LIFT, 'VERGE_LIFT does not clear ROAD_SURFACE_LIFT at all')
-  assert.ok(
-    VERGE_LIFT - ROAD_SURFACE_LIFT > ROAD_SURFACE_LIFT,
-    `VERGE_LIFT (${VERGE_LIFT}) is barely above ROAD_SURFACE_LIFT (${ROAD_SURFACE_LIFT}) — too small a step to read as a kerb`
-  )
-  const paving = of('base')
-  assert.ok(paving.length > 0, 'no pavement tiles to check the lift of')
-  for (const p of paving) assert.equal(p.lift, VERGE_LIFT, `pavement tile at ${p.x},${p.z} uses lift ${p.lift}`)
 })
 
 // ── facing: the streetlight and the traffic light both have a front (see the doc comments in
@@ -250,11 +182,10 @@ test('a streetlight\'s arm overhangs its own arm\'s carriageway, not the block b
     const lampSide = (c.x + c.z) % 2 === 0 ? 1 : -1
     for (const d of armsOf(c)) {
       const perp = { x: d.z, z: -d.x }
-      // 1.5 steps along the arm (the seam between the pavement's two along-arm tiles), 1 step
-      // off the centre line (the pavement band's own centre) — see the streetlight-offset
-      // pinning test below for why exactly these figures.
-      const x = cx + d.x * step * 1.5 + lampSide * perp.x * step
-      const z = cz + d.z * step * 1.5 + lampSide * perp.z * step
+      // 1.5 steps along the arm, `KERB` (1.8) off the centre line — see the streetlight-
+      // offset pinning test below for why exactly these figures.
+      const x = cx + d.x * step * 1.5 + lampSide * perp.x * KERB
+      const z = cz + d.z * step * 1.5 + lampSide * perp.z * KERB
       const lamp = lamps.find((l) => Math.abs(l.x - x) < 1e-6 && Math.abs(l.z - z) < 1e-6)
       if (!lamp) continue
       checked++
@@ -279,18 +210,15 @@ test('a streetlight\'s arm overhangs its own arm\'s carriageway, not the block b
 
 test('the traffic-light selection pool keeps the gantry variant out', () => {
   // trafficlight_C's gantry arm reaches 0.764 units (measured from city.glb). At this
-  // revision's pole position — 0.75 sub-grid steps (1.8 units) off the centre line, against a
-  // carriageway half-width of 1.2 — the gap to close is only 0.6 units, inside the gantry's
-  // own reach: unlike the pole's old position (3.6 units off centre, a 2.4-unit gap the
-  // 0.764-unit arm could never close), this is no longer a hard geometric shortfall. `_C` is
-  // kept out of the pool anyway: re-admitting it is a separate decision — new reach math to
-  // verify, a different visual mix of pole and gantry signals — outside this revision's scope,
-  // which only moved the two existing parts' position. Only the two pole-mounted variants are
-  // chosen.
+  // revision's pole position — KERB (1.8) off the centre line, against a carriageway
+  // half-width of 1.2 — the gap to close is only 0.6 units, inside the gantry's own reach.
+  // `_C` is kept out of the pool anyway: re-admitting it is a separate decision — new reach
+  // math to verify, a different visual mix of pole and gantry signals — outside this
+  // revision's scope. Only the two pole-mounted variants are chosen.
   assert.deepEqual([...TRAFFIC_LIGHT_PARTS], ['trafficlight_A', 'trafficlight_B'])
 
   // Confirms the exclusion actually reaches the real network's output, not just the pool's
-  // own declaration — every one of the 20 real furnished junctions must have picked from that
+  // own declaration — every one of the real furnished junctions must have picked from that
   // pool, so none of them should ever produce a trafficlight_C.
   const gantries = of('trafficlight_C')
   assert.equal(gantries.length, 0, `${gantries.length} real trafficlight_C placements found`)
@@ -329,21 +257,23 @@ test('a traffic light faces the traffic on the arm it governs', () => {
   assert.ok(checked > 0, `only checked ${checked} traffic lights against their governed arm`)
 })
 
-// ── design revision: lamps onto the kerb, signals onto the junction corner, pavement sealed
-// around every turn (see road-mesh.js's own doc comments for the derivation of each figure) ──
+// ── playful revision: lamps and signals at the kerb line, now that there is no pavement to
+// stand on (see road-mesh.js's own doc comment on vergeFurniture for the derivation of the
+// `KERB` figure) ─────────────────────────────────────────────────────────────────────────────
 
-test('streetlights stand on the kerb, not out beyond the pavement in open grass', () => {
-  // Independent of road-mesh.js's own `d`/`perp` bookkeeping: a lamp sits `1.5` sub-grid steps
-  // along its arm and `1` step off the centre line, and — because the arm direction and its
-  // perpendicular are always axis-aligned and orthogonal — that always puts exactly one of
-  // the lamp's own local x/z offsets from its cell's centre at 1.5 steps (3.6 units) and the
-  // other at 1 step (2.4 units), regardless of which of the four arms it belongs to. So this
-  // checks only that unordered pair, computed from nothing but the lamp's own position and its
+test('streetlights stand at the kerb line, just outside the carriageway', () => {
+  // Independent of road-mesh.js's own `d`/`perp` bookkeeping: a lamp sits `1.5` sub-grid
+  // steps along its arm and `KERB` (1.8) off the centre line, and — because the arm direction
+  // and its perpendicular are always axis-aligned and orthogonal — that always puts exactly
+  // one of the lamp's own local x/z offsets from its cell's centre at 1.5 steps (3.6 units)
+  // and the other at 1.8, regardless of which of the four arms it belongs to. So this checks
+  // only that unordered pair, computed from nothing but the lamp's own position and its
   // cell's centre — not by re-deriving which arm it is on.
   //
-  // At the old (wrong) offset — 2 steps along, 2 steps off the centre line, 4.8 units beyond
-  // the pavement's own outer edge at 3.6 — both figures come out equal at 4.8/4.8 instead of
-  // the distinct 2.4/3.6 pair this asserts, so this test catches a regression back to it.
+  // At the previous (pavement-era) offset — 1 sub-grid step (2.4) off the centre line, the
+  // inner edge of a footway that no longer exists — the pair comes out as 2.4/3.6 instead of
+  // this revision's 1.8/3.6, so this test catches a regression back to a pavement-relative
+  // offset as well as a plain wrong number.
   const lamps = of('streetlight')
   assert.ok(lamps.length > 20, `only ${lamps.length} streetlights`)
   const step = CELL_SIZE / SUBGRID
@@ -352,27 +282,28 @@ test('streetlights stand on the kerb, not out beyond the pavement in open grass'
     const cz = Math.round(l.z / CELL_SIZE) * CELL_SIZE
     const offsets = [Math.abs(l.x - cx), Math.abs(l.z - cz)].sort((a, b) => a - b)
     assert.ok(
-      Math.abs(offsets[0] - step) < 1e-6 && Math.abs(offsets[1] - 1.5 * step) < 1e-6,
+      Math.abs(offsets[0] - KERB) < 1e-6 && Math.abs(offsets[1] - 1.5 * step) < 1e-6,
       `streetlight at ${l.x},${l.z} sits ${offsets[0]}/${offsets[1]} off its cell's centre, ` +
-        `expected ${step}/${1.5 * step}`
+        `expected ${KERB}/${1.5 * step}`
+    )
+    // The clearance the brief asked for directly: KERB clears the carriageway's own
+    // half-width (1.2) by 0.6 — "just outside", not deep in open verge.
+    assert.ok(
+      offsets[0] > CARRIAGEWAY_WIDTH / 2,
+      `streetlight at ${l.x},${l.z} does not clear the carriageway's own half-width ${CARRIAGEWAY_WIDTH / 2}`
     )
   }
 })
 
 test('traffic lights stand at the junction corner, close to the cell centre', () => {
-  // Same independence as the streetlight test above: a signal sits `0.75` sub-grid steps out
-  // on both the along-arm and perpendicular axes at once (unlike a lamp, the same figure on
-  // both), so its local x/z offsets from its cell's centre both come out at 0.75 steps (1.8
-  // units) regardless of which governed arm it stands beside. Also checks the clearance the
-  // brief asked for directly: 1.8 units clears the carriageway's own 1.2-unit half-width by
-  // 0.6 units — "just clear", not deep in open verge.
-  //
-  // At the old (wrong) offset — 2 steps along the arm, 1.5 steps perpendicular, about 6 units
-  // diagonally — the two local offsets come out as the distinct pair 4.8/3.6 instead of a
-  // matched 1.8/1.8, so this test catches a regression back to it.
+  // Same independence as the streetlight test above: a signal sits `KERB` (1.8) out on both
+  // the along-arm and perpendicular axes at once (unlike a lamp, the same figure on both), so
+  // its local x/z offsets from its cell's centre both come out at 1.8 regardless of which
+  // governed arm it stands beside. Also checks the clearance the brief asked for directly:
+  // 1.8 units clears the carriageway's own 1.2-unit half-width by 0.6 units — "just clear",
+  // not deep in open verge.
   const lights = ['trafficlight_A', 'trafficlight_B'].flatMap(of)
   assert.ok(lights.length > 0, 'no traffic lights')
-  const step = CELL_SIZE / SUBGRID
   const carriagewayHalfWidth = CARRIAGEWAY_WIDTH / 2
   for (const l of lights) {
     const cx = Math.round(l.x / CELL_SIZE) * CELL_SIZE
@@ -380,8 +311,8 @@ test('traffic lights stand at the junction corner, close to the cell centre', ()
     const dx = Math.abs(l.x - cx)
     const dz = Math.abs(l.z - cz)
     assert.ok(
-      Math.abs(dx - 0.75 * step) < 1e-6 && Math.abs(dz - 0.75 * step) < 1e-6,
-      `traffic light at ${l.x},${l.z} sits ${dx}/${dz} off its cell's centre, expected ${0.75 * step}/${0.75 * step}`
+      Math.abs(dx - KERB) < 1e-6 && Math.abs(dz - KERB) < 1e-6,
+      `traffic light at ${l.x},${l.z} sits ${dx}/${dz} off its cell's centre, expected ${KERB}/${KERB}`
     )
     assert.ok(
       dx > carriagewayHalfWidth && dz > carriagewayHalfWidth,
@@ -390,108 +321,14 @@ test('traffic lights stand at the junction corner, close to the cell centre', ()
   }
 })
 
-test('the pavement turns every corner with no gap — no bare notch where two perpendicular arms meet', () => {
-  // Independently recomputes, for every furnished cell, which pairs of its own arms are
-  // perpendicular to each other (dot product 0 — an opposite pair, dot -1, is a straight run
-  // with no corner to turn) and asserts a pavement tile sits at the shared outer corner those
-  // two arms' own strips fall one sub-grid step short of (2 steps out on both arms' axes at
-  // once) — the exact tile that closes the notch the brief's "rare verspringing" described.
-  const paving = of('base')
-  const step = CELL_SIZE / SUBGRID
-  let checked = 0
-  for (const c of streets.cells) {
-    if (!bordersTown(c)) continue
-    const arms = armsOf(c)
-    for (let i = 0; i < arms.length; i++) {
-      for (let j = i + 1; j < arms.length; j++) {
-        const d1 = arms[i]
-        const d2 = arms[j]
-        if (d1.x * d2.x + d1.z * d2.z !== 0) continue
-        checked++
-        const x = c.x * CELL_SIZE + (d1.x + d2.x) * step * 2
-        const z = c.z * CELL_SIZE + (d1.z + d2.z) * step * 2
-        const found = paving.some((p) => Math.abs(p.x - x) < 1e-6 && Math.abs(p.z - z) < 1e-6)
-        assert.ok(
-          found,
-          `no pavement tile closes the corner at ${x},${z}, where arms ${JSON.stringify(d1)} and ` +
-            `${JSON.stringify(d2)} of cell ${c.x},${c.z} turn`
-        )
-      }
-    }
+test('every piece of verge furniture sits on the ground, at the same lift as the carriageway', () => {
+  // There is no kerb to raise a lamp or a signal onto any more (see road-mesh.js's own doc
+  // comment) — every piece here now shares the carriageway's own small ground-clearance lift.
+  // Proven: setting a furniture piece's lift back to the old, larger pavement-era figure
+  // (`ROAD_SURFACE_LIFT * 8`) still passes every other assertion in this file, since none of
+  // them reads `lift` — only this one does.
+  assert.ok(furniture.length > 0, 'no verge furniture to check the lift of')
+  for (const f of furniture) {
+    assert.equal(f.lift, ROAD_SURFACE_LIFT, `${f.part} at ${f.x},${f.z} uses lift ${f.lift}`)
   }
-  assert.ok(checked > 0, 'no perpendicular arm pair found in the real network to test corner pavement against')
-})
-
-// ── tighten revision: the verge is a footway hugging the kerb again, not the plaza an
-// earlier revision widened it into (see road-mesh.js's own doc comment on vergeFurniture) ────
-
-test('the paved verge is a footway hugging the kerb, not a plaza reaching the cell boundary', () => {
-  // An earlier revision paved the *whole* verge — both perpendicular sub-grid steps, reaching
-  // the street cell's own 6.0 boundary — trying to close the owner's "buildings read as far
-  // from the road" complaint. That read as a grey plaza, and it did not even fix the
-  // complaint: `SET_BACK` in `town-plan.js` stayed flush with whatever the paved band's own
-  // outer edge was, so the buildings simply moved out with the pavement. The real fix moves
-  // the buildings into the freed verge instead (see `SET_BACK`'s own doc comment) and this
-  // reverts the pavement itself back to a single sub-grid tile immediately outside the kerb —
-  // continuous along every arm and turning every corner (see the corner test above), its own
-  // outer edge at 3.6, a full 2.4 units short of the cell's own boundary at 6.0.
-  //
-  // Pinned two ways: every expected footway position exists with its far edge at exactly 3.6
-  // (not 6.0, which would mean the widening crept back in), and the total pavement tile count
-  // matches exactly what the footway-plus-corner formula predicts (not more, which would mean
-  // some other tile — e.g. the old outer-step band — is still being emitted alongside it).
-  const paving = of('base')
-  const step = CELL_SIZE / SUBGRID
-  const tileHalfWidth = (ROAD_TILE_SIZE * roadTileScale()) / 2
-  const posKeyLocal = (x, z) => `${x.toFixed(6)},${z.toFixed(6)}`
-  const seen = new Set()
-  let checked = 0
-
-  for (const c of streets.cells) {
-    if (!bordersTown(c)) continue
-    const cx = c.x * CELL_SIZE
-    const cz = c.z * CELL_SIZE
-    const arms = armsOf(c)
-    for (const d of arms) {
-      const perp = { x: d.z, z: -d.x }
-      for (const i of [1, 2]) {
-        for (const side of [1, -1]) {
-          const x = cx + d.x * step * i + side * perp.x * step
-          const z = cz + d.z * step * i + side * perp.z * step
-          const tile = paving.find((p) => Math.abs(p.x - x) < 1e-6 && Math.abs(p.z - z) < 1e-6)
-          assert.ok(
-            tile,
-            `no footway tile at ${x},${z} (arm ${JSON.stringify(d)}, side ${side}, i ${i} of cell` +
-              ` ${c.x},${c.z}) — the footway is no longer continuous along its own kerb`
-          )
-          checked++
-
-          const perpAxis = perp.x !== 0 ? 'x' : 'z'
-          const centreOnPerpAxis = perpAxis === 'x' ? cx : cz
-          const farEdge = Math.abs(tile[perpAxis] - centreOnPerpAxis) + tileHalfWidth
-          assert.ok(
-            Math.abs(farEdge - 3.6) < 1e-6,
-            `footway tile at ${tile.x},${tile.z} reaches ${farEdge}, not the expected 3.6 — the` +
-              ' verge has been widened past a footway again'
-          )
-          seen.add(posKeyLocal(x, z))
-        }
-      }
-    }
-    for (let i = 0; i < arms.length; i++) {
-      for (let j = i + 1; j < arms.length; j++) {
-        const d1 = arms[i]
-        const d2 = arms[j]
-        if (d1.x * d2.x + d1.z * d2.z !== 0) continue
-        seen.add(posKeyLocal(cx + (d1.x + d2.x) * step * 2, cz + (d1.z + d2.z) * step * 2))
-      }
-    }
-  }
-  assert.ok(checked > 50, `only checked ${checked} footway tiles`)
-  assert.equal(
-    paving.length,
-    seen.size,
-    `${paving.length} pavement tiles were produced, but the footway-plus-corner formula only ` +
-      `predicts ${seen.size} — extra tiles suggest the verge has been widened again`
-  )
 })

@@ -64,6 +64,26 @@ test('road_corner joins its +Z edge to its +X edge', () => {
   assert.ok(near(amber.z0, -0.62) && near(amber.z1, 1), `edge arcs z ${amber.z0}..${amber.z1}`)
 })
 
+test('road_corner_curved joins its +Z edge to its +X edge, the same ports as road_corner', () => {
+  // The playful revision switches bends from the hard 90-degree road_corner to this rounded
+  // piece, and this project's defining defect was a corner rotated the wrong way — the road
+  // pieces are all the same 2x2 slab, so a wrong rotation produces no seam, no gap and no
+  // z-fighting, only paint that runs the wrong way. Measured exactly the way road_corner is
+  // measured above, not assumed to match it: white centre arc bounded x -0.02..0.90, z
+  // -0.02..0.90 (the same radius-1 quarter arc about the tile's +X/+Z corner), amber arcs
+  // bounded x -0.62..1.00, z -0.62..1.00 (the same inner/outer edge-line pair) — identical
+  // bounding boxes to road_corner's, so it joins the same two edges: +Z to +X. That is what
+  // lets `CORNER_ARMS` in road-mesh.js stay `[S, E]` for the curved part too, rather than
+  // needing its own rotation table.
+  const cells = byAtlasCell('road_corner_curved')
+  const white = cells.get(1)
+  assert.ok(white.x0 > -0.05 && white.z0 > -0.05, `centre arc starts at ${white.x0},${white.z0}`)
+  assert.ok(near(white.x1, 0.9) && near(white.z1, 0.9), `centre arc ends at ${white.x1},${white.z1}`)
+  const amber = cells.get(11)
+  assert.ok(near(amber.x0, -0.62) && near(amber.x1, 1), `edge arcs x ${amber.x0}..${amber.x1}`)
+  assert.ok(near(amber.z0, -0.62) && near(amber.z1, 1), `edge arcs z ${amber.z0}..${amber.z1}`)
+})
+
 test('road_tsplit runs along Z with a branch reaching +X', () => {
   // Measured the same way as road_straight and road_corner above: its white centre line is
   // the straight's own band (x -0.02..0.90 — widened past 0 by the branch, still the full

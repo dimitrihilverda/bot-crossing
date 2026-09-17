@@ -60,10 +60,10 @@ export const GREEN_SHARE = 0.3
 
 /** How many buildings stand in a row along one street-facing side of a block cell — the same
  *  count the road tiles themselves tile a cell at (`SUBGRID` in `road-mesh.js`), so a
- *  building's row falls on the identical sub-grid pitch as the pavement and carriageway
- *  beside it: `SLOT_PITCH` below is exactly `CARRIAGEWAY_WIDTH` (2.4), and exactly a building's
- *  own width (`BUILDING_SCALE * 2`), so a full row of five spans one 12-unit cell edge with no
- *  gap and no overlap between neighbours. */
+ *  building's row falls on the identical sub-grid pitch as the carriageway beside it:
+ *  `SLOT_PITCH` below is exactly `CARRIAGEWAY_WIDTH` (2.4), and exactly a building's own width
+ *  (`BUILDING_SCALE * 2`), so a full row of five spans one 12-unit cell edge with no gap and no
+ *  overlap between neighbours. */
 export const SLOTS_PER_SIDE = 5
 
 /** World units between two neighbouring slots' centres. `CELL_SIZE / SLOTS_PER_SIDE` = 2.4 —
@@ -108,59 +108,89 @@ const CELL_HALF = CELL_SIZE / 2
 const GREEN_PLANT_RADIUS = 5
 
 /**
- * How far the footway's own outer edge sits from a street cell's centre line — the same
- * figure `vergeFurniture` in `road-mesh.js` produces for the single sub-grid pavement tile
- * immediately outside the kerb (one sub-grid step out, `CELL_SIZE / SUBGRID = 2.4`, plus that
- * tile's own half-width, `BUILDING_SCALE * 2 / 2` scaled by `roadTileScale()` — the same 1.2
- * a kit tile shares with a kit building — giving `2.4 + 1.2 = 3.6`). Duplicated here rather
+ * Half the carriageway's own width — the point past which a street cell stops being asphalt.
+ * The same figure `road-mesh.js` exports as `CARRIAGEWAY_WIDTH / 2`, duplicated here rather
  * than imported for the same reason `BUILDING_SCALE` is: importing `road-mesh.js` would make
  * it and this module a load-order-dependent cycle for the sake of one constant, since
  * `road-mesh.js` already imports `inTown` from here.
  */
-const FOOTWAY_OUTER_REACH = 3.6
+const CARRIAGEWAY_HALF = 1.2
+
+/**
+ * The clearance a building's own outer wall keeps past the carriageway's edge — the same
+ * margin `KERB_CLEARANCE` in `road-mesh.js` gives a streetlight or a traffic light standing at
+ * the kerb line, so a building's wall, a lamp post and a signal pole all read as standing at
+ * the same roadside distance from the asphalt, not at three different setbacks. Small enough
+ * that the wall still reads as being at the kerb rather than set back from it; large enough
+ * that it does not touch the outermost carriageway tile (checked directly, town-wide, by
+ * `test/town-plan.test.mjs`'s overlap test).
+ */
+const BUILDING_CLEARANCE = 0.6
 
 /**
  * How far a building row's centre line sits from its cell's own centre, toward the street it
  * faces.
  *
- * A street cell is `CELL_SIZE` (12) wide, and after the tighten revision (see
- * `vergeFurniture`'s own doc comment in `road-mesh.js`) its carriageway plus footway occupy
- * only the middle `2 * FOOTWAY_OUTER_REACH` = `7.2` of that — leaving a `CELL_HALF -
- * FOOTWAY_OUTER_REACH` = `2.4`-unit strip of bare verge on each side before the next block
- * begins. That strip used to sit empty, with the building flush against the *block's own*
- * boundary (`CELL_HALF`, short of the street by the whole 2.4-unit strip) — which is what the
- * owner's screenshot actually showed: houses standing well back from a road that, from the
- * kerb outward, was mostly grass. The fix is not to pave that strip (a plaza was tried and
- * reverted, see the same doc comment) but to let the terrace occupy it: a building's
- * street-facing wall now stands just outside the footway's own outer edge, at
- * `FOOTWAY_OUTER_REACH` from the street's centre line, rather than at the block cell's own
- * boundary.
+ * The playful revision removes the pavement entirely (see `road-mesh.js`'s own doc comment on
+ * `vergeFurniture`) — there is no footway edge left to stand a wall against, so the wall now
+ * stands directly at the carriageway's own edge instead, with the same small clearance
+ * `road-mesh.js` gives its own kerbside furniture: `CARRIAGEWAY_HALF + BUILDING_CLEARANCE` =
+ * `1.2 + 0.6` = `1.8` from the street cell's centre line — the reach a building's own outer
+ * wall keeps from the street it fronts.
  *
  * Measured against `public/assets/city.glb`: every one of `building_A..H`'s local footprint
  * spans `-1..1` on both its own X and Z, so at `BUILDING_SCALE` the half-depth facing the
  * street is exactly `BUILDING_SCALE` (a part is 2 units deep before scale, and scale halves
  * that to one factor: `BUILDING_SCALE * 2 / 2 = BUILDING_SCALE`). The street cell's own centre
  * line sits one full cell (`CELL_SIZE`) from this block cell's centre, so putting the wall's
- * outer face at `FOOTWAY_OUTER_REACH` from that centre line means its row's own centre line —
- * `SET_BACK` — sits at `CELL_SIZE - FOOTWAY_OUTER_REACH - BUILDING_SCALE` = `12 - 3.6 - 1.2` =
- * `7.2` from *this* cell's own centre: past the block's own boundary (`CELL_HALF`, 6) and into
- * the neighbouring street cell's own outer verge, exactly where the freed strip is.
+ * outer face at that 1.8-unit reach from that centre line means its row's own centre line —
+ * `SET_BACK` — sits at `CELL_SIZE - (CARRIAGEWAY_HALF + BUILDING_CLEARANCE) - BUILDING_SCALE` =
+ * `12 - 1.8 - 1.2` = `9.0` from *this* cell's own centre: past the block's own boundary
+ * (`CELL_HALF`, 6) and into the neighbouring street cell's own verge, right up against the
+ * carriageway itself now that nothing paved stands between them.
  *
  * That deliberately breaks the old invariant that a building never crosses its own cell's
  * boundary — it was never a rule of the reference render, only an accident of the old, flush
- * placement, and holding onto it is what produced the gap the owner reported. The invariant
- * that actually matters — a building overlapping no pavement, no carriageway, and no other
- * building — still holds, checked directly against the real street and building data by
- * `test/town-plan.test.mjs`: the wall's outer face lands exactly on the footway's own outer
- * edge (`FOOTWAY_OUTER_REACH`), touching it rather than overlapping it, the same way it used
- * to touch the block's own boundary.
- *
- * No clearance margin is subtracted to pull the wall back off that edge, for the same reason
- * flush was chosen before: a wall meeting a pavement tile's edge at the same coordinate is not
- * the z-fighting configuration `VERGE_LIFT` exists to prevent — a wall is a vertical face and
- * the pavement's top is a horizontal one, so they meet at a seam, not a competing surface.
+ * placement. The invariant that actually matters — a building overlapping no carriageway and
+ * no other building — still holds, checked directly against the real street and building data
+ * by `test/town-plan.test.mjs`: the wall's outer face sits `BUILDING_CLEARANCE` (0.6) past the
+ * carriageway's own edge, clear of it rather than merely touching it — a genuine gap, not a
+ * seam, since (with the pavement gone) a wall and the road surface it now stands beside are
+ * both real geometry a camera can pass between.
  */
-export const SET_BACK = CELL_SIZE - FOOTWAY_OUTER_REACH - BUILDING_SCALE
+export const SET_BACK = CELL_SIZE - (CARRIAGEWAY_HALF + BUILDING_CLEARANCE) - BUILDING_SCALE
+
+/**
+ * How many slots from each corner `blockContent` has to skip when the diagonal block across
+ * that corner is real — not always exactly one, now that `SET_BACK` reaches all the way to the
+ * kerb line.
+ *
+ * Two cells diagonal across a street-cell corner (one facing the street via `d`, the other via
+ * a perpendicular direction — see the "Corners, across two cells" doc comment below) each place
+ * a row of slots at world-space perpendicular offsets `SLOT_PITCH/2, ..., (SLOTS_PER_SIDE-1)/2 *
+ * SLOT_PITCH` from their own row's own centre. Working through the two rows' actual world
+ * positions (both anchored `SET_BACK` from their own cell's centre, one cell apart on each
+ * axis), the slot `k` cells in from a given corner (`k = 0` outermost) sits close enough to
+ * collide with the diagonal block's own `k`-th slot whenever `SET_BACK` falls in the open
+ * interval `(4.8 + 2.4k, 9.6 + 2.4k)` — the two figures being, respectively, the point where
+ * the two slots are exactly `2 * BUILDING_SCALE` apart on both axes (a bare touch, not yet an
+ * overlap) and the point where they coincide exactly on one axis. At the tighten revision's
+ * `SET_BACK` (7.2) that interval's own left edge for `k=0` is exactly 7.2 — a tangency, not an
+ * overlap, which is why skipping only the single outermost slot (`k=0`) was ever enough. At
+ * this revision's 9.0 — reaching all the way to the kerb line, per the brief — `k=0` *and*
+ * `k=1` both fall inside their own risk interval (measured directly, before this constant
+ * existed: two real buildings in the actual street network overlapped by exactly 0.6 units on
+ * both axes), so both now have to be skipped. `k=2`, this row's centre slot, stays outside
+ * every interval up to `SET_BACK` 9.6, so it is never at risk here.
+ *
+ * Computed from `SET_BACK` itself rather than hand-set to `2`, so a future change to either
+ * constant keeps this correct instead of silently under- or over-skipping.
+ */
+const CORNER_SKIP_COUNT = (() => {
+  let k = 0
+  while (k < SLOTS_PER_SIDE && SET_BACK > 4.8 + 2.4 * k && SET_BACK < 9.6 + 2.4 * k) k++
+  return k
+})()
 
 /**
  * The town's outer edge: a radius that varies with direction, so the town frays into the
@@ -215,32 +245,37 @@ const rotCCW = (d) => ({ x: -d.z, z: d.x })
  *
  * **Corners, within one cell.** A cell that faces a street on two *adjacent* sides (an actual
  * street corner, not two opposite sides of a through-block) has two rows meeting near the same
- * corner. At the old, flush `SET_BACK` (equal to `SLOT_OFFSETS`' own extreme) the two rows'
- * outermost slots landed on the exact same spot — a real overlap. `SET_BACK` now reaches
- * further out, into the neighbouring street cell's own outer verge (see `SET_BACK`'s own doc
- * comment), which pushes the two rows' outermost slots apart to an exact tangency instead of a
- * coincidence — but still a bare touch, not a real gap, and fragile against floating-point
- * error besides. Both are still left empty at a shared corner rather than relying on that
- * tangency: a small gap at the corner of an intersection is true to the reference render too,
- * not just a safety margin for two buildings that would otherwise just graze each other.
+ * corner. At the old, flush `SET_BACK` (equal to `SLOT_OFFSETS`' own extreme, 4.8) the two
+ * rows' outermost slots landed on the exact same spot — a real overlap. `SET_BACK` now reaches
+ * further out, into the neighbouring street cell's own verge (see `SET_BACK`'s own doc
+ * comment): at the tighten revision's 7.2 that pushed the two rows' outermost (`k=0`) slots
+ * apart to an exact tangency (a bare touch, fragile against floating-point error); at the
+ * playful revision's 9.0 it pushes them clear of each other by a real 1.8-unit gap on each axis
+ * (working through the same geometry `CORNER_SKIP_COUNT`'s own doc comment does for the
+ * across-two-cells case below: `SET_BACK - 4.8` = 4.2, against the `2 * BUILDING_SCALE` = 2.4
+ * needed to touch) — no longer even a near miss. Both slots are still left empty at a shared
+ * corner regardless, rather than leaning on either figure: a small gap at the corner of an
+ * intersection is true to the reference render too, not just a safety margin against two
+ * buildings that would otherwise graze or overlap.
  *
  * **Corners, across two cells.** Reaching into the neighbouring street cell's own verge opens
  * a second, genuinely new collision `SET_BACK`'s old, flush value never could: two *different*
- * block cells, diagonal across a shared street-cell corner, can each reach an outermost slot
- * into that same corner and land on the identical point — measured directly on the real
- * street set (`test/town-plan.test.mjs`), e.g. a block west of a street cell and a block north
- * of the same street cell both placing a building at that street cell's own (-4.8, -4.8)
- * corner. This is not the within-cell case above — the two rows belong to two different
- * cells, so neither cell's own `faces` check ever sees the other — so it needs its own test:
- * for a row facing street cell `S` via `d`, the slot nearest a given perpendicular corner is
- * skipped whenever the block on the *other* side of that same corner — `S` itself shifted one
- * step further along that corner's own perpendicular direction — is a real, in-town, non-
- * street cell, since that cell would place its own colliding building there regardless of
- * what this cell decides. Both of the two diagonal cells see each other this way, so both
- * skip — the corner goes empty from both sides rather than picking a winner, the same
- * resolution the within-cell case already uses, and still a pure function of position and the
- * street set alone: no colony state, and no need to call `blockContent` recursively on the
- * diagonal cell to know it would collide.
+ * block cells, diagonal across a shared street-cell corner, can each reach a slot close enough
+ * to that same corner to overlap — measured directly on the real street set
+ * (`test/town-plan.test.mjs`), e.g. a block west of a street cell and a block north of the
+ * same street cell each placing a building near that street cell's own corner. This is not
+ * the within-cell case above — the two rows belong to two different cells, so neither cell's
+ * own `faces` check ever sees the other — so it needs its own test:
+ * for a row facing street cell `S` via `d`, the `CORNER_SKIP_COUNT` slots nearest a given
+ * perpendicular corner (not always just the one outermost slot — see that constant's own doc
+ * comment for the geometry) are skipped whenever the block on the *other* side of that same
+ * corner — `S` itself shifted one step further along that corner's own perpendicular direction
+ * — is a real, in-town, non-street cell, since that cell would place its own colliding building
+ * there regardless of what this cell decides. Both of the two diagonal cells see each other
+ * this way, so both skip — the corner goes empty from both sides rather than picking a winner,
+ * the same resolution the within-cell case already uses, and still a pure function of position
+ * and the street set alone: no colony state, and no need to call `blockContent` recursively on
+ * the diagonal cell to know it would collide.
  *
  * @param cell the block cell, `{x, z}`
  * @param streetKeys the street membership set from `planStreets().all`
@@ -271,14 +306,15 @@ export function blockContent(cell, streetKeys) {
     // two cells" doc comment above).
     const diagFirst = { x: street.x + rotCCW(d).x, z: street.z + rotCCW(d).z }
     const diagLast = { x: street.x + rotCW(d).x, z: street.z + rotCW(d).z }
-    // The two corners this row's outermost slots would reach: skip either one whose
-    // perpendicular street is also faced here (this cell's own corner), or whose diagonal
-    // block across the street would claim the identical spot (the neighbouring cell's
-    // corner) — so no two rows, in this cell or across the street, ever both claim it.
+    // The two corners this row's outermost slots would reach: skip whichever ones — see
+    // `CORNER_SKIP_COUNT`'s own doc comment, not always just the single outermost slot — sit
+    // near a corner whose perpendicular street is also faced here (this cell's own corner), or
+    // whose diagonal block across the street would claim the identical spot (the neighbouring
+    // cell's corner) — so no two rows, in this cell or across the street, ever both claim it.
     const skipFirst = faces(rotCCW(d)) || isBlock(diagFirst)
     const skipLast = faces(rotCW(d)) || isBlock(diagLast)
     SLOT_OFFSETS.forEach((offset, i) => {
-      if ((i === 0 && skipFirst) || (i === last && skipLast)) return
+      if ((i < CORNER_SKIP_COUNT && skipFirst) || (i > last - CORNER_SKIP_COUNT && skipLast)) return
       // A gap in the terrace here and there, so a frontage is not always one unbroken wall.
       if (rand() < GAP_SHARE) return
       buildings.push({

@@ -78,14 +78,21 @@ test('block sizes vary — this is not a chessboard', () => {
   assert.ok(new Set(blocks).size >= 3, `block sizes are all but identical: ${[...new Set(blocks)].join(',')}`)
 })
 
-test('streets bend — a chessboard has no bends at all', () => {
+test('streets bend — a network of mostly straights and T-junctions is not playful', () => {
+  // Before the playful revision (`JOG_CHANCE` 0.45, one jog attempt in the randomly-chosen
+  // direction only): 6 bends out of 172 street cells — 6 corners in a network of 156 non-bend
+  // cells, indistinguishable from a chessboard at a glance. After (`JOG_CHANCE` 0.75, both
+  // directions tried, a cut free to jog more than once — see `slice` in street-plan.js): 31
+  // bends out of 150 cells, better than one bend cell in five. `>= 20` sits well clear of the
+  // old figure (would fail against it) and of ordinary seed-to-seed noise, without being tied
+  // to the exact 31 a re-tuned constant might drift a little from.
   let bends = 0
   for (const c of cells) {
     const arms = neighbours(c).filter((n) => streetKeys.has(key(n.x, n.z)))
     if (arms.length !== 2) continue
     if (arms[0].x !== arms[1].x && arms[0].z !== arms[1].z) bends++
   }
-  assert.ok(bends >= 4, `only ${bends} bends`)
+  assert.ok(bends >= 20, `only ${bends} bends — the network still reads as mostly straight`)
 })
 
 test('not every street runs the full width of the town', () => {

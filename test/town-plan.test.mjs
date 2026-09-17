@@ -12,7 +12,7 @@ import {
 import { planStreets } from '../src/world/streets.js'
 import { TOWN_CELL_RADIUS } from '../src/world/street-plan.js'
 import { CELL_SIZE, key } from '../src/world/grid.js'
-import { vergeFurniture, carriagewayTiles, ROAD_TILE_SIZE, roadTileScale } from '../src/world/road-mesh.js'
+import { carriagewayTiles, ROAD_TILE_SIZE, roadTileScale } from '../src/world/road-mesh.js'
 
 const EPS = 1e-6
 
@@ -171,11 +171,11 @@ test('a built frontage is a terrace: several adjacent buildings, and a real terr
 // ── the withdrawn invariant's replacement: SET_BACK now deliberately reaches past a
 // building's own cell boundary (see SET_BACK's own doc comment), so "inside its own cell" is
 // no longer a real rule. What must still hold — checked here against the real street network
-// and the real pavement/carriageway data road-mesh.js produces for it, town-wide, not just
-// within a single cell — is that no building overlaps the footway, the carriageway, or
-// another building. ──────────────────────────────────────────────────────────────────────────
+// and the real carriageway data road-mesh.js produces for it, town-wide, not just within a
+// single cell — is that no building overlaps the carriageway or another building. There is no
+// footway any more to check against (the playful revision removes it entirely). ──────────────
 
-test('no building overlaps the footway, the carriageway, or another building, anywhere in the town', () => {
+test('no building overlaps the carriageway or another building, anywhere in the town', () => {
   const half = BUILDING_SCALE
   const tileHalf = (ROAD_TILE_SIZE * roadTileScale()) / 2
   const overlap1D = (c1, h1, c2, h2) => Math.abs(c1 - c2) < h1 + h2 - EPS
@@ -194,17 +194,9 @@ test('no building overlaps the footway, the carriageway, or another building, an
   }
   assert.ok(buildings.length >= 30, `only ${buildings.length} buildings — too few to trust`)
 
-  const furniture = vergeFurniture(streets.cells, CELL_SIZE)
-  const paving = furniture.filter((f) => f.part === 'base')
   const carriageway = carriagewayTiles(streets.cells, CELL_SIZE)
 
   for (const b of buildings) {
-    for (const p of paving) {
-      assert.ok(
-        !overlapSquare(b.x, b.z, half, p.x, p.z, tileHalf),
-        `building at (${b.x},${b.z}) overlaps a footway tile at (${p.x},${p.z})`
-      )
-    }
     for (const t of carriageway) {
       assert.ok(
         !overlapSquare(b.x, b.z, half, t.x, t.z, tileHalf),
@@ -215,7 +207,11 @@ test('no building overlaps the footway, the carriageway, or another building, an
 
   // Every building against every other, town-wide — not just within one cell, since the
   // collision `blockContent`'s "Corners, across two cells" doc comment describes is between
-  // two different cells' rows, both reaching into the same street cell's outer verge.
+  // two different cells' rows, both reaching into the same street cell's outer verge. This is
+  // the invariant `CORNER_SKIP_COUNT` exists to protect: with `SET_BACK` brought all the way to
+  // the kerb line, skipping only the single outermost slot at each risky corner (the old rule)
+  // is no longer enough — two real buildings in this exact network once overlapped by 0.6
+  // units on both axes before that constant existed. Proven below by reverting it.
   for (let i = 0; i < buildings.length; i++) {
     for (let j = i + 1; j < buildings.length; j++) {
       const a = buildings[i]
