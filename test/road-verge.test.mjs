@@ -182,10 +182,10 @@ test('a streetlight\'s arm overhangs its own arm\'s carriageway, not the block b
     const lampSide = (c.x + c.z) % 2 === 0 ? 1 : -1
     for (const d of armsOf(c)) {
       const perp = { x: d.z, z: -d.x }
-      // 1.5 steps along the arm, `KERB` (1.8) off the centre line — see the streetlight-
+      // 1 step along the arm, `KERB` (1.8) off the centre line — see the streetlight-
       // offset pinning test below for why exactly these figures.
-      const x = cx + d.x * step * 1.5 + lampSide * perp.x * KERB
-      const z = cz + d.z * step * 1.5 + lampSide * perp.z * KERB
+      const x = cx + d.x * step + lampSide * perp.x * KERB
+      const z = cz + d.z * step + lampSide * perp.z * KERB
       const lamp = lamps.find((l) => Math.abs(l.x - x) < 1e-6 && Math.abs(l.z - z) < 1e-6)
       if (!lamp) continue
       checked++
@@ -262,18 +262,27 @@ test('a traffic light faces the traffic on the arm it governs', () => {
 // `KERB` figure) ─────────────────────────────────────────────────────────────────────────────
 
 test('streetlights stand at the kerb line, just outside the carriageway', () => {
-  // Independent of road-mesh.js's own `d`/`perp` bookkeeping: a lamp sits `1.5` sub-grid
-  // steps along its arm and `KERB` (1.8) off the centre line, and — because the arm direction
+  // Independent of road-mesh.js's own `d`/`perp` bookkeeping: a lamp sits `1` sub-grid
+  // step along its arm and `KERB` (1.8) off the centre line, and — because the arm direction
   // and its perpendicular are always axis-aligned and orthogonal — that always puts exactly
-  // one of the lamp's own local x/z offsets from its cell's centre at 1.5 steps (3.6 units)
+  // one of the lamp's own local x/z offsets from its cell's centre at 1 step (2.4 units)
   // and the other at 1.8, regardless of which of the four arms it belongs to. So this checks
   // only that unordered pair, computed from nothing but the lamp's own position and its
   // cell's centre — not by re-deriving which arm it is on.
   //
-  // At the previous (pavement-era) offset — 1 sub-grid step (2.4) off the centre line, the
-  // inner edge of a footway that no longer exists — the pair comes out as 2.4/3.6 instead of
-  // this revision's 1.8/3.6, so this test catches a regression back to a pavement-relative
-  // offset as well as a plain wrong number.
+  // The density-recovery revision moved the lamp here, along the arm, from a 1.5-step
+  // midpoint: that midpoint sat exactly on town-plan.js's own terrace-slot boundary (both
+  // figures derive from the same CARRIAGEWAY_WIDTH pitch), so a lamp's real footprint
+  // straddled two neighbouring slots instead of reserving one — see road-mesh.js's own doc
+  // comment on `cellFurniture`. 1 step is half a slot pitch off that old 1.5-step midpoint,
+  // landing the lamp inside a single slot; this pins the new along-arm figure directly, so a
+  // regression back to 1.5 (or any other value) is caught here as well as by the town-wide
+  // slot-reservation count in town-plan.js's own tests.
+  //
+  // The perpendicular figure, `KERB` (1.8), is untouched by this revision — it was already
+  // moved once, off the pavement-era footway edge (1 sub-grid step, 2.4) to the kerb line, by
+  // an earlier revision; this test only re-pins it alongside the along-arm figure above so the
+  // two are checked together, as the real lamp's own two offsets.
   const lamps = of('streetlight')
   assert.ok(lamps.length > 20, `only ${lamps.length} streetlights`)
   const step = CELL_SIZE / SUBGRID
@@ -282,9 +291,9 @@ test('streetlights stand at the kerb line, just outside the carriageway', () => 
     const cz = Math.round(l.z / CELL_SIZE) * CELL_SIZE
     const offsets = [Math.abs(l.x - cx), Math.abs(l.z - cz)].sort((a, b) => a - b)
     assert.ok(
-      Math.abs(offsets[0] - KERB) < 1e-6 && Math.abs(offsets[1] - 1.5 * step) < 1e-6,
+      Math.abs(offsets[0] - KERB) < 1e-6 && Math.abs(offsets[1] - step) < 1e-6,
       `streetlight at ${l.x},${l.z} sits ${offsets[0]}/${offsets[1]} off its cell's centre, ` +
-        `expected ${KERB}/${1.5 * step}`
+        `expected ${KERB}/${step}`
     )
     // The clearance the brief asked for directly: KERB clears the carriageway's own
     // half-width (1.2) by 0.6 — "just outside", not deep in open verge.

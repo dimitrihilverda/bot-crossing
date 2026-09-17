@@ -273,9 +273,16 @@ function armsOf(cell, streetKeys) {
  *   offset from the arm's centre line is `CARRIAGEWAY_WIDTH / 2 + KERB_CLEARANCE` = 1.8, close
  *   enough to read as standing at the roadside and, since the carriageway tile it stands beside
  *   is itself only 1.2 wide from that centre line, far enough (0.6 clear) that the two never
- *   overlap. Along the arm it stands 1.5 sub-grid steps out — midway between the centre tile's
- *   own edge (1 step) and the arm's outer tile (2 steps) — which no other placement in this
- *   module ever lands on, so a lamp never coincides with a crossing or the traffic light below.
+ *   overlap. Along the arm it stands **1 sub-grid step out — the centre tile's own outer edge,
+ *   the same point the arm's inner carriageway tile is centred on** — not the 1.5-step midpoint
+ *   an earlier revision used. That midpoint sat exactly on `town-plan.js`'s own terrace-slot
+ *   boundary (`SLOT_OFFSETS`' pitch and this module's sub-grid step are both derived from the
+ *   same `CARRIAGEWAY_WIDTH`), so a lamp's own footprint straddled two neighbouring slots
+ *   instead of one — see `reservedSlots` in `town-plan.js` for how that slot reservation reads
+ *   this position. 1 step (2.4 units), half a slot pitch (`SLOT_PITCH / 2` = 1.2) off that old
+ *   midpoint, lands the lamp inside a single slot instead. No other placement in this module
+ *   ever lands on this along-arm value either, so a lamp still never coincides with a crossing
+ *   (2 steps out) or the traffic light below (0.75 steps out on each axis).
  *   Which side alternates with the parity of `cell.x + cell.z`, so a street does not grow lamps
  *   down one side only.
  *
@@ -304,7 +311,7 @@ function armsOf(cell, streetKeys) {
  *   of the carriageway on both the approach and the cross street, the way a real signal stands
  *   at the corner of a junction rather than out on the open verge. No other placement in this
  *   module ever lands at 0.75 sub-grid steps on an axis — a streetlight and a crossing both sit
- *   at 1, 1.5 or 2 steps — so a traffic light can never coincide with either, on this cell or
+ *   at 1 or 2 steps — so a traffic light can never coincide with either, on this cell or
  *   any other, without having to track what has already been placed (a coincident post and
  *   signal — see the 15-collision defect an earlier round of this module shipped — cannot arise
  *   from one feature's positions never sharing a step value with any other's).
@@ -346,12 +353,15 @@ export function cellFurniture(cell, streetKeys, cellSize) {
     const perp = rot(d)
     // v: unit direction from the lamp back to this arm's own centre line, i.e. the
     // carriageway it should overhang. θ = atan2(v.z, -v.x) — derived above. Stands at the
-    // kerb line: 1.5 sub-grid steps along the arm, `kerb` (1.8) off the centre line.
+    // kerb line: 1 sub-grid step along the arm, `kerb` (1.8) off the centre line — half a
+    // terrace-slot pitch off the old 1.5-step midpoint, so the lamp's own footprint lands
+    // inside one of town-plan.js's slots instead of straddling the seam between two (see the
+    // doc comment above).
     const v = { x: -lampSide * perp.x, z: -lampSide * perp.z }
     out.push({
       part: LAMP_PART,
-      x: cx + d.x * step * 1.5 + lampSide * perp.x * kerb,
-      z: cz + d.z * step * 1.5 + lampSide * perp.z * kerb,
+      x: cx + d.x * step + lampSide * perp.x * kerb,
+      z: cz + d.z * step + lampSide * perp.z * kerb,
       ry: Math.atan2(v.z, -v.x),
       scale: 1.6,
       lift: ROAD_SURFACE_LIFT,
