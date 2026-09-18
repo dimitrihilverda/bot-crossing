@@ -914,6 +914,11 @@ export class Colony {
 
     const ship = this._shipAnchor
     obstacles.push({ x: ship.x, z: ship.z, r: 3.4 + AGENT_RADIUS })
+    // The hall is its own obstacle. The depot's circle is centred on the anchor and reaches
+    // 3.4, which covers the office and nothing else — the hall stands beside it and its far
+    // corner is 6.5 out, so without this crew would be routed straight through the building.
+    const hall = this.ship.hallObstacle?.()
+    if (hall) obstacles.push({ x: hall.x, z: hall.z, r: hall.r + AGENT_RADIUS })
     this.nav.rebuild(obstacles)
   }
 
