@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import * as THREE from 'three'
-import { greenBlocks, keepClearCells, inTown, blockContent } from '../src/world/town-plan.js'
+import { greenBlocks, keepClearCells, inTown, blockContent, parkPlanting } from '../src/world/town-plan.js'
 import { planStreets } from '../src/world/streets.js'
 import { createScatter, PLANETS } from '../src/world/planet.js'
 import { CELL_SIZE } from '../src/world/grid.js'
@@ -109,4 +109,42 @@ test('after the fix, keepClearCells keeps every scatter prop off every built tow
     assert.equal(blockContent(cell, streets.all).kind, 'green', `a prop landed on a built cell ${k}`)
   }
   assert.ok(checked > 0, 'no in-town, non-street prop was placed — the check above never ran')
+})
+
+test('the town actually plants its green blocks', () => {
+  // `greenBlocks` has existed, and been tested, since the planting fix — and until now nothing
+  // in production ever called it. The town set aside 18% of its blocks as green and then left
+  // them as bare grass, which is the least interesting thing a park can be.
+  const green = greenBlocks({ streets: streets.all, claimed: new Set() })
+  assert.ok(green.length > 0, 'this street plan has no green blocks at all')
+  const plants = parkPlanting(green)
+  assert.ok(plants.length > green.length, `${plants.length} plants across ${green.length} parks`)
+})
+
+test('a park keeps its planting inside its own block', () => {
+  // The radius is what keeps a canopy off the kerb: a green block is a whole cell, but only
+  // the inner 5 of its 6 may be planted, and a tree's own spread has to come out of that too.
+  // A plant measured only by its centre would hang over the road.
+  const green = greenBlocks({ streets: streets.all, claimed: new Set() })
+  for (const plant of parkPlanting(green)) {
+    const block = green.find((b) => Math.hypot(b.x - plant.x, b.z - plant.z) <= b.radius + 1e-9)
+    assert.ok(block, `a plant at (${plant.x.toFixed(1)}, ${plant.z.toFixed(1)}) belongs to no park`)
+    const reach = Math.hypot(plant.x - block.x, plant.z - block.z) + plant.spread
+    assert.ok(
+      reach <= block.radius + 1e-9,
+      `a ${plant.part} reaches ${reach.toFixed(2)} from its park's centre, past the ${block.radius} radius`
+    )
+  }
+})
+
+test('every park plant is marked as a forest part', () => {
+  // Same seam as the street trees: these are forest-kit parts among city-kit furniture, and an
+  // unmarked one is handed to the wrong builder and silently never drawn.
+  const green = greenBlocks({ streets: streets.all, claimed: new Set() })
+  for (const plant of parkPlanting(green)) assert.equal(plant.kit, 'forest')
+})
+
+test('a park is planted the same way every time', () => {
+  const green = greenBlocks({ streets: streets.all, claimed: new Set() })
+  assert.deepEqual(parkPlanting(green), parkPlanting(green))
 })

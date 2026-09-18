@@ -492,6 +492,79 @@ export function greenBlocks({ streets, claimed = new Set() }) {
 }
 
 /**
+ * What a park is planted with, and how far each plant's own spread reaches once scaled.
+ *
+ * All from the **forest** kit — the city pack has no plant in it at all — which is why each
+ * entry is marked with its kit downstream. `spread` is the measured half-reach of the part's
+ * own footprint times its scale, carried alongside rather than recomputed, because it is what
+ * keeps a canopy inside the block: a plant placed by its centre alone hangs over the kerb.
+ *
+ * The trees are scaled to the same ~2.2 units the street trees are, so a park and the street
+ * beside it are planted with the same size of tree. The bushes come out around 0.45, the
+ * height they need to read as undergrowth beneath them rather than as small trees of their own.
+ */
+export const PARK_PLANTS = Object.freeze([
+  { part: 'Tree_4_A_Color1', scale: 0.42, spread: 1.0473434925079346 * 0.42 },
+  { part: 'Tree_1_A_Color1', scale: 0.53, spread: 1.9345909357070923 * 0.53 },
+  { part: 'Tree_3_A_Color1', scale: 0.63, spread: 1.552119255065918 * 0.63 },
+  { part: 'Bush_1_E_Color1', scale: 0.55, spread: 0.8318 * 0.55 },
+  { part: 'Bush_3_B_Color1', scale: 0.56, spread: 0.8417 * 0.56 },
+])
+
+/** How many plants a park gets. */
+const PARK_PLANTS_MIN = 5
+const PARK_PLANTS_MAX = 11
+
+/** Its own salt, so a block's planting is not drawn from the same stream as its buildings. */
+const PARK_SALT = 0x70a1
+
+/**
+ * What fills the town's green blocks.
+ *
+ * `greenBlocks` has named these sites — and been tested — since the planting fix, and nothing
+ * in production ever called it: the town set aside almost a fifth of its blocks as green and
+ * then left every one of them as bare grass.
+ *
+ * Positions are spread over *area* rather than over radius — the square root of a uniform
+ * draw, the same trick `createScatter` uses — because a linear draw piles a park's planting
+ * into its middle and leaves a ring of empty grass round the edge, which reads as a flowerbed
+ * rather than as a park. Each plant's own `spread` comes out of the radius before it is
+ * placed, so a canopy stays inside the block however large the part is.
+ *
+ * @param blocks the planting sites from `greenBlocks`
+ * @param seed a run seed, folded in alongside each block's own position
+ * @returns `[{part, kit, x, z, ry, scale, spread, lift}]` — the shape `createStreetTrees` draws
+ */
+export function parkPlanting(blocks, seed = 0) {
+  const out = []
+  for (const block of blocks) {
+    const cell = { x: Math.round(block.x / CELL_SIZE), z: Math.round(block.z / CELL_SIZE) }
+    const rand = cellRand(cell, PARK_SALT ^ seed)
+    const count = PARK_PLANTS_MIN + Math.floor(rand() * (PARK_PLANTS_MAX - PARK_PLANTS_MIN + 1))
+    for (let i = 0; i < count; i++) {
+      const plant = PARK_PLANTS[Math.floor(rand() * PARK_PLANTS.length)]
+      // Nothing is planted where its own spread would not fit. On a park whose radius is
+      // smaller than a plant's reach that collapses to the centre, which is the honest
+      // answer — one tree standing in a small park rather than one hanging over the street.
+      const room = Math.max(0, block.radius - plant.spread)
+      const r = Math.sqrt(rand()) * room
+      const a = rand() * Math.PI * 2
+      out.push({
+        part: plant.part,
+        kit: 'forest',
+        x: block.x + Math.cos(a) * r,
+        z: block.z + Math.sin(a) * r,
+        ry: rand() * Math.PI * 2,
+        scale: plant.scale,
+        spread: plant.spread,
+        lift: 0,
+      })
+    }
+  }
+  return out
+}
+
+/**
  * Every town cell the wild scatter (`createScatter`'s countryside rocks and flora) must stay
  * off: every street cell — the owner's report was trees and rocks landing on the carriageway
  * — every built block, so a boulder never sprouts between two houses, and every cell the

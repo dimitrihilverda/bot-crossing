@@ -33,7 +33,7 @@ import { createRoads, DRIVING_LANE_OFFSET, PARKING_LANE_OFFSET, roadSurfaceY } f
 import { createTown, townStamp } from '../world/town-mesh.js'
 import { createBicycles } from '../world/bicycles.js'
 import { createStreetTrees } from '../world/street-trees.js'
-import { keepClearCells } from '../world/town-plan.js'
+import { greenBlocks, keepClearCells, parkPlanting } from '../world/town-plan.js'
 import { Deliveries, CAR_GROUND_DROP, CAR_SPEED } from '../world/deliveries.js'
 import { TrafficCars } from '../world/traffic-cars.js'
 import {
@@ -574,16 +574,6 @@ export class Colony {
     })
     this.worldGroup.add(this.bikeGroup)
 
-    // The trees along those same streets. They come out of `cellFurniture` like the lamps and
-    // signals do — which is what makes a terrace leave room for one — but out of the forest
-    // kit rather than the city kit, so they are their own mesh.
-    this.treeGroup?.userData.dispose?.()
-    if (this.treeGroup) this.worldGroup.remove(this.treeGroup)
-    this.treeGroup = createStreetTrees({
-      furniture: this.roadGroup.userData.verge ?? [],
-      groundAt: (x, z) => this.groundAt(x, z),
-    })
-    this.worldGroup.add(this.treeGroup)
     const layout = allocateCells(projectList, this.plotCells, this.streets.all)
 
     // Every cell the colony itself occupies: every plot's cells, plus the depot's own —
@@ -614,6 +604,27 @@ export class Colony {
       this.worldGroup.add(this.townGroup)
       this._townStamp = stamp
     }
+
+    // Everything the forest kit plants in the town: the trees lining the streets, which come
+    // out of `cellFurniture` like the lamps do — that is what makes a terrace leave room for
+    // one — and the parks, whose sites `greenBlocks` has named since the planting fix without
+    // anything ever planting them, leaving almost a fifth of the town's blocks as bare grass.
+    // One mesh for both, because both are forest-kit parts and neither ever moves.
+    //
+    // Built here rather than beside the road group, and the ordering matters: a park may not
+    // be planted on ground the colony has claimed, and `claimed` is not known until
+    // `allocateCells` has run above. Planting from the previous poll's set would put a tree on
+    // a plot the frame it was taken.
+    this.treeGroup?.userData.dispose?.()
+    if (this.treeGroup) this.worldGroup.remove(this.treeGroup)
+    this.treeGroup = createStreetTrees({
+      furniture: [
+        ...(this.roadGroup.userData.verge ?? []),
+        ...parkPlanting(greenBlocks({ streets: this.streets.all, claimed })),
+      ],
+      groundAt: (x, z) => this.groundAt(x, z),
+    })
+    this.worldGroup.add(this.treeGroup)
 
     // Remembered, not replaced: a project that has just lost its last thread keeps its
     // ground on the books, and the oldest entries fall off the end.
