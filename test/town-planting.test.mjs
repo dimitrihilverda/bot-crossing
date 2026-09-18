@@ -14,6 +14,7 @@ import {
   PARK_PATH_WIDTH,
 } from '../src/world/town-plan.js'
 import { planStreets } from '../src/world/streets.js'
+import { vergeFurniture, furnitureWorldBounds } from '../src/world/road-mesh.js'
 import { createScatter, PLANETS } from '../src/world/planet.js'
 import { CELL_SIZE } from '../src/world/grid.js'
 
@@ -192,18 +193,28 @@ test('a park nothing reaches gets no path at all', () => {
   assert.deepEqual(parkArms({ x: 0, z: 0 }, new Set()), [])
 })
 
-test('the paving reaches the block edge and stops there', () => {
-  // Four slabs of 1.5 span exactly the 6 units from the middle of a cell to its edge, which is
-  // why the width is what it is. A slab over the edge would land in the street cell's verge,
-  // among the lamps and the parked bicycles.
+test('the paving runs all the way to the kerb', () => {
+  // This test used to assert the opposite — that an arm stopped at the block's own boundary —
+  // and it was pinning the defect. Reported from the running app: paths you cannot reach. A
+  // block edge is not a street. The carriageway runs down the middle of the *next* cell, so
+  // stopping at the boundary leaves 4.8 units of grass between the path and the asphalt and the
+  // whole thing floats in a field with both ends in nothing.
   const streets = new Set(['0,-1', '0,1'])
   const block = { x: 0, z: 0, radius: 5 }
   const paving = parkPaving(block, parkArms({ x: 0, z: 0 }, streets))
   assert.ok(paving.length > 0, 'a through-route paved nothing')
+
+  const reach = CELL_SIZE - 1.2 // one cell across, less half a carriageway: the asphalt's edge
+  let furthest = 0
   for (const slab of paving) {
-    const reach = Math.max(Math.abs(slab.x), Math.abs(slab.z)) + PARK_PATH_WIDTH / 2
-    assert.ok(reach <= CELL_SIZE / 2 + 1e-9, `a slab reaches ${reach.toFixed(2)}, past the ${CELL_SIZE / 2} edge`)
+    const outer = Math.max(Math.abs(slab.x), Math.abs(slab.z)) + PARK_PATH_WIDTH / 2
+    furthest = Math.max(furthest, outer)
+    assert.ok(outer <= reach + 1e-9, `a slab reaches ${outer.toFixed(2)}, past the kerb at ${reach}`)
   }
+  assert.ok(
+    Math.abs(furthest - reach) < 1e-9,
+    `the path stops ${(reach - furthest).toFixed(2)} short of the kerb — it has to be walkable from the street`
+  )
 })
 
 /** Whether something of this spread would stand on the path, by the same rule the layout uses. */
@@ -287,5 +298,36 @@ test('a park does not stack its displaced planting on one spot', () => {
     const plants = parkPlanting([block], seed, arms)
     const spots = new Set(plants.map((p) => `${p.x.toFixed(2)},${p.z.toFixed(2)}`))
     assert.equal(spots.size, plants.length, `seed ${seed}: two plants stand on the same spot`)
+  }
+})
+
+test('a park path does not run through a streetlight', () => {
+  // Reaching the kerb means crossing the street cell's verge, which is where the lamps, signals,
+  // crossings, props and street trees stand. On this plan nothing collides — measured across all
+  // seventeen arms — but that is luck rather than a rule: nothing arranges the two against each
+  // other. This test is here to say so when it stops being true. The fix if it fires is to nudge
+  // the offending arm's path along its own axis, or to reserve the slot the way `reservedSlots`
+  // already does for buildings.
+  const furniture = vergeFurniture(streets.cells, CELL_SIZE).filter((f) => furnitureWorldBounds(f))
+  assert.ok(furniture.length > 20, `only ${furniture.length} pieces of furniture — nothing to check against`)
+
+  const reach = CELL_SIZE - 1.2
+  const half = PARK_PATH_WIDTH / 2
+  for (const block of greenBlocks({ streets: streets.all, claimed: new Set() })) {
+    const cell = { x: Math.round(block.x / CELL_SIZE), z: Math.round(block.z / CELL_SIZE) }
+    for (const d of parkArms(cell, streets.all)) {
+      for (const f of furniture) {
+        const box = furnitureWorldBounds(f)
+        const x = f.x - block.x
+        const z = f.z - block.z
+        const along = x * d.x + z * d.z
+        const across = Math.abs(x * d.z - z * d.x)
+        const spread = Math.max(box.xmax - f.x, f.x - box.xmin, box.zmax - f.z, f.z - box.zmin)
+        assert.ok(
+          !(along >= -half && along <= reach && across < half + spread),
+          `the park path out of ${cell.x},${cell.z} runs through a ${f.part} at (${f.x.toFixed(1)}, ${f.z.toFixed(1)})`
+        )
+      }
+    }
   }
 })

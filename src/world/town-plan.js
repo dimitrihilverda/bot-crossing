@@ -126,7 +126,7 @@ export const SLOT_PITCH = CELL_SIZE / SLOTS_PER_SIDE
  * is what it was chosen for and that has not changed — each halving of the remaining
  * probability buys fewer buildings than the last — but do not read the absolute numbers as
  * current.
-
+ *
  * Most of a row's own slots are already ruled out before `GAP_SHARE` is ever rolled — by
  * `cornerSkips` near a corner, or by `reservedSlots` at a street cell's own furniture — so
  * a large share of what used to read as "a gap" at the old 0.25 was really a corner or a lamp
@@ -681,29 +681,43 @@ export function parkPlanting(blocks, seed = 0, arms = []) {
 }
 
 /**
+ * How far an arm of a park's path runs from the middle of its block: to the kerb.
+ *
+ * The first version stopped at the block's own boundary, and it was unusable — reported from
+ * the running app as paths you cannot reach. A block edge is not a street: the carriageway runs
+ * down the middle of the *next* cell, so stopping at the boundary leaves the last 4.8 units as
+ * grass and the path floats in the field with both ends in nothing. It is the same 4.8 that
+ * separated the depot from the road.
+ *
+ * One full cell across to the street cell's centre line, less half a carriageway to reach the
+ * asphalt's own edge.
+ */
+const PARK_PATH_REACH = CELL_SIZE - CARRIAGEWAY_HALF
+
+/** How many slabs make up that reach. */
+const PARK_PATH_SLABS = 6
+
+/**
  * How wide a park's footpath is.
  *
- * 1.5, which is two things at once. It is comfortably narrower than the 2.4 carriageway — the
- * first attempt made the path exactly as wide as a road, which turned a park into a street
- * through a lawn — and it divides the 6 units from the middle of a cell to its edge exactly
- * four times, so an arm is four square slabs that finish flush with the boundary. A slab over
- * that boundary would land in the street cell's verge, among the lamps and the parked bicycles.
+ * Not chosen, derived: `PARK_PATH_REACH / PARK_PATH_SLABS` = 10.8 / 6 = **1.8**, so an arm is
+ * six square slabs that finish flush against the kerb with nothing left over. That it also lands
+ * where the owner wanted the width — wider than the half-a-carriageway 1.2 that read as too
+ * thin, and still well under the 2.4 of the road itself — is the happy part. Six is the only
+ * slab count that divides the reach into anything between those two bounds.
  */
-export const PARK_PATH_WIDTH = 1.5
+export const PARK_PATH_WIDTH = PARK_PATH_REACH / PARK_PATH_SLABS
 
 /** The kit's own pavement slab: 2 x 2 authored, the same shape as a road tile. */
 const PAVING_PART = 'base'
 const PAVING_SCALE = PARK_PATH_WIDTH / 2
-
-/** Slabs per arm — `(CELL_SIZE / 2) / PARK_PATH_WIDTH`, which is why the width is what it is. */
-const PARK_PATH_SLABS = CELL_SIZE / 2 / PARK_PATH_WIDTH
 
 /** Whether a thing of radius `spread` at a block-relative position stands on the path. */
 function onParkPath(x, z, spread, arms) {
   return arms.some((d) => {
     const along = x * d.x + z * d.z
     const across = Math.abs(x * d.z - z * d.x)
-    return along >= -PARK_PATH_WIDTH / 2 && along <= CELL_SIZE / 2 && across < PARK_PATH_WIDTH / 2 + spread
+    return along >= -PARK_PATH_WIDTH / 2 && along <= PARK_PATH_REACH && across < PARK_PATH_WIDTH / 2 + spread
   })
 }
 
