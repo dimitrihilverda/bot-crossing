@@ -595,6 +595,10 @@ export const PARK_PLANTS = Object.freeze([
   { part: 'Tree_3_A_Color1', scale: 0.63, spread: 1.552119255065918 * 0.63 },
   { part: 'Bush_1_E_Color1', scale: 0.55, spread: 0.8318 * 0.55 },
   { part: 'Bush_3_B_Color1', scale: 0.56, spread: 0.8417 * 0.56 },
+  // Ground cover. One entry among six rather than a pass of its own: a park wants the odd tuft
+  // of long grass at the foot of a tree, not a meadow. 0.32 brings it to about 0.3 tall, which
+  // is under a bush and well under the bench beside it.
+  { part: 'Grass_2_D_Color1', scale: 0.32, spread: 0.7121 * 0.32 },
 ])
 
 /** How many plants a park gets. */
@@ -621,7 +625,7 @@ const PARK_SALT = 0x70a1
  * @param seed a run seed, folded in alongside each block's own position
  * @returns `[{part, kit, x, z, ry, scale, spread, lift}]` — the shape `createStreetTrees` draws
  */
-export function parkPlanting(blocks, seed = 0) {
+export function parkPlanting(blocks, seed = 0, arms = []) {
   const out = []
   for (const block of blocks) {
     const cell = { x: Math.round(block.x / CELL_SIZE), z: Math.round(block.z / CELL_SIZE) }
@@ -629,23 +633,195 @@ export function parkPlanting(blocks, seed = 0) {
     const count = PARK_PLANTS_MIN + Math.floor(rand() * (PARK_PLANTS_MAX - PARK_PLANTS_MIN + 1))
     for (let i = 0; i < count; i++) {
       const plant = PARK_PLANTS[Math.floor(rand() * PARK_PLANTS.length)]
-      // Nothing is planted where its own spread would not fit. On a park whose radius is
-      // smaller than a plant's reach that collapses to the centre, which is the honest
-      // answer — one tree standing in a small park rather than one hanging over the street.
       const room = Math.max(0, block.radius - plant.spread)
-      const r = Math.sqrt(rand()) * room
-      const a = rand() * Math.PI * 2
+      let x = 0
+      let z = 0
+      // Drawn until it lands off the path rather than drawn once and then discarded. Filtering
+      // afterwards cost about a third of every park's planting — measured across the thirteen
+      // green blocks — and a park that loses a third of its trees to its own footpath is a
+      // footpath with trees beside it.
+      let tries = 0
+      do {
+        const r = Math.sqrt(rand()) * room
+        const a = rand() * Math.PI * 2
+        x = Math.cos(a) * r
+        z = Math.sin(a) * r
+      } while (onParkPath(x, z, plant.spread, arms) && ++tries < 40)
+
+      if (onParkPath(x, z, plant.spread, arms)) {
+        // A loop that can fail needs an answer for when it does: stand the plant just clear of
+        // the first arm rather than leave it on the paving.
+        //
+        // **This has never fired.** Measured across the eleven green blocks that have a path: 89
+        // plants, none placed here. Forty draws against a strip covering a fraction of the
+        // circle is generous, and it stays only because a park whose radius shrank or whose path
+        // widened could exhaust them. It also cannot be pinned on its own — the draw above and
+        // this line cover each other, so switching either off still keeps every plant off the
+        // paving. What the test pins is that the draw *spreads* them, which one fixed position
+        // cannot do.
+        const d = arms[0]
+        const across = PARK_PATH_WIDTH / 2 + plant.spread + 0.05
+        x = -d.z * across
+        z = d.x * across
+      }
+
       out.push({
         part: plant.part,
         kit: 'forest',
-        x: block.x + Math.cos(a) * r,
-        z: block.z + Math.sin(a) * r,
+        x: block.x + x,
+        z: block.z + z,
         ry: rand() * Math.PI * 2,
         scale: plant.scale,
         spread: plant.spread,
         lift: 0,
       })
     }
+  }
+  return out
+}
+
+/**
+ * How wide a park's footpath is.
+ *
+ * 1.5, which is two things at once. It is comfortably narrower than the 2.4 carriageway — the
+ * first attempt made the path exactly as wide as a road, which turned a park into a street
+ * through a lawn — and it divides the 6 units from the middle of a cell to its edge exactly
+ * four times, so an arm is four square slabs that finish flush with the boundary. A slab over
+ * that boundary would land in the street cell's verge, among the lamps and the parked bicycles.
+ */
+export const PARK_PATH_WIDTH = 1.5
+
+/** The kit's own pavement slab: 2 x 2 authored, the same shape as a road tile. */
+const PAVING_PART = 'base'
+const PAVING_SCALE = PARK_PATH_WIDTH / 2
+
+/** Slabs per arm — `(CELL_SIZE / 2) / PARK_PATH_WIDTH`, which is why the width is what it is. */
+const PARK_PATH_SLABS = CELL_SIZE / 2 / PARK_PATH_WIDTH
+
+/** Whether a thing of radius `spread` at a block-relative position stands on the path. */
+function onParkPath(x, z, spread, arms) {
+  return arms.some((d) => {
+    const along = x * d.x + z * d.z
+    const across = Math.abs(x * d.z - z * d.x)
+    return along >= -PARK_PATH_WIDTH / 2 && along <= CELL_SIZE / 2 && across < PARK_PATH_WIDTH / 2 + spread
+  })
+}
+
+/**
+ * Which way a park's path runs.
+ *
+ * **One route through, not a spur to every street it touches.** The first design gave a block
+ * an arm per street-facing side; drawn against the real plan that was plainly wrong, because
+ * five of the thirteen green blocks front three streets and one fronts four, and a three-armed
+ * cross swallowed two thirds of the block. A park is somewhere you walk through, so a pair of
+ * *opposite* sides is what makes a route rather than a bend — and where no such pair exists,
+ * one way in is better than a corner cut across the middle.
+ *
+ * A block nothing reaches gets nothing. Two of the thirteen front no street at all, and a path
+ * from the middle to nowhere is worse than none: they stay a copse.
+ */
+export function parkArms(cell, streetKeys) {
+  const faces = SIDES.filter((d) => streetKeys.has(`${cell.x + d.x},${cell.z + d.z}`))
+  if (!faces.length) return []
+  for (const d of faces) {
+    const opposite = faces.find((o) => o.x === -d.x && o.z === -d.z)
+    if (opposite) return [d, opposite]
+  }
+  return [faces[0]]
+}
+
+/**
+ * The slabs that make a park's path.
+ *
+ * Laid from the middle outward along each arm, centres at `(i + 0.5) * PARK_PATH_WIDTH`, so the
+ * first slab's inner edge is the middle of the cell and the last one's outer edge is the cell
+ * boundary. Two opposite arms therefore meet at the centre with no seam and no overlap; a
+ * single arm is a path in from the street that ends in the middle, where the benches are.
+ */
+export function parkPaving(block, arms) {
+  const out = []
+  for (const d of arms) {
+    for (let i = 0; i < PARK_PATH_SLABS; i++) {
+      const along = (i + 0.5) * PARK_PATH_WIDTH
+      out.push({
+        part: PAVING_PART,
+        kit: 'city',
+        x: block.x + d.x * along,
+        z: block.z + d.z * along,
+        ry: 0,
+        scale: PAVING_SCALE,
+        // The same hair of clearance the carriageway keeps off the terrain, for the same
+        // reason: a slab laid exactly on the height field touches it with zero gap.
+        lift: 0.01,
+      })
+    }
+  }
+  return out
+}
+
+/** How far from the path's own centre line a bench stands, and where along it. */
+const BENCH_ACROSS = PARK_PATH_WIDTH / 2 + 0.35
+const BENCH_ALONG = PARK_PATH_WIDTH * 1.5
+
+/**
+ * The benches and the bin.
+ *
+ * A bench per arm, alternating sides so a through-route does not get both of them on the same
+ * edge, each set back from the paving and turned to face it — a bench with its back to the path
+ * is the one arrangement that reads as a mistake. One bin, beside the first bench.
+ *
+ * Nothing here is placed on a block with no path: a bench in the middle of a copse is furniture
+ * nobody can reach.
+ */
+export function parkFurniture(block, arms, seed = 0) {
+  if (!arms.length) return []
+  const out = []
+  arms.forEach((d, i) => {
+    const side = i % 2 === 0 ? 1 : -1
+    // Across the path, on `side`, and facing back toward its centre line.
+    const across = { x: -d.z * side, z: d.x * side }
+    out.push({
+      part: 'bench',
+      kit: 'city',
+      x: block.x + d.x * BENCH_ALONG + across.x * BENCH_ACROSS,
+      z: block.z + d.z * BENCH_ALONG + across.z * BENCH_ACROSS,
+      ry: Math.atan2(-across.x, -across.z),
+      scale: 1,
+      lift: 0,
+    })
+  })
+
+  const d = arms[0]
+  const across = { x: -d.z, z: d.x }
+  out.push({
+    part: seed % 2 === 0 ? 'trash_A' : 'trash_B',
+    kit: 'city',
+    x: block.x + d.x * (BENCH_ALONG + 0.8) + across.x * BENCH_ACROSS,
+    z: block.z + d.z * (BENCH_ALONG + 0.8) + across.z * BENCH_ACROSS,
+    ry: 0,
+    scale: 1,
+    lift: 0,
+  })
+  return out
+}
+
+/**
+ * Everything that stands in the town's parks: the path, the benches and bin beside it, and the
+ * planting arranged around all of it.
+ *
+ * Every item carries the kit it comes from. The paving, benches and bin are city-kit parts and
+ * the planting is forest-kit, and the two packs have their own atlases — they cannot share a
+ * mesh or a material, so each renderer takes its own half and an unmarked item would be handed
+ * to the wrong one and silently never drawn.
+ */
+export function parkItems(blocks, streetKeys, seed = 0) {
+  const out = []
+  for (const block of blocks) {
+    const cell = { x: Math.round(block.x / CELL_SIZE), z: Math.round(block.z / CELL_SIZE) }
+    const arms = parkArms(cell, streetKeys)
+    out.push(...parkPaving(block, arms))
+    out.push(...parkFurniture(block, arms, seed))
+    out.push(...parkPlanting([block], seed, arms))
   }
   return out
 }

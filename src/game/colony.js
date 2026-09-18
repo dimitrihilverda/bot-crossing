@@ -33,7 +33,8 @@ import { createRoads, DRIVING_LANE_OFFSET, PARKING_LANE_OFFSET, roadSurfaceY } f
 import { createTown, townStamp } from '../world/town-mesh.js'
 import { createBicycles } from '../world/bicycles.js'
 import { createStreetTrees } from '../world/street-trees.js'
-import { greenBlocks, keepClearCells, parkPlanting } from '../world/town-plan.js'
+import { createParkFurniture } from '../world/park-furniture.js'
+import { greenBlocks, keepClearCells, parkItems } from '../world/town-plan.js'
 import { Deliveries, CAR_GROUND_DROP, CAR_SPEED } from '../world/deliveries.js'
 import { TrafficCars } from '../world/traffic-cars.js'
 import {
@@ -617,14 +618,21 @@ export class Colony {
     // a plot the frame it was taken.
     this.treeGroup?.userData.dispose?.()
     if (this.treeGroup) this.worldGroup.remove(this.treeGroup)
+    // A park is a path with planting arranged around it, so both halves come out of one layout
+    // — `parkItems` — and are then split by kit: the slabs, benches and bin are city-kit, the
+    // trees, bushes and grass are forest-kit, and the two packs cannot share a mesh.
+    const parks = parkItems(greenBlocks({ streets: this.streets.all, claimed }), this.streets.all)
+
     this.treeGroup = createStreetTrees({
-      furniture: [
-        ...(this.roadGroup.userData.verge ?? []),
-        ...parkPlanting(greenBlocks({ streets: this.streets.all, claimed })),
-      ],
+      furniture: [...(this.roadGroup.userData.verge ?? []), ...parks],
       groundAt: (x, z) => this.groundAt(x, z),
     })
     this.worldGroup.add(this.treeGroup)
+
+    this.parkGroup?.userData.dispose?.()
+    if (this.parkGroup) this.worldGroup.remove(this.parkGroup)
+    this.parkGroup = createParkFurniture({ items: parks, groundAt: (x, z) => this.groundAt(x, z) })
+    this.worldGroup.add(this.parkGroup)
 
     // Remembered, not replaced: a project that has just lost its last thread keeps its
     // ground on the books, and the oldest entries fall off the end.
@@ -1665,6 +1673,7 @@ export class Colony {
     this.roadGroup?.userData.dispose?.()
     this.bikeGroup?.userData.dispose?.()
     this.treeGroup?.userData.dispose?.()
+    this.parkGroup?.userData.dispose?.()
     this.townGroup?.userData.dispose?.()
     disposeTree(this.worldGroup)
     disposeTree(this.plotGroup)
