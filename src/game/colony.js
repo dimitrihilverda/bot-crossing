@@ -1467,14 +1467,25 @@ export class Colony {
     const cacheKey = `${vehicle.originSeed}|${vehicle.addressSeed}|${this._streetStamp}`
     let route = this._trafficRoutes.get(cacheKey)
     if (!route) {
-      // Street cell to street cell. This used to run from the depot to a house, which sent
-      // every ambient car in the colony through one off-road gap and across the same grass —
-      // invisible until they kept their distance and it became a queue. Both ends are street
-      // cells now, so there is nothing to trim and no verge to cross.
+      // Street cell to street cell, and `strict` so it stays there. Both ends being streets was
+      // not enough on its own: `OFF_ROAD_COST` makes tarmac a preference, so a shortcut across
+      // one cell of grass still beat a seven-cell detour, and half of all ambient routes (20 of
+      // 40, measured on the shipping plan) cut a corner across the verge. A delivery may do
+      // that — it has to, to reach a house — but a car with no errand driving over a lawn is
+      // just a car driving over a lawn.
+      const cells = roadCells(streetCells[ends.from], streetCells[ends.to], this.streets.all, {
+        strict: true,
+      })
+      // No street-only route between the two: the car stays where it lives rather than setting
+      // off across a field. Needs a disconnected network to happen at all, which this plan does
+      // not have, but "drive over the grass" is not the right answer when it does.
+      if (!cells) {
+        const home = cellWorld(streetCells[ends.from].x, streetCells[ends.from].z)
+        const standstill = [{ x: home.x, z: home.z }]
+        return { points: standstill, back: standstill, length: 0, backLength: 0 }
+      }
       const lanes = drivingLanes(
-        roadCells(streetCells[ends.from], streetCells[ends.to], this.streets.all).map((c) =>
-          cellWorld(c.x, c.z)
-        ),
+        cells.map((c) => cellWorld(c.x, c.z)),
         DRIVING_LANE_OFFSET
       )
       // Two lanes, and their lengths are deliberately not assumed equal: offsetting right and

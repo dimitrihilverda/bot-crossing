@@ -13,6 +13,8 @@ import {
   parkedBikes,
   routeEndpoints,
 } from '../src/world/traffic.js'
+import { planStreets } from '../src/world/streets.js'
+import { roadCells } from '../src/world/road-path.js'
 
 test('a vehicle walks its four phases in order', () => {
   const seen = []
@@ -356,4 +358,20 @@ test('bicycles come in groups, not one to a space', () => {
 
 test('bicycle racks are deterministic, like everything else at the kerb', () => {
   assert.deepEqual(parkedBikes(street(40), 0.9, 8), parkedBikes(street(40), 0.9, 8))
+})
+
+test('no ambient route ever leaves the street network', () => {
+  // The regression this exists for, in the owner's own words about the running app: cars driving
+  // over the grass. `OFF_ROAD_COST` makes tarmac a preference rather than a requirement, so
+  // even with both ends on the network 20 of these 40 routes cut a corner across the verge —
+  // 23 cells of grass in total. A delivery is allowed to leave the road; through traffic is not.
+  const streets = planStreets()
+  let offRoad = 0
+  for (let seed = 0; seed < 60; seed++) {
+    const ends = routeEndpoints(newVehicle(seed), streets.cells.length)
+    const path = roadCells(streets.cells[ends.from], streets.cells[ends.to], streets.all, { strict: true })
+    assert.ok(path, `seed ${seed} got no street-only route on a connected network`)
+    offRoad += path.filter((c) => !streets.all.has(`${c.x},${c.z}`)).length
+  }
+  assert.equal(offRoad, 0, `${offRoad} cells of an ambient route are not street`)
 })
