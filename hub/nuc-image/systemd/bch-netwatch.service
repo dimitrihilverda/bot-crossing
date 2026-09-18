@@ -1,0 +1,21 @@
+# Bot Crossing hub — network recovery watchdog.
+#
+# Runs net-recovery.sh continuously as root. While the hub has a network it does nothing; when it
+# has been offline past the grace period it raises the "BotCrossing-Setup" hotspot + portal so
+# wifi can be reconfigured from a phone. Enabled by the installer (provision.sh); safe to leave
+# running — it only touches the wifi interface while genuinely offline.
+
+[Unit]
+Description=Bot Crossing hub network recovery watchdog
+After=network.target
+# No cooldown ceiling: a wall display should keep this net available forever.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/bin/bash /opt/bch-setup/net-recovery.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

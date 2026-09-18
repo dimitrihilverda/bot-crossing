@@ -3,13 +3,15 @@ import * as THREE from 'three'
 /**
  * The little digital faces.
  *
- * Every astronaut's visor is a tiny screen showing one of sixteen expressions. They are all
+ * Every astronaut's face is a tiny screen showing one of sixteen expressions. They are all
  * drawn once into a single 4×4 canvas atlas as a white-on-black *mask*, never as finished
  * artwork — the colour arrives per-astronaut at draw time, so one 512px texture gives every
  * agent its own eye colour without a second byte of memory.
  *
- * The mask is read out of the red channel and used to blend between the dark screen and the
- * astronaut's glow colour, which is why the atlas is deliberately pure black and pure white.
+ * The mask is read out of the red channel and used directly as alpha, with the agent's own
+ * glow colour supplying the RGB — which is why the atlas is deliberately pure black and pure
+ * white: each shape is drawn solid, so the antialiasing along its own path edges is the only
+ * source of in-between values, and that is what gives the features soft edges against the skin.
  */
 
 export const FRAME_COLS = 4

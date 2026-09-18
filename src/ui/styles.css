@@ -1,4 +1,4 @@
-/* Bot Crossing — HUD.
+/* Moving-In Crossing — HUD.
    Everything here is chrome that can be dismissed with H. The only thing that survives is
    in the 3D scene itself, so nothing in this file may ever be load-bearing for reading the
    colony's state. */

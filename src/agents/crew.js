@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
+import { GARMENT_SETS } from './garment-sets.js'
 
 /**
  * Real skeletal animation for the whole crew, in one draw call.
@@ -22,8 +23,8 @@ import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
  * that the crew costs the same whether there are six of them or six hundred.
  *
  * Because the matrices also sit in an ordinary array on the CPU, anything that has to ride
- * *on* a bone — the helmet, the visor, the backpack — can be placed by reading one matrix
- * out of it, with no skeleton to evaluate. See `boneMatrixAt()`.
+ * *on* a bone — the head, the hair, the hi-vis bands — can be placed by reading one matrix
+ * out of it, with no skeleton to evaluate. See `attachMatrixAt(rig, frame, slot, out)`.
  */
 
 /** Sampling rate for the bake. Fast enough that the shader's lerp has nothing to hide. */
@@ -34,7 +35,7 @@ const TEXELS_PER_BONE = 4
 
 /**
  * Bones the colony hangs things off. Their *world* transforms are baked into a small
- * side-table on the CPU as well, because a helmet does not want the skinning matrix — it
+ * side-table on the CPU as well, because a hairstyle does not want the skinning matrix — it
  * wants to know where the head actually is. Three bones over the whole animation set is a
  * hundred and forty kilobytes; the alternative is evaluating a skeleton per astronaut per
  * frame.
@@ -55,21 +56,32 @@ const CLIP = {
   cheer: { name: 'Cheering', loop: true },
   jump: { name: 'Jump_Full_Short', loop: false },
   wave: { name: 'Waving', loop: true },
-  sitDown: { name: 'Sit_Floor_Down', loop: false },
-  sit: { name: 'Sit_Floor_Idle', loop: true },
-  standUp: { name: 'Sit_Floor_StandUp', loop: false },
+  // The sit is the chair sit, not the floor sit: a crew member that has heard nothing for
+  // three days dozes off sitting on a moving box, and the floor sit has no room for one.
+  sitDown: { name: 'Sit_Chair_Down', loop: false },
+  sit: { name: 'Sit_Chair_Idle', loop: true },
+  standUp: { name: 'Sit_Chair_StandUp', loop: false },
   hit: { name: 'Hit_A', loop: true },
   spawn: { name: 'Spawn_Ground', loop: false },
   interact: { name: 'Interact', loop: true },
+  // The removals beat: stoop for a piece, hold it while you look at where it goes, then set
+  // to work on it. `lift` is a one-shot that hands over to `carry`, the same way `sitDown`
+  // hands over to `sit`.
+  lift: { name: 'PickUp', loop: false },
+  carry: { name: 'Holding_A', loop: true },
 }
 
 const CREW_URL = `${import.meta.env.BASE_URL}assets/crew.glb`
 
 /**
- * The mannequin's own head is left out of the body: the colony puts its own helmet, visor
- * and screen-face on the head bone instead, which is the whole of the astronaut's identity.
+ * How far a world matrix's elements may drift from another mesh's before `bakeClips`
+ * refuses to trust that they describe the same placement: a glTF transform is authored and
+ * stored as float32, and three composing it into a `Matrix4` on load can leave a few ULPs of
+ * noise even where the source was exactly equal — single-precision epsilon near 1 is on the
+ * order of 1e-7. 1e-6 clears that noise floor while still catching any transform that would
+ * actually move a vertex.
  */
-const DROP_MESHES = ['Mannequin_Medium_Head']
+const WORLD_MATRIX_EPS = 1e-6
 
 let loading = null
 let rig = null
@@ -85,7 +97,7 @@ export function crewRig() {
   return rig
 }
 
-async function bake(dropMeshes = DROP_MESHES) {
+async function bake() {
   const gltf = await new GLTFLoader().loadAsync(CREW_URL)
   const root = gltf.scene
   root.updateMatrixWorld(true)
@@ -100,42 +112,78 @@ async function bake(dropMeshes = DROP_MESHES) {
   const bones = skeleton.bones
   const boneIndex = new Map(bones.map((b, i) => [b.name, i]))
 
-  const geometry = mergeBody(skinned, dropMeshes)
-  const bake = bakeClips(root, skeleton, skinned[0], gltf.animations)
+  // One geometry per garment set, and the material name three's loader gave that set's mesh
+  // — read off the mesh rather than typed in, so a re-export can never silently disagree with
+  // this table. Two sets resolving to the same material would mean both are sharing one
+  // texture, which is one of them wearing the other's clothes, so that is a throw and not a
+  // warning.
+  const textureNames = new Map()
+  const sets = GARMENT_SETS.map((set) => {
+    const geometry = mergeSet(skinned, set.meshes)
+    const bodyMesh = skinned.find((m) => m.name === set.meshes[0])
+    const textureName = bodyMesh?.material?.name ?? ''
+    const clash = textureNames.get(textureName)
+    if (clash) {
+      throw new Error(
+        `crew: garment sets "${clash}" and "${set.id}" both resolve to material ` +
+          `"${textureName}" — one of them is wearing the other's clothes`
+      )
+    }
+    textureNames.set(textureName, set.id)
+    // The actual image, alongside its name — the runtime paints the set's `InstancedMesh`
+    // with this rather than re-loading anything, since the loader has it decoded already.
+    const texture = bodyMesh?.material?.map ?? null
+    return { id: set.id, geometry, textureName, texture }
+  })
 
-  return { geometry, bones, boneIndex, ...bake }
+  const bake = bakeClips(root, skeleton, skinned, gltf.animations)
+
+  return { sets, bones, boneIndex, ...bake }
 }
 
 /**
- * Merge the mannequin's six parts into one geometry.
+ * Three's loader sanitises node names on the way in — a dot is a path separator in an
+ * animation track, so `hand.r` arrives as `handr`. Matching loosely costs nothing and the
+ * alternative is a prop pinned to the world origin.
+ */
+const plain = (n) => n.replace(/[.\s_]/g, '').toLowerCase()
+
+/**
+ * Merge one garment set's six parts into one geometry, in the fixed order `meshNames` gives
+ * so the result is byte-reproducible.
  *
  * They already share a skin, so the joint indices line up and no remapping is needed. The
- * UVs go: the pack's texture is a name badge and a smiley, and the colony paints its crew
- * from its own suit palette instead.
+ * UVs stay this time — the reverse of the mannequin-body merge this replaced, which dropped
+ * them because the pack's own texture was a placeholder nobody wanted drawn. Here skin, hair
+ * and eyes are three cells of the character's gradient atlas, addressed by UV, so a merged
+ * geometry without them could never be repainted per mover at all: the UVs are the entire
+ * colour mechanism this stage rests on.
  */
-function mergeBody(skinned, dropMeshes) {
-  const drop = new Set(dropMeshes)
+function mergeSet(skinned, meshNames) {
+  const byName = new Map(skinned.map((m) => [m.name, m]))
   const parts = []
 
-  for (const mesh of skinned) {
-    if (drop.has(mesh.name)) continue
+  for (const name of meshNames) {
+    const mesh = byName.get(name)
+    if (!mesh) throw new Error(`crew: crew.glb has no ${name}`)
     const geo = new THREE.BufferGeometry()
     const src = mesh.geometry
     const count = src.attributes.position.count
 
-    for (const [name, size] of [
+    for (const [attrName, size] of [
       ['position', 3],
       ['normal', 3],
+      ['uv', 2],
       ['skinIndex', 4],
       ['skinWeight', 4],
     ]) {
-      const a = src.getAttribute(name)
-      if (!a) throw new Error(`crew: ${mesh.name} has no ${name}`)
+      const a = src.getAttribute(attrName)
+      if (!a) throw new Error(`crew: ${mesh.name} has no ${attrName}`)
       const data = new Float32Array(count * size)
       for (let i = 0; i < count; i++) {
         for (let k = 0; k < size; k++) data[i * size + k] = a.getComponent(i, k)
       }
-      geo.setAttribute(name, new THREE.BufferAttribute(data, size))
+      geo.setAttribute(attrName, new THREE.BufferAttribute(data, size))
     }
     if (src.index) geo.setIndex(Array.from(src.index.array))
     parts.push(geo)
@@ -148,12 +196,44 @@ function mergeBody(skinned, dropMeshes) {
 }
 
 /**
+ * `bakeClips` folds `skinned[0]`'s own world matrix into every baked skinning matrix (see
+ * `pre` below), on the assumption that every skinned mesh sits at the same place in the scene
+ * graph. That assumption in turn rests on an invariant nobody asserted before now: Task 1's
+ * garment re-parent assumed every source node it moved kept an identity local transform.
+ * True today, but with twelve meshes across two sets instead of six on one
+ * mannequin, a re-export that nudged even one of them would bake that mesh into the wrong
+ * place with no shader error and no failing test — it would look exactly like a limb pinned
+ * to the wrong bone, indistinguishable from a joint-remap bug without this guard naming the
+ * actual offender.
+ */
+function assertSameWorldMatrix(skinned) {
+  const base = skinned[0].matrixWorld.elements
+  for (const mesh of skinned) {
+    const e = mesh.matrixWorld.elements
+    for (let i = 0; i < 16; i++) {
+      if (Math.abs(e[i] - base[i]) > WORLD_MATRIX_EPS) {
+        throw new Error(
+          `crew: ${mesh.name}.matrixWorld differs from ${skinned[0].name}.matrixWorld ` +
+            `(element ${i} is ${e[i]}, expected ${base[i]} within ${WORLD_MATRIX_EPS}) — ` +
+            `bakeClips folds ${skinned[0].name}'s world matrix into every baked skinning ` +
+            `matrix, so a mesh sitting at a different world transform would be baked into ` +
+            `the wrong place. Restore an identity local transform on the offending node's ` +
+            `source, or fold its own world matrix into the bake as well.`
+        )
+      }
+    }
+  }
+}
+
+/**
  * Step every clip and record the skinning matrices.
  *
  * What is stored is the matrix the shader can use directly — three's bind matrices folded
  * in — so the vertex stage is a plain weighted sum with nothing left to reconstruct.
  */
-function bakeClips(root, skeleton, mesh, animations) {
+function bakeClips(root, skeleton, skinned, animations) {
+  assertSameWorldMatrix(skinned)
+  const mesh = skinned[0]
   const boneCount = skeleton.bones.length
   const byName = new Map(animations.map((a) => [a.name, a]))
 
@@ -175,13 +255,10 @@ function bakeClips(root, skeleton, mesh, animations) {
   const stride = boneCount * TEXELS_PER_BONE * 4
   const data = new Float32Array(frameCount * stride)
 
-  // Side-table of world transforms for the attachment bones — what the helmet and backpack
-  // read. The skinning matrices in `data` cannot answer "where is the head": they map bind
+  // Side-table of world transforms for the attachment bones — what the head, the hair and the
+  // bands read. The skinning matrices in `data` cannot answer "where is the head": they map bind
   // space to posed space, which is only the same thing when the bind matrices are identity.
-  // Three's loader sanitises node names on the way in — a dot is a path separator in an
-  // animation track, so `hand.r` arrives as `handr`. Matching loosely costs nothing and the
-  // alternative is a table of silent zeros and a prop pinned to the world origin.
-  const plain = (n) => n.replace(/[.\s_]/g, '').toLowerCase()
+  // Names are matched through `plain()` above, because three sanitises them on the way in.
   const attachBones = ATTACH.map((name) => skeleton.bones.findIndex((b) => plain(b.name) === plain(name)))
   const lost = ATTACH.filter((_, i) => attachBones[i] < 0)
   if (lost.length) throw new Error(`crew: no bone for attachment ${lost.join(', ')}`)
@@ -259,11 +336,11 @@ function bakeClips(root, skeleton, mesh, animations) {
 /**
  * Where an attachment bone is, in character space, on a given frame.
  *
- * This is how anything worn rather than skinned gets placed: the helmet reads `head`, the
- * backpack reads `chest`. A straight array slice — no skeleton is evaluated and nothing is
- * allocated. The frame is rounded rather than interpolated; at 30 fps the worst case is
- * half a frame of lag on a helmet whose own body is drawn from the same table, and matrix
- * interpolation here would cost more than it is worth.
+ * This is how anything worn rather than skinned gets placed: the head and the hair read
+ * `head`, the bands read `chest`. A straight array slice — no skeleton is evaluated and
+ * nothing is allocated. The frame is rounded rather than interpolated; at 30 fps the worst
+ * case is half a frame of lag on a worn part whose own body is drawn from the same table, and
+ * matrix interpolation here would cost more than it is worth.
  */
 export function attachMatrixAt(rig, frame, slot, out) {
   const f = Math.min(rig.frameCount - 1, Math.max(0, Math.round(frame)))

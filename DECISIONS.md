@@ -86,3 +86,24 @@ That means a PR can be closed unmerged and still be the reason something shipped
 happens the commit says so and the contributor is credited by name. It is a worse deal for
 contributors than merging their commit, and it is written down here so nobody has to discover
 it from a closed tab.
+
+## The Moving-In re-theme rewrote every user-facing string, but not every comment
+
+Every "astronaut" a user can actually see — a title, tooltip, legend row, badge or help
+paragraph — was reworded to "crew member" (and "ship"/"spaceship" to "depot", and so on) across
+the whole app. Source comments were a separate, narrower pass: they were migrated only in the
+files a theming task actually owned outright, such as `hud.js`. `src/game/colony.js`,
+`src/main.js` and `src/agents/astronauts.js` still say "astronaut" throughout their comments,
+and `src/world/ship.js` keeps the `Ship` class name, its own filename, and `shipDoor()`.
+
+This is deliberate, not an oversight to clean up later. This fork still pulls from `upstream`
+(Station-Sciences/bot-crossing), and `Astronauts`, `astronauts.js`, `Ship`, `ship.js` and
+`shipDoor()` are exactly the names and files upstream also edits under its own vocabulary.
+Renaming an identifier or a comment that upstream still touches buys nothing a user can see —
+comments are invisible in the running app — and guarantees a merge conflict the next time
+upstream lands a change nearby, for no visible gain.
+
+If a future change is tempted to "finish the job" and reword the remaining comments or rename
+`ship.js` for consistency: don't, unless the fork has separately decided to stop tracking
+`upstream`. The inconsistency between fully-themed user-facing text and partially-themed source
+comments is the intended, cheaper trade — not a half-finished migration.

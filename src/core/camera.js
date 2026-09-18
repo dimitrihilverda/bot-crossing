@@ -269,10 +269,12 @@ export class CameraRig {
   }
 
   /** Glide the view to a world point without yanking it — used when you pick an astronaut. */
-  focus(point, { distance } = {}) {
+  focus(point, { distance, clamp = true } = {}) {
     this.desiredTarget.copy(point)
     this.desiredTarget.y = 0
-    this._clampTarget()
+    // The hub frames whole visiting colonies, which are anchored out past WORLD_LIMIT; it passes
+    // clamp:false so the view can actually reach them rather than being pulled back to origin.
+    if (clamp) this._clampTarget()
     if (distance) this.desiredDistance = THREE.MathUtils.clamp(distance, MIN_DIST, MAX_DIST)
     this._zoom = null
     this.idleFor = 99 // settle to isometric right away rather than after a pause

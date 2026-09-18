@@ -1,0 +1,25 @@
+# Bot Crossing hub — first-boot setup (headless install).
+#
+# Installed and enabled by the autoinstall seed. Runs firstboot.sh once, on the console, before
+# the graphical session — it raises the phone-setup hotspot, connects wifi, provisions, does the
+# Tailscale QR, and reboots into the wall. Self-disables via the /opt/bch-setup/.provisioned
+# marker it writes, so it never runs again.
+
+[Unit]
+Description=Bot Crossing hub first-boot setup
+After=multi-user.target
+ConditionPathExists=!/opt/bch-setup/.provisioned
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+# No timeout: it legitimately blocks waiting for a human to submit settings from their phone.
+TimeoutStartSec=0
+ExecStart=/bin/bash /opt/bch-setup/firstboot.sh
+# Surface progress on the wall's console as well as the journal, so a screen with no keyboard
+# still shows what is happening (and the Tailscale QR).
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
