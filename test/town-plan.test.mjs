@@ -8,8 +8,10 @@ import {
   SET_BACK,
   SLOT_PITCH,
   BUILDING_SCALE,
+  cornerSkips,
 } from '../src/world/town-plan.js'
 import { planStreets } from '../src/world/streets.js'
+import { townPlan } from '../src/world/town-mesh.js'
 import { TOWN_CELL_RADIUS } from '../src/world/street-plan.js'
 import { CELL_SIZE, key } from '../src/world/grid.js'
 import {
@@ -316,4 +318,83 @@ test('some blocks are green', () => {
   assert.ok(green > 0 && built > 0, `green=${green} built=${built}`)
   assert.ok(green / (green + built) > 0.15, 'almost nothing is green')
   assert.ok(green / (green + built) < 0.6, 'almost nothing is built')
+})
+
+test('a corner costs only the slots that actually collide', () => {
+  // The rule used to be a blanket one: `skipFirst`/`skipLast` as a boolean, then
+  // `CORNER_SKIP_COUNT` slots cut from that end whatever was there. At the shipping `SET_BACK`
+  // that count is 2, a row has 5 slots, and a row with a real block diagonally across each of
+  // its corners kept exactly one. Measured on this plan: 169 buildings out of 585 slots, the
+  // blanket rule alone accounting for 188 of the 416 empty ones — and with it switched off,
+  // 316 of those buildings collided with nothing at all. It was discarding 147 buildings to
+  // prevent 41.
+  //
+  // A floor rather than an equality, so it fails loudly if the blanket rule comes back and
+  // does not churn every time a prop or a tree shifts one slot.
+  const buildings = townPlan({ streets: streets.all, claimed: new Set() })
+  assert.ok(
+    buildings.length > 260,
+    `only ${buildings.length} buildings — the corner rule is cutting slots that do not collide`
+  )
+})
+
+test('a corner with nothing across it costs nothing', () => {
+  // A lone north-south street with one block beside it: no perpendicular street of its own and
+  // no block across either corner, so there is nothing for this row to yield to and every slot
+  // should survive the corner rule. The blanket rule cut two from each end here regardless.
+  const line = new Set(['0,0', '0,1', '0,-1'])
+  assert.deepEqual([...cornerSkips({ x: 1, z: 0 }, { x: -1, z: 0 }, line)], [])
+})
+
+test('a corner yields only where two rows really reach the same ground', () => {
+  // The same street with blocks on both sides, so the row at x=1 faces the row at x=-1 across
+  // the carriageway — parallel, never colliding — while a block above the street's end reaches
+  // across its corner and does collide. What must come out is the overlapping slots and no
+  // more: a blanket two-from-the-end would take slots that are clear.
+  const streetKeys = new Set(['0,0', '0,1', '0,2'])
+  const skips = cornerSkips({ x: 1, z: 1 }, { x: -1, z: 0 }, streetKeys)
+  assert.ok(skips.size < 4, `${skips.size} of 5 slots skipped — that is the blanket rule again`)
+})
+
+/** A row's slot centres, derived here from the exported constants rather than from the
+ *  production helper, so this checks the rule instead of restating it. */
+const rowCentres = (cell, d) => {
+  const perp = { x: d.z, z: -d.x }
+  return Array.from({ length: 5 }, (_, i) => {
+    const off = (i - 2) * SLOT_PITCH
+    return {
+      x: cell.x * CELL_SIZE + d.x * SET_BACK + perp.x * off,
+      z: cell.z * CELL_SIZE + d.z * SET_BACK + perp.z * off,
+    }
+  })
+}
+
+test('where two rows clash, exactly one of them yields', () => {
+  // The whole of the tie-break. If both rows yield, the terrace loses two buildings to prevent
+  // one overlap — which is the waste the blanket rule was built out of. If neither yields, they
+  // overlap, which is the fault it existed to prevent. So for every clashing pair of slots
+  // between two rival rows, exactly one side has to give.
+  const streetKeys = new Set(['0,0', '0,1', '0,2'])
+  const A = { cell: { x: -1, z: 2 }, d: { x: 1, z: 0 } }
+  const B = { cell: { x: 0, z: 3 }, d: { x: 0, z: -1 } }
+  const skipsA = cornerSkips(A.cell, A.d, streetKeys)
+  const skipsB = cornerSkips(B.cell, B.d, streetKeys)
+  const centresA = rowCentres(A.cell, A.d)
+  const centresB = rowCentres(B.cell, B.d)
+
+  let clashes = 0
+  centresA.forEach((a, i) => {
+    centresB.forEach((b, j) => {
+      const touching =
+        Math.abs(a.x - b.x) < 2 * BUILDING_SCALE - 1e-9 && Math.abs(a.z - b.z) < 2 * BUILDING_SCALE - 1e-9
+      if (!touching) return
+      clashes++
+      assert.notEqual(
+        skipsA.has(i),
+        skipsB.has(j),
+        `slot ${i} of A and slot ${j} of B clash, and both sides answered ${skipsA.has(i)}`
+      )
+    })
+  })
+  assert.ok(clashes > 0, 'these two rows do not actually clash — the test is checking nothing')
 })

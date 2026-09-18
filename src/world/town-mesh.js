@@ -90,12 +90,14 @@ import { blockContent, inTown } from './town-plan.js'
  * repeatedly, `SET_BACK` brought to the kerb line — see each constant's own doc comment): the
  * real network placed 186 buildings for **418,456** vertices — well down from the tighten
  * revision's 332 / 760,343. Two changes pulled in the same direction. First, more street cells
- * turn, and turning costs frontage: `CORNER_SKIP_COUNT` (`town-plan.js`) left two slots empty
- * at a real or diagonal corner instead of one, because `SET_BACK`'s own increase (7.2 -> 9.0,
- * to reach the kerb line with no footway between) put a second slot inside the collision
- * radius that only the outermost slot used to reach — see that constant's own doc comment for
- * the geometry, and `test/town-plan.test.mjs`'s overlap test for the measured defect (two real
- * buildings 0.6 units deep into each other) this closes. Second, the street network itself has
+ * turn, and turning cost frontage: the blanket corner rule of the time cut *two* slots from
+ * either end of a row rather than one, because `SET_BACK`'s own increase (7.2 -> 9.0, to reach
+ * the kerb line with no footway between) put a second slot inside the collision radius that
+ * only the outermost slot used to reach. That rule is gone — `cornerSkips` in `town-plan.js`
+ * now asks per slot and the town has 299 buildings for 664,922 vertices, 51% of budget — so
+ * every figure in this paragraph and the two below is historical. See
+ * `test/town-plan.test.mjs`'s overlap test for the measured defect (two real buildings 0.6
+ * units deep into each other) the blanket rule closed and the per-slot one still closes. Second, the street network itself has
  * far more corners and fewer long straight runs (31 bends against the tighten revision's 6,
  * `JOG_CHANCE` 0.45 -> 0.75 in `street-plan.js`), so a larger share of the town's frontage sits
  * at one of those corner-priced cells.
@@ -154,15 +156,23 @@ import { blockContent, inTown } from './town-plan.js'
  * Re-measured once more in the density-tuning revision (this one, `town-plan.js` only): with the
  * budget confirmed not to be the constraint, `GREEN_SHARE` (0.3 -> 0.18) and `GAP_SHARE`
  * (0.25 -> 0.1) were both lowered — see each constant's own doc comment in `town-plan.js` for
- * the step-by-step measurements — and the real network now places **212** buildings for
- * **471,813** vertices, 36% of the budget, 838,187 to spare. That headroom is deliberate, not
- * left on the table by accident: measured directly, even the town's structural maximum
- * (`GREEN_SHARE` and `GAP_SHARE` both pushed to their near-zero limit, no parks and no gaps at
- * all) places only 285 buildings for 641,804 vertices — 49% of `TOWN_VERTEX_BUDGET` — because
- * what actually caps this town's density is the street network's own geometry (how many cells
- * front a street, and how many of each row's slots survive `CORNER_SKIP_COUNT` and
- * `reservedSlots`), not this constant. `TOWN_VERTEX_BUDGET` itself remains untouched at
- * 1,310,000 — the spec forbids raising it, and nothing in this revision needed that either.
+ * the step-by-step measurements — and the real network then placed **212** buildings for
+ * **471,813** vertices, 36% of the budget. That revision also concluded that the town's
+ * structural maximum was 285 buildings for 641,804 vertices, 49% of budget, and that what
+ * capped density was the street network's own geometry rather than this constant.
+ *
+ * **The first half of that conclusion was wrong, and the second half was right for the wrong
+ * reason.** The cap was not the network's geometry; it was the blanket corner rule, which cut a
+ * fixed count of slots from either end of every row whose corner had anything across it.
+ * Measured when that rule was replaced by the per-slot `cornerSkips`: 169 buildings became
+ * **299**, for **664,922** vertices — 51% of budget, and already past what the earlier revision
+ * had measured as the ceiling with parks and gaps switched off entirely. So the figures above
+ * are historical, and the "structural maximum" among them was an artefact of a rule, not of the
+ * streets.
+ *
+ * What still holds is the part that mattered: `TOWN_VERTEX_BUDGET` has never been the
+ * constraint, at any density this town has been measured at, and it remains untouched at
+ * 1,310,000 — the spec forbids raising it, and nothing has needed that.
  */
 export const TOWN_VERTEX_BUDGET = 1310000
 

@@ -71,7 +71,7 @@ export const BUILDING_SCALE = 1.2
  * `GREEN_SHARE` and `GAP_SHARE` both near zero — no parks, no gaps, every eligible slot filled
  * — the real network places only 285 buildings for 641,804 vertices, 49% of budget: the
  * *structural* ceiling on this town's density is the street network's own geometry (how many
- * cells front a street at all, and how many of each row's slots survive `CORNER_SKIP_COUNT` and
+ * cells front a street at all, and how many of each row's slots survive `cornerSkips` and
  * `reservedSlots`), not `TOWN_VERTEX_BUDGET`, at any point on this range. 0.18 was chosen over
  * pushing further down to 0.16/0.15 because the gain was marginal (65 -> 67 built cells, +2)
  * against a real cost: at 0.16 and below the measured share (0.141) falls under
@@ -120,8 +120,15 @@ export const SLOT_PITCH = CELL_SIZE / SLOTS_PER_SIDE
  * ~0 (min)   237        532,514
  * ```
  *
+ * **The table above predates the per-slot `cornerSkips`** (it was measured under the blanket
+ * corner rule, which alone accounted for 188 of the 416 empty slots), so every total in it is
+ * now low: at this `GAP_SHARE` the town places 299 buildings, not 212. The shape of the curve
+ * is what it was chosen for and that has not changed — each halving of the remaining
+ * probability buys fewer buildings than the last — but do not read the absolute numbers as
+ * current.
+
  * Most of a row's own slots are already ruled out before `GAP_SHARE` is ever rolled — by
- * `CORNER_SKIP_COUNT` near a corner, or by `reservedSlots` at a street cell's own furniture — so
+ * `cornerSkips` near a corner, or by `reservedSlots` at a street cell's own furniture — so
  * a large share of what used to read as "a gap" at the old 0.25 was really a corner or a lamp
  * post, not this constant, and the marginal gain of pushing `GAP_SHARE` toward zero is
  * correspondingly small and fast-diminishing (212 -> 220 -> 227 -> 231 -> 237, each halving of
@@ -255,11 +262,119 @@ export const SET_BACK = CELL_SIZE - (CARRIAGEWAY_HALF + BUILDING_CLEARANCE) - BU
  * Computed from `SET_BACK` itself rather than hand-set to `2`, so a future change to either
  * constant keeps this correct instead of silently under- or over-skipping.
  */
-const CORNER_SKIP_COUNT = (() => {
-  let k = 0
-  while (k < SLOTS_PER_SIDE && SET_BACK > 4.8 + 2.4 * k && SET_BACK < 9.6 + 2.4 * k) k++
-  return k
-})()
+/** The world-space centre of every slot a row would fill, before anything is skipped. */
+function rowSlotCentres(cell, d) {
+  const perp = rotCW(d)
+  const bx = cell.x * CELL_SIZE + d.x * SET_BACK
+  const bz = cell.z * CELL_SIZE + d.z * SET_BACK
+  return SLOT_OFFSETS.map((offset) => ({ x: bx + perp.x * offset, z: bz + perp.z * offset }))
+}
+
+/**
+ * Whether the buildings on two slots would overlap.
+ *
+ * Half-extent is `BUILDING_SCALE`, so two slots clash when they are closer than a full
+ * building on both axes. The epsilon matters: adjacent slots in one row sit exactly
+ * `SLOT_PITCH` (2.4) apart, which is exactly two half-extents, and a terrace is meant to touch.
+ */
+const SLOT_EPS = 1e-9
+const slotsClash = (a, b) =>
+  Math.abs(a.x - b.x) < 2 * BUILDING_SCALE - SLOT_EPS && Math.abs(a.z - b.z) < 2 * BUILDING_SCALE - SLOT_EPS
+
+/**
+ * A total order over rows, so a clash is resolved the same way whichever side is asked.
+ *
+ * This is the whole of the tie-break, and it has to be a *total* order rather than a rule about
+ * corners: if both rows yield, the terrace loses two buildings to prevent one overlap; if
+ * neither does, they overlap. Lexicographic on the cell and then the facing direction — nothing
+ * about it is meaningful, only that it is consistent.
+ */
+const rowRank = (cell, d) => `${cell.x},${cell.z},${d.x},${d.z}`
+
+/**
+ * Every row that could possibly reach the same ground as this one.
+ *
+ * Only four candidates exist, which is what makes a per-slot rule cheap. A row fronts one
+ * street cell, and the rows that can reach into that same cell are the ones belonging to the
+ * two blocks flanking it — `SET_BACK` reaches past the block's own boundary and into the street
+ * cell's verge, so those two rows run perpendicular to this one and cross it near the corners.
+ * Beyond that, this cell may front more than one street itself, and two of its own rows meet at
+ * its own corner.
+ *
+ * The block directly opposite, across the carriageway, is deliberately not a candidate: its row
+ * runs parallel to this one on the far side of the road and can never reach it.
+ *
+ * **The own-cell pair currently never clashes, and is kept anyway.** Measured on the shipping
+ * plan: 51 of its 78 block cells front two or more streets, so this branch really does run —
+ * and the town places exactly 299 buildings whether the branch is there or not. At `SET_BACK`
+ * 9.55 a cell's own two rows are too far apart to meet; they last touched at the flush 4.8, and
+ * by 9.0 they were already clear by 1.8 on each axis. It stays because `SET_BACK` is derived
+ * rather than fixed — it moves whenever the carriageway width or the building scale does — and
+ * a rule that silently stops covering a case it was written for is worse than four comparisons
+ * a row. What it must not be given is credit for working: no test fails on its removal today,
+ * and that is a fact about the geometry rather than a gap in the tests.
+ */
+function rivalRows(cell, d, streetKeys) {
+  const street = { x: cell.x + d.x, z: cell.z + d.z }
+  const isBlock = (p) => inTown(p) && !streetKeys.has(`${p.x},${p.z}`)
+  const fronts = (c, dir) => streetKeys.has(`${c.x + dir.x},${c.z + dir.z}`)
+  const out = []
+
+  for (const turn of [rotCW, rotCCW]) {
+    const t = turn(d)
+    const flank = { x: street.x + t.x, z: street.z + t.z }
+    const facing = { x: -t.x, z: -t.z }
+    if (isBlock(flank) && fronts(flank, facing)) out.push({ cell: flank, d: facing })
+  }
+
+  for (const other of SIDES) {
+    if (other.x === d.x && other.z === d.z) continue
+    if (fronts(cell, other)) out.push({ cell, d: other })
+  }
+
+  return out
+}
+
+/**
+ * Which of a row's own slots it has to leave empty for a neighbouring row.
+ *
+ * This replaced a blanket rule, and the difference is most of the town. The old
+ * `CORNER_SKIP_COUNT` was a *count* — computed from `SET_BACK`, which at the current, kerb-side
+ * value works out to 2 — cut from either end of a row whenever anything at all stood across
+ * that corner. A row has `SLOTS_PER_SIDE` (5) slots, so a row with a real block diagonally
+ * across both of its corners kept exactly one.
+ *
+ * Measured on the shipping street plan before this change: 169 buildings out of 585 slots, and
+ * the blanket rule alone accounted for 188 of the 416 empty ones — six times the next largest
+ * cause. With it switched off, 357 buildings were placed and only 74 pairs actually overlapped,
+ * which 41 buildings' worth of yielding resolves entirely. The rule was discarding 147
+ * buildings to prevent 41.
+ *
+ * So it asks per slot instead: does this slot's own footprint clash with a slot of a row that
+ * outranks it? That keeps every building a blanket cut was taking for no reason, and the
+ * town-wide no-overlap test in `test/town-plan.test.mjs` is what holds the other half.
+ *
+ * @param cell the block cell this row belongs to
+ * @param d the direction the row faces, toward the street it fronts
+ * @param streetKeys the street membership set
+ * @returns the indices into `SLOT_OFFSETS` this row must leave empty
+ */
+export function cornerSkips(cell, d, streetKeys) {
+  const mine = rowSlotCentres(cell, d)
+  const myRank = rowRank(cell, d)
+  const skips = new Set()
+
+  for (const rival of rivalRows(cell, d, streetKeys)) {
+    // Strictly lower wins, so exactly one side of any clash yields.
+    if (rowRank(rival.cell, rival.d) >= myRank) continue
+    const theirs = rowSlotCentres(rival.cell, rival.d)
+    mine.forEach((slot, i) => {
+      if (theirs.some((other) => slotsClash(slot, other))) skips.add(i)
+    })
+  }
+
+  return skips
+}
 
 /**
  * Which of a row's own slots a street cell's own verge furniture actually reaches — reserved so
@@ -332,40 +447,23 @@ const rotCCW = (d) => ({ x: -d.z, z: d.x })
  * building in a field — with the odd slot left empty (`GAP_SHARE`) so a terrace is not always
  * one unbroken wall the full width of the cell.
  *
- * **Corners, within one cell.** A cell that faces a street on two *adjacent* sides (an actual
- * street corner, not two opposite sides of a through-block) has two rows meeting near the same
- * corner. At the old, flush `SET_BACK` (equal to `SLOT_OFFSETS`' own extreme, 4.8) the two
- * rows' outermost slots landed on the exact same spot — a real overlap. `SET_BACK` now reaches
- * further out, into the neighbouring street cell's own verge (see `SET_BACK`'s own doc
- * comment): at the tighten revision's 7.2 that pushed the two rows' outermost (`k=0`) slots
- * apart to an exact tangency (a bare touch, fragile against floating-point error); at the
- * playful revision's 9.0 it pushes them clear of each other by a real 1.8-unit gap on each axis
- * (working through the same geometry `CORNER_SKIP_COUNT`'s own doc comment does for the
- * across-two-cells case below: `SET_BACK - 4.8` = 4.2, against the `2 * BUILDING_SCALE` = 2.4
- * needed to touch) — no longer even a near miss. Both slots are still left empty at a shared
- * corner regardless, rather than leaning on either figure: a small gap at the corner of an
- * intersection is true to the reference render too, not just a safety margin against two
- * buildings that would otherwise graze or overlap.
+ * **Corners.** `SET_BACK` reaches past this cell's own boundary and into the verge of the
+ * street cell a row fronts, which means two rows can reach the same ground: this cell's own two
+ * rows where it fronts two adjacent streets, and the row of a block diagonally across a shared
+ * street-cell corner. Neither case can be settled by looking at one cell alone.
  *
- * **Corners, across two cells.** Reaching into the neighbouring street cell's own verge opens
- * a second, genuinely new collision `SET_BACK`'s old, flush value never could: two *different*
- * block cells, diagonal across a shared street-cell corner, can each reach a slot close enough
- * to that same corner to overlap — measured directly on the real street set
- * (`test/town-plan.test.mjs`), e.g. a block west of a street cell and a block north of the
- * same street cell each placing a building near that street cell's own corner. This is not
- * the within-cell case above — the two rows belong to two different cells, so neither cell's
- * own `faces` check ever sees the other — so it needs its own test:
- * for a row facing street cell `S` via `d`, the `CORNER_SKIP_COUNT` slots nearest a given
- * perpendicular corner (not always just the one outermost slot — see that constant's own doc
- * comment for the geometry) are skipped whenever the block on the *other* side of that same
- * corner — `S` itself shifted one step further along that corner's own perpendicular direction
- * — is a real, in-town, non-street cell, since that cell would place its own colliding building
- * there regardless of what this cell decides. Both of the two diagonal cells see each other
- * this way, so both skip — the corner goes empty from both sides rather than picking a winner,
- * the same resolution the within-cell case already uses, and still a pure function of position
- * and the street set alone: no colony state, and no need to call `blockContent` recursively on
- * the diagonal cell to know it would collide.
+ * This used to be a blanket rule — a count of slots, derived from `SET_BACK`, cut from either
+ * end of a row whenever anything at all stood across that corner. At the current kerb-side
+ * `SET_BACK` that count is two, a row has five slots, and a row with a real block across both
+ * corners kept exactly one. Measured on the shipping street plan it cost 188 of the town's 416
+ * empty slots, six times the next largest cause, and switching it off showed that 316 of the
+ * resulting buildings collided with nothing whatsoever. It was discarding 147 buildings to
+ * prevent 41.
  *
+ * `cornerSkips` replaces it with a per-slot question — does this slot's own footprint clash
+ * with a slot of a row that outranks it — and a total order over rows so that exactly one side
+ * of any clash yields rather than both or neither. See that function for the rivals it has to
+ * consider and why there are only ever four of them.
  * **Reserved slots, at the street cell's own furniture.** With `SET_BACK` now reaching all the
  * way to the carriageway's own edge (see `BUILDING_CLEARANCE`'s own doc comment), a row can
  * reach not only another building but the street cell `S` it fronts' own verge furniture — a
@@ -395,36 +493,24 @@ export function blockContent(cell, streetKeys) {
   const cz = cell.z * CELL_SIZE
   const buildings = []
   const faces = (d) => streetKeys.has(`${cell.x + d.x},${cell.z + d.z}`)
-  // A real, in-town, non-street cell — the structural test for "would place a building here",
-  // independent of colony state, randomness or this cell's own row (see the "Corners, across
-  // two cells" doc comment above).
-  const isBlock = (p) => inTown(p) && !streetKeys.has(`${p.x},${p.z}`)
-  const last = SLOT_OFFSETS.length - 1
   for (const d of SIDES) {
     if (!faces(d)) continue
     // The axis a row of buildings runs along, across the frontage — a quarter turn from `d`,
     // the direction the row faces.
     const perp = rotCW(d)
     const street = { x: cell.x + d.x, z: cell.z + d.z }
-    // The corner diagonally opposite this cell, across the street cell `d` fronts: the block
-    // that would claim the same outermost slot from the other side (see the "Corners, across
-    // two cells" doc comment above).
-    const diagFirst = { x: street.x + rotCCW(d).x, z: street.z + rotCCW(d).z }
-    const diagLast = { x: street.x + rotCW(d).x, z: street.z + rotCW(d).z }
-    // The two corners this row's outermost slots would reach: skip whichever ones — see
-    // `CORNER_SKIP_COUNT`'s own doc comment, not always just the single outermost slot — sit
-    // near a corner whose perpendicular street is also faced here (this cell's own corner), or
-    // whose diagonal block across the street would claim the identical spot (the neighbouring
-    // cell's corner) — so no two rows, in this cell or across the street, ever both claim it.
-    const skipFirst = faces(rotCCW(d)) || isBlock(diagFirst)
-    const skipLast = faces(rotCW(d)) || isBlock(diagLast)
+    // Which of this row's slots a neighbouring row has the better claim to — asked per slot,
+    // against the real footprints, rather than cut as a count from either end. See
+    // `cornerSkips`: the blanket rule this replaced was discarding 147 buildings across the
+    // town to prevent 41 overlaps.
+    const cornerSlots = cornerSkips(cell, d, streetKeys)
     // The slots the street cell `S` this row fronts' own furniture — a streetlight, a crossing
     // or a traffic light — actually reaches, computed against the real, measured positions
     // `road-mesh.js`'s `cellFurniture` places rather than re-derived here (see "Reserved slots,
     // at the street cell's own furniture" above, and `reservedSlots`'s own doc comment).
     const furnitureSlots = reservedSlots(street, d, perp, { x: cx, z: cz }, streetKeys)
     SLOT_OFFSETS.forEach((offset, i) => {
-      if ((i < CORNER_SKIP_COUNT && skipFirst) || (i > last - CORNER_SKIP_COUNT && skipLast)) return
+      if (cornerSlots.has(i)) return
       if (furnitureSlots.has(i)) return
       // A gap in the terrace here and there, so a frontage is not always one unbroken wall.
       if (rand() < GAP_SHARE) return
