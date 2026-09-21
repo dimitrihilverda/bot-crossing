@@ -40,6 +40,50 @@ export const CARRIAGEWAY_WIDTH = 2.4
 export const roadTileScale = () => CARRIAGEWAY_WIDTH / ROAD_TILE_SIZE
 
 /**
+ * How far a carriageway tile reaches into the one after it, along the run.
+ *
+ * Tiles used to be exactly as long as the grid step, so each pair met face to face. That is
+ * fine on a level surface and this one is not level: every tile is placed at the height of
+ * the ground under its own middle, and a flat slab cannot do anything with a slope except
+ * jump at the join. Measured over one straight row of 56 tiles the median jump is 0.0196 and
+ * the worst 0.0521, against the tile's own raised rim of 0.036 — so at every seam two
+ * coincident vertical faces sat a hair apart, and the depth buffer picked between them per
+ * pixel. On screen: a dark line across the road every 2.4, and edge paint that seems to step
+ * sideways where it crosses one.
+ *
+ * 0.05 is chosen to be far larger than depth precision and far smaller than anything the eye
+ * resolves — a fortieth of a tile, split between the two ends. It does *not* fix the height
+ * step itself, which is still there and still a staircase; it hides the seam the staircase
+ * opens, which is the part you can see.
+ */
+export const TILE_OVERLAP = 0.05
+
+/**
+ * How one carriageway tile is scaled, per axis.
+ *
+ * Across the run it is exactly one carriageway and never anything else: `CARRIAGEWAY_WIDTH`
+ * is what `EDGE_LINE_OFFSET`, `DRIVING_LANE_OFFSET` and `PARKING_LANE_OFFSET` are all
+ * derived from, so a tile a hair wider would move the paint, the driving line and every
+ * parked car, with nothing on screen to say why. Along the run it carries `TILE_OVERLAP`.
+ *
+ * Only the straight pieces grow. They are the only ones whose run is a single axis — a
+ * junction's is two, and growing it in both would widen the carriageway at exactly the place
+ * the eye checks whether a road lines up. It costs nothing to leave them: a junction piece
+ * only ever sits at a cell's middle, so every seam it has is with a straight laid along one
+ * of its arms, and that straight reaches across the join from its own side.
+ * `test/road-seams.test.mjs` checks that holds for every seam in the town rather than
+ * trusting the argument.
+ *
+ * The kit authors a straight with its edge lines at x = +/-0.62 running the length of z, so
+ * the run is the tile's own z. Scale is applied before yaw, so this is in the tile's frame.
+ */
+export function tileScale(part) {
+  const across = roadTileScale()
+  const grows = part === STRAIGHT_PART || part === CROSSING_PART
+  return { across, along: grows ? across + TILE_OVERLAP / ROAD_TILE_SIZE : across }
+}
+
+/**
  * The atlas cell the kit paints the road's yellow edge lines with, and where those lines sit
  * across a tile in its own authored units (half-width 1).
  *
@@ -268,7 +312,7 @@ export function carriagewayTiles(streetCells, cellSize, connected = new Set()) {
 
 /** The furniture pieces this module draws, all from the city atlas. */
 const LAMP_PART = 'streetlight'
-const CROSSING_PART = 'road_straight_crossing'
+export const CROSSING_PART = 'road_straight_crossing'
 /**
  * `trafficlight_C` — the gantry variant — is deliberately left out. See the "Traffic lights"
  * paragraph in `vergeFurniture`'s own doc comment below for the reach measurement that rules
@@ -723,7 +767,6 @@ export function createRoads({ streets, groundAt, apron = new Set() }) {
   )
     return group
 
-  const scale = roadTileScale()
   // `apron` is the depot: reached by a street arm, never paved itself. See `carriagewayTiles`.
   const tiles = carriagewayTiles(streets.cells, CELL_SIZE, apron)
   const furniture = vergeFurniture(streets.cells, CELL_SIZE)
@@ -739,6 +782,8 @@ export function createRoads({ streets, groundAt, apron = new Set() }) {
   const roadTiles = tiles.filter((t) => !crossingKeys.has(posKey(t.x, t.z)))
 
   const composers = new Map()
+  /** `s` is either one number — the furniture, which is scaled the same way on every axis —
+   *  or a `{ across, along }` pair from `tileScale`, for the carriageway. */
   const place = (part, x, z, ry, s, lift) => {
     if (!hasPart(part, 'city')) return
     let composer = composers.get(part)
@@ -754,10 +799,15 @@ export function createRoads({ streets, groundAt, apron = new Set() }) {
     // Every piece stays flat rather than tilting to the local slope: a per-piece tilt would
     // open seams wherever two neighbouring pieces picked slightly different normals.
     const y = groundAt ? carriagewayHeight(groundAt(x, z), lift) : DECK_TOP
-    composer.add(part, { s, x, y, z, ry })
+    // Across the run is the tile's x, along it its z — and scale lands before yaw, so this
+    // is in the tile's own frame whichever way it has been turned.
+    if (typeof s === 'number') composer.add(part, { s, x, y, z, ry })
+    else composer.add(part, { sx: s.across, sy: s.across, sz: s.along, x, y, z, ry })
   }
-  for (const tile of roadTiles) place(tile.part, tile.x, tile.z, tile.ry, scale, ROAD_SURFACE_LIFT)
-  for (const f of furniture) place(f.part, f.x, f.z, f.ry, f.scale, f.lift)
+  for (const tile of roadTiles) place(tile.part, tile.x, tile.z, tile.ry, tileScale(tile.part), ROAD_SURFACE_LIFT)
+  // A crossing stands in for a carriageway tile, so it is scaled like one — its own seams are
+  // with the straights either side of it and it has to reach across them the same way.
+  for (const f of furniture) place(f.part, f.x, f.z, f.ry, f.part === CROSSING_PART ? tileScale(f.part) : f.scale, f.lift)
 
   const meshes = [...composers.values()].map((c) => new THREE.Mesh(c.finish(), roadMaterial()))
 
