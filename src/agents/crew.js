@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
-import { assertIdentity } from './head-bind.js'
+import { GARMENT_SETS } from './garment-sets.js'
 
 /**
  * Real skeletal animation for the whole crew, in one draw call.
@@ -73,20 +73,15 @@ const CLIP = {
 
 const CREW_URL = `${import.meta.env.BASE_URL}assets/crew.glb`
 
-/** The mannequin's own head, kept out of the merged body and handed over on its own. */
-const HEAD_MESH = 'Mannequin_Medium_Head'
-
 /**
- * Meshes the merged body leaves out.
- *
- * Only the head, and it is left out to be *placed* rather than to be thrown away. All 959 of
- * its vertices are weighted 1.0 to the single `head` bone — measured against `crew.glb`, not
- * assumed — so it does not deform, and skinning it with the body would be paying for a
- * weighted sum that can only ever return one bone's matrix. Riding the head bone as an
- * attachment is cheaper, and it is also the only way the head can carry a per-agent skin
- * tone: the body's instance colour is already spoken for by the work clothes.
+ * How far a world matrix's elements may drift from another mesh's before `bakeClips`
+ * refuses to trust that they describe the same placement: a glTF transform is authored and
+ * stored as float32, and three composing it into a `Matrix4` on load can leave a few ULPs of
+ * noise even where the source was exactly equal — single-precision epsilon near 1 is on the
+ * order of 1e-7. 1e-6 clears that noise floor while still catching any transform that would
+ * actually move a vertex.
  */
-const DROP_MESHES = [HEAD_MESH]
+const WORLD_MATRIX_EPS = 1e-6
 
 let loading = null
 let rig = null
@@ -102,7 +97,7 @@ export function crewRig() {
   return rig
 }
 
-async function bake(dropMeshes = DROP_MESHES) {
+async function bake() {
   const gltf = await new GLTFLoader().loadAsync(CREW_URL)
   const root = gltf.scene
   root.updateMatrixWorld(true)
@@ -117,11 +112,33 @@ async function bake(dropMeshes = DROP_MESHES) {
   const bones = skeleton.bones
   const boneIndex = new Map(bones.map((b, i) => [b.name, i]))
 
-  const geometry = mergeBody(skinned, dropMeshes)
-  const headGeometry = extractHead(skinned, skeleton)
-  const bake = bakeClips(root, skeleton, skinned[0], gltf.animations)
+  // One geometry per garment set, and the material name three's loader gave that set's mesh
+  // — read off the mesh rather than typed in, so a re-export can never silently disagree with
+  // this table. Two sets resolving to the same material would mean both are sharing one
+  // texture, which is one of them wearing the other's clothes, so that is a throw and not a
+  // warning.
+  const textureNames = new Map()
+  const sets = GARMENT_SETS.map((set) => {
+    const geometry = mergeSet(skinned, set.meshes)
+    const bodyMesh = skinned.find((m) => m.name === set.meshes[0])
+    const textureName = bodyMesh?.material?.name ?? ''
+    const clash = textureNames.get(textureName)
+    if (clash) {
+      throw new Error(
+        `crew: garment sets "${clash}" and "${set.id}" both resolve to material ` +
+          `"${textureName}" — one of them is wearing the other's clothes`
+      )
+    }
+    textureNames.set(textureName, set.id)
+    // The actual image, alongside its name — the runtime paints the set's `InstancedMesh`
+    // with this rather than re-loading anything, since the loader has it decoded already.
+    const texture = bodyMesh?.material?.map ?? null
+    return { id: set.id, geometry, textureName, texture }
+  })
 
-  return { geometry, headGeometry, bones, boneIndex, ...bake }
+  const bake = bakeClips(root, skeleton, skinned, gltf.animations)
+
+  return { sets, bones, boneIndex, ...bake }
 }
 
 /**
@@ -131,100 +148,42 @@ async function bake(dropMeshes = DROP_MESHES) {
  */
 const plain = (n) => n.replace(/[.\s_]/g, '').toLowerCase()
 
-function boneNamed(skeleton, name) {
-  const i = skeleton.bones.findIndex((b) => plain(b.name) === plain(name))
-  if (i < 0) throw new Error(`crew: crew.glb has no bone "${name}"`)
-  return i
-}
-
 /**
- * Lift the head out of the skin and into the head bone's own local frame.
- *
- * `bakeClips` below calls `world * bindInverse * bone * bindMatrix` "the whole of three's
- * skinning", with `bone` standing for `bone.matrixWorld * boneInverse`, which is what
- * `Skeleton.update` leaves in `boneMatrices`. Because every head vertex is weighted 1.0 to
- * one bone, the weighted sum collapses to that single product, and a rigid mesh riding one
- * bone can be described by a single static matrix baked into its vertices instead of being
- * skinned every frame.
- *
- * What is actually baked here is only `boneInverse * world` — there is no `bindMatrix` term
- * anywhere below. That is *not* the general inverse of the product above: substituting it
- * back in, the baked placement equals true skinning on every frame if and only if
- * `world * bindInverse` is the identity, which happens exactly when this mesh's own
- * `bindMatrix` equals its `matrixWorld`. On the committed `crew.glb` both of those matrices
- * measure as the identity (checked below, not assumed), which makes the condition hold
- * trivially and reduces the whole bake to "undo the head bone's rest translation of 1.2414".
- * A re-export that gave this mesh a non-identity `bindMatrix` or moved it out from under the
- * scene root (`matrixWorld` no longer identity) would break that equality, and every head in
- * the colony would be placed at a silently wrong offset — no shader error, no failing test.
- * The guard just below turns that into a loud failure at load instead: if it ever fires, the
- * fix is not to weaken the guard but to restore the missing `bindMatrix` term in the bake
- * (and drop this comment's "identity" claims down to whatever the new export actually is).
- *
- * The skin weights do not come along — nothing downstream skins this geometry — and neither
- * do the UVs, since the pack's texture is a name badge and a smiley and the colony paints
- * its own face on the front instead.
- */
-function extractHead(skinned, skeleton) {
-  const mesh = skinned.find((m) => m.name === HEAD_MESH)
-  if (!mesh) throw new Error(`crew: crew.glb has no ${HEAD_MESH}`)
-  assertIdentity(`${HEAD_MESH}.bindMatrix`, mesh.bindMatrix)
-  assertIdentity(`${HEAD_MESH}.matrixWorld`, mesh.matrixWorld)
-
-  const src = mesh.geometry
-  const geo = new THREE.BufferGeometry()
-  for (const name of ['position', 'normal']) {
-    const a = src.getAttribute(name)
-    if (!a) throw new Error(`crew: ${HEAD_MESH} has no ${name}`)
-    const size = a.itemSize
-    const data = new Float32Array(a.count * size)
-    for (let i = 0; i < a.count; i++) {
-      for (let k = 0; k < size; k++) data[i * size + k] = a.getComponent(i, k)
-    }
-    geo.setAttribute(name, new THREE.BufferAttribute(data, size))
-  }
-  if (src.index) geo.setIndex(Array.from(src.index.array))
-
-  const bake = new THREE.Matrix4().multiplyMatrices(
-    skeleton.boneInverses[boneNamed(skeleton, 'head')],
-    mesh.matrixWorld
-  )
-  geo.applyMatrix4(bake)
-  geo.computeBoundingBox()
-  geo.computeBoundingSphere()
-  return geo
-}
-
-/**
- * Merge the mannequin's six parts into one geometry.
+ * Merge one garment set's six parts into one geometry, in the fixed order `meshNames` gives
+ * so the result is byte-reproducible.
  *
  * They already share a skin, so the joint indices line up and no remapping is needed. The
- * UVs go: the pack's texture is a name badge and a smiley, and the colony paints its crew
- * from its own suit palette instead.
+ * UVs stay this time — the reverse of the mannequin-body merge this replaced, which dropped
+ * them because the pack's own texture was a placeholder nobody wanted drawn. Here skin, hair
+ * and eyes are three cells of the character's gradient atlas, addressed by UV, so a merged
+ * geometry without them could never be repainted per mover at all: the UVs are the entire
+ * colour mechanism this stage rests on.
  */
-function mergeBody(skinned, dropMeshes) {
-  const drop = new Set(dropMeshes)
+function mergeSet(skinned, meshNames) {
+  const byName = new Map(skinned.map((m) => [m.name, m]))
   const parts = []
 
-  for (const mesh of skinned) {
-    if (drop.has(mesh.name)) continue
+  for (const name of meshNames) {
+    const mesh = byName.get(name)
+    if (!mesh) throw new Error(`crew: crew.glb has no ${name}`)
     const geo = new THREE.BufferGeometry()
     const src = mesh.geometry
     const count = src.attributes.position.count
 
-    for (const [name, size] of [
+    for (const [attrName, size] of [
       ['position', 3],
       ['normal', 3],
+      ['uv', 2],
       ['skinIndex', 4],
       ['skinWeight', 4],
     ]) {
-      const a = src.getAttribute(name)
-      if (!a) throw new Error(`crew: ${mesh.name} has no ${name}`)
+      const a = src.getAttribute(attrName)
+      if (!a) throw new Error(`crew: ${mesh.name} has no ${attrName}`)
       const data = new Float32Array(count * size)
       for (let i = 0; i < count; i++) {
         for (let k = 0; k < size; k++) data[i * size + k] = a.getComponent(i, k)
       }
-      geo.setAttribute(name, new THREE.BufferAttribute(data, size))
+      geo.setAttribute(attrName, new THREE.BufferAttribute(data, size))
     }
     if (src.index) geo.setIndex(Array.from(src.index.array))
     parts.push(geo)
@@ -237,12 +196,44 @@ function mergeBody(skinned, dropMeshes) {
 }
 
 /**
+ * `bakeClips` folds `skinned[0]`'s own world matrix into every baked skinning matrix (see
+ * `pre` below), on the assumption that every skinned mesh sits at the same place in the scene
+ * graph. That assumption in turn rests on an invariant nobody asserted before now: Task 1's
+ * garment re-parent assumed every source node it moved kept an identity local transform.
+ * True today, but with twelve meshes across two sets instead of six on one
+ * mannequin, a re-export that nudged even one of them would bake that mesh into the wrong
+ * place with no shader error and no failing test — it would look exactly like a limb pinned
+ * to the wrong bone, indistinguishable from a joint-remap bug without this guard naming the
+ * actual offender.
+ */
+function assertSameWorldMatrix(skinned) {
+  const base = skinned[0].matrixWorld.elements
+  for (const mesh of skinned) {
+    const e = mesh.matrixWorld.elements
+    for (let i = 0; i < 16; i++) {
+      if (Math.abs(e[i] - base[i]) > WORLD_MATRIX_EPS) {
+        throw new Error(
+          `crew: ${mesh.name}.matrixWorld differs from ${skinned[0].name}.matrixWorld ` +
+            `(element ${i} is ${e[i]}, expected ${base[i]} within ${WORLD_MATRIX_EPS}) — ` +
+            `bakeClips folds ${skinned[0].name}'s world matrix into every baked skinning ` +
+            `matrix, so a mesh sitting at a different world transform would be baked into ` +
+            `the wrong place. Restore an identity local transform on the offending node's ` +
+            `source, or fold its own world matrix into the bake as well.`
+        )
+      }
+    }
+  }
+}
+
+/**
  * Step every clip and record the skinning matrices.
  *
  * What is stored is the matrix the shader can use directly — three's bind matrices folded
  * in — so the vertex stage is a plain weighted sum with nothing left to reconstruct.
  */
-function bakeClips(root, skeleton, mesh, animations) {
+function bakeClips(root, skeleton, skinned, animations) {
+  assertSameWorldMatrix(skinned)
+  const mesh = skinned[0]
   const boneCount = skeleton.bones.length
   const byName = new Map(animations.map((a) => [a.name, a]))
 

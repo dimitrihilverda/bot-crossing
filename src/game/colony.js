@@ -8,25 +8,45 @@ import {
   setColonySpacing,
   cellWorld,
   shipPosition,
+  DEPOT_ROAD_SHIFT,
   createLabel,
   createBanner,
   hashString,
-  worldToHex,
+  worldToCell,
   DECK_TOP,
   PLOT_PALETTE,
-  PLOT_CELL,
+  key,
 } from '../world/plots.js'
 import { buildingUniforms } from '../world/buildings.js'
 import { createHouse } from '../world/houses.js'
 import {
-  hexLine,
   pathLength,
   pointAt,
   kerbBack,
   driveStep,
   ridesAlong,
+  drivingLanes,
 } from '../world/drive-path.js'
-import { Deliveries, CAR_SPEED } from '../world/deliveries.js'
+import { depotApproach, planStreets } from '../world/streets.js'
+import { roadCells } from '../world/road-path.js'
+import { createRoads, DRIVING_LANE_OFFSET, PARKING_LANE_OFFSET, roadSurfaceY } from '../world/road-mesh.js'
+import { createTown, townStamp } from '../world/town-mesh.js'
+import { createBicycles } from '../world/bicycles.js'
+import { createStreetTrees } from '../world/street-trees.js'
+import { createParkFurniture } from '../world/park-furniture.js'
+import { greenBlocks, keepClearCells, parkItems } from '../world/town-plan.js'
+import { Deliveries, CAR_GROUND_DROP, CAR_SPEED } from '../world/deliveries.js'
+import { TrafficCars } from '../world/traffic-cars.js'
+import {
+  HEADWAY,
+  headwayFactor,
+  newVehicle,
+  parkedBikes,
+  parkedCars,
+  routeEndpoints,
+  stepVehicle,
+  trafficCount,
+} from '../world/traffic.js'
 import { Ship } from '../world/ship.js'
 import { Astronauts } from '../agents/astronauts.js'
 import { Indicators, BADGE } from '../agents/indicators.js'
@@ -53,7 +73,7 @@ export { statusFor }
  *   long idle      → asleep on the job
  *   anything else  → pottering about its plot
  *
- * Threads group by repo, one repo per hex plot, and every thread gets a building seeded
+ * Threads group by repo, one repo per plot, and every thread gets a building seeded
  * from its own session id — so the colony's skyline is a stable, readable picture of what
  * you have running.
  */
@@ -64,6 +84,21 @@ const AGENT_RADIUS = 0.26
 const LIVE_GROWTH = 0.004
 /** How many zones' positions to remember, including repos with nothing running in them. */
 const LAYOUT_MEMORY = 80
+
+// The depot's own cell, for planning streets. `SHIP_CELL` itself is module-local to
+// `plots.js` and deliberately not exported; converting the depot's world position back to a
+// cell with `worldToCell` gives the same answer without opening another export. Computed once
+// at module scope rather than per call — the depot does not move.
+const SHIP_CELL_FOR_STREETS = worldToCell(shipPosition().x, shipPosition().z)
+
+/**
+ * The seed kerbside parking is laid out from.
+ *
+ * Fixed rather than random: the same town parks the same cars every time it is opened,
+ * which is what lets them read as scenery. A parked car that moved between sessions would
+ * be the only thing in the colony that changed without anything having happened.
+ */
+const PARKED_SEED = 0x5ca1ab1e
 
 /**
  * The reveal progress at which a house has already hidden itself.
@@ -179,7 +214,10 @@ export class Colony {
     this.worldGroup.name = 'world'
     scene.add(this.worldGroup)
 
-    this.ship = new Ship(scene, shipPosition())
+    // Where the depot actually stands. It starts at its cell centre and leans toward the road
+    // once the streets are known — see the street-planning block below.
+    this._shipAnchor = shipPosition()
+    this.ship = new Ship(scene, this._shipAnchor)
     this.astronauts = new Astronauts(scene, settings)
     this.astronauts.world = this._world()
     // Sized for the largest preset rather than the current one: unlike the astronaut meshes these
@@ -192,6 +230,22 @@ export class Colony {
     // rather than per colony — `Deliveries` keeps a mesh pair per plot colour — so this is a
     // generous bound either way, and an unused instance slot costs nothing until it is written.
     this.deliveries = new Deliveries(scene, MAX_AGENT_CAP)
+    // Ambient traffic: cars nobody owns, driving the same streets, plus every car parked at a
+    // kerb — one fleet, because a parked car is the same instanced body standing still.
+    //
+    // The capacity is per (body, tint) bucket rather than a total, and it can no longer be
+    // derived from `MAX_TRAFFIC`: parked cars are not capped by it. They are bounded by the
+    // town instead — at most two per straight carriageway tile, thinned by `PARK_PERCENT` —
+    // and spread across the palette's twenty buckets, which on a large colony comes to a few
+    // dozen per bucket. 256 clears that with room to spare, and an unused instance slot costs
+    // a matrix that is never drawn, since `_writeBucket` sets `count` to what it wrote.
+    this.traffic = new TrafficCars(scene, 256)
+    this._trafficVehicles = []
+    this._parkedCars = []
+    this._trafficRoutes = new Map()
+    // Ever-increasing, so a vehicle that leaves the pool and a different one that later
+    // takes its slot are never the same car with the same seed.
+    this._trafficSeed = 0
     this.nav = new Navigation()
     this.astronauts.setNavigation(this.nav)
 
@@ -228,23 +282,29 @@ export class Colony {
     this.worldGroup.add(this.terrain)
     this._buildScatter()
 
-    // The ship has legs, and legs have to reach the ground. Its landing spot is a fixed hex
+    // The ship has legs, and legs have to reach the ground. Its landing spot is a fixed
     // cell, but the height of that spot is the planet's, so it is set here rather than once
     // at construction — a world with more relief would otherwise leave it hovering.
-    const ship = shipPosition()
+    const ship = this._shipAnchor
     this.ship.group.position.y = terrainHeight(ship.x, ship.z, this.planet)
 
     this._dustTint.set(this.planet.ground.high)
   }
 
   /**
-   * Ground scatter, placed to miss every tile of every plot and the ship's apron.
+   * Ground scatter, placed to miss every tile of every plot, the ship's apron, and — since
+   * the owner reported trees and rocks landing on the carriageway — every street and built
+   * cell of the town. Green blocks are the one part of the town left open, which is what
+   * plants them: the same wild-scatter pass that dresses the countryside also seeds them,
+   * because nothing there is fenced off.
    *
    * Kept separate from the terrain because of *when* it has to run: the world is built
    * before the first roster arrives, so at that point there are no plots to avoid, and
    * boulders and trees end up under decks that are laid on top of them afterwards — poking
    * through in fragments. So this runs again whenever a zone's footprint changes, which is
-   * cheap next to rebuilding the terrain mesh alongside it.
+   * cheap next to rebuilding the terrain mesh alongside it. The town is not known yet either,
+   * on that same first build — `this.streets` only exists once `_syncPlots` has run once —
+   * so the town fence is added only when it does.
    */
   _buildScatter() {
     if (this.scatterGroup) {
@@ -257,11 +317,19 @@ export class Colony {
         clear.push({ x: plot.center.x + local.x, z: plot.center.z + local.z, r: 8.6 })
       }
     }
-    const ship = shipPosition()
+    const ship = this._shipAnchor
     clear.push({ x: ship.x, z: ship.z, r: 7.5 })
+    if (this.streets) {
+      clear.push(...keepClearCells({ streets: this.streets.all, claimed: this._claimedCells || new Set() }))
+    }
     this.scatterGroup = createScatter(this.planet, this.settings.get('scatterDensity'), clear)
     this.worldGroup.add(this.scatterGroup)
     this._scatterFootprint = this._plotFootprint()
+    // Whether this build knew the streets — so a colony with no plots yet (footprint stays
+    // empty across the first `_syncPlots`) still gets its scatter fenced off the town the
+    // moment the street plan exists, rather than waiting on a footprint change that may never
+    // come.
+    this._scatterHadStreets = !!this.streets
     // The crew routes around scatter, so a new scatter is a new navigation grid.
     if (this.nav) this._rebuildNavigation()
   }
@@ -299,6 +367,7 @@ export class Colony {
     this.astronauts.onSettingsChanged(changed)
     this.particles.onSettingsChanged(changed)
     this.deliveries.onSettingsChanged(changed)
+    this.traffic.onSettingsChanged(changed)
     if (changed.has('showLabels')) this._syncLabels()
     if (changed.has('timeOfDay')) this.sky.setTime(this.settings.get('timeOfDay'))
   }
@@ -444,21 +513,131 @@ export class Colony {
     // they surround the centre rather than clumping where their names hash.
     const visitingColonies = [...new Set([...colonyOf.values()].map((v) => v.colony).filter(Boolean))].sort()
     const colonyIndex = new Map(visitingColonies.map((c, i) => [c, i]))
-    const layout = allocateCells(
-      projects.map(([name, list]) => {
-        const visiting = colonyOf.get(name)
-        // A visiting colony's repos anchor to that colony's district out past the home zones,
-        // so they cluster together and read as somebody else's settlement.
-        return {
-          id: name,
-          size: list.length,
-          anchor: visiting
-            ? colonyAnchor(visiting.colony, colonyIndex.get(visiting.colony), visitingColonies.length)
-            : null,
-        }
-      }),
-      this.plotCells
-    )
+    const projectList = projects.map(([name, list]) => {
+      const visiting = colonyOf.get(name)
+      // A visiting colony's repos anchor to that colony's district out past the home zones,
+      // so they cluster together and read as somebody else's settlement.
+      return {
+        id: name,
+        size: list.length,
+        anchor: visiting
+          ? colonyAnchor(visiting.colony, colonyIndex.get(visiting.colony), visitingColonies.length)
+          : null,
+      }
+    })
+    this.streets = planStreets()
+    // A route cached before the ring moved would drive the old road. Stamping the plan and
+    // comparing it is cheaper than diffing two cell sets on every house on every frame.
+    this._streetStamp = [...this.streets.all].sort().join('|')
+    // The depot leans toward whichever street runs beside it, and that street lays an apron out
+    // to their shared edge. Its own cell can never carry a carriageway — it is a
+    // `PROTECTED_CELL`, because that would be tarmac under a building — so this is as close to
+    // the road as a depot gets: it fronts the street instead of standing in the middle of its
+    // own field, and a delivery pulls out of the yard on to tarmac rather than on to grass.
+    // Cheap vector work, so it stays per-poll; only the meshes below are gated.
+    const approach = depotApproach(SHIP_CELL_FOR_STREETS, this.streets.all)
+    this._shipAnchor.copy(shipPosition())
+    if (approach) {
+      this._shipAnchor.x += approach.x * DEPOT_ROAD_SHIFT
+      this._shipAnchor.z += approach.z * DEPOT_ROAD_SHIFT
+    }
+    this.ship.group.position.x = this._shipAnchor.x
+    this.ship.group.position.z = this._shipAnchor.z
+    this.ship.group.position.y = terrainHeight(this._shipAnchor.x, this._shipAnchor.z, this.planet)
+
+    // The road, the cars parked along it and the bikes at the kerb are all a pure function of
+    // the street plan and the terrain under it — none of them reads the plot layout. So they
+    // rebuild only when the street stamp or the planet changes, the same way the town does
+    // below. Left ungated (as they were), a whole street network of hundreds of pieces was
+    // re-merged, re-materialised and re-uploaded every 15s poll for a byte-identical result —
+    // pure churn on an always-on wall. `parkedCars`/`parkedBikes` are deterministic per tile,
+    // so this only misses a real change, never a phantom one.
+    const roadStamp = `${this._streetStamp}#${this.planet.id}`
+    if (roadStamp !== this._roadStamp) {
+      this.roadGroup?.userData.dispose?.()
+      if (this.roadGroup) this.worldGroup.remove(this.roadGroup)
+      this.roadGroup = createRoads({
+        streets: this.streets,
+        groundAt: (x, z) => this.groundAt(x, z),
+        apron: new Set([key(SHIP_CELL_FOR_STREETS.x, SHIP_CELL_FOR_STREETS.z)]),
+      })
+      this.worldGroup.add(this.roadGroup)
+
+      // Cars standing at the kerb, and bikes in the spaces the cars did not take (the same hash
+      // on the same kerbside spaces, so the two partition rather than overlap). `y` is sampled
+      // once, like the road tiles, because the ground under a street rolls between plots.
+      const carriageway = this.roadGroup.userData.carriageway ?? []
+      this._parkedCars = parkedCars(carriageway, PARKING_LANE_OFFSET, PARKED_SEED).map((car) => ({
+        ...car,
+        y: this._carY(car.x, car.z),
+      }))
+
+      this.bikeGroup?.userData.dispose?.()
+      if (this.bikeGroup) this.worldGroup.remove(this.bikeGroup)
+      this.bikeGroup = createBicycles({
+        bikes: parkedBikes(carriageway, PARKING_LANE_OFFSET, PARKED_SEED),
+        groundAt: (x, z) => this.groundAt(x, z),
+      })
+      this.worldGroup.add(this.bikeGroup)
+
+      this._roadStamp = roadStamp
+    }
+
+    const layout = allocateCells(projectList, this.plotCells, this.streets.all)
+
+    // Every cell the colony itself occupies: every plot's cells, plus the depot's own —
+    // `townPlan` skips these so a town building never lands on ground the colony already
+    // claims. Built from `layout`, not `this.plotCells`, so a zone that just vanished frees
+    // its block on the same poll rather than a tick later.
+    const claimed = new Set([key(SHIP_CELL_FOR_STREETS.x, SHIP_CELL_FOR_STREETS.z)])
+    for (const cells of layout.values()) {
+      for (const cell of cells) claimed.add(key(cell.x, cell.z))
+    }
+    // Scatter's own rebuild (`_buildScatter`, triggered below by a footprint change) runs
+    // later in this same poll and wants the same claimed set the town was just built from.
+    this._claimedCells = claimed
+    // The town is a pure function of the street plan, the claimed cells, and `groundAt` — and
+    // `groundAt` resolves to `terrainHeight(x, z, this.planet)` for every cell the town ever
+    // queries, so the planet counts as an input too. A poll that moved none of the three
+    // leaves the town identical — rebuilding it anyway is ~150k+ vertices of merge-and-dispose
+    // churn for no visible change. `_streetStamp` already stamps the street plan for exactly
+    // this purpose; `townStamp()` folds `claimed` and `this.planet.id` in alongside it, so a
+    // planet switch (the UI's picker, or the HUD's Tab shortcut) is not missed the way it was
+    // before this stamp covered it — see `src/world/town-mesh.js`.
+    const claimedStamp = [...claimed].sort().join('|')
+    const stamp = townStamp(this._streetStamp, claimedStamp, this.planet.id)
+    if (stamp !== this._townStamp) {
+      this.townGroup?.userData.dispose?.()
+      if (this.townGroup) this.worldGroup.remove(this.townGroup)
+      this.townGroup = createTown({ streets: this.streets.all, claimed, groundAt: (x, z) => this.groundAt(x, z) })
+      this.worldGroup.add(this.townGroup)
+
+      // The street trees and the parks share every input the town stamp already folds in — the
+      // street plan, the claimed set and the planet — so they belong inside the same guard, not
+      // rebuilt unconditionally every poll beside it. The ordering still holds: a park may not
+      // be planted on ground the colony has claimed, and `claimed` is known by here. Trees line
+      // the streets (the road group's verge, which is street-derived and valid even on a poll
+      // that did not rebuild the road) and fill the parks; a park is one `parkItems` layout
+      // split by kit — slabs/benches/bin are city-kit, trees/bushes/grass forest-kit — so the
+      // two packs cannot share a mesh, hence a tree group and a separate park-furniture group.
+      const parks = parkItems(greenBlocks({ streets: this.streets.all, claimed }), this.streets.all)
+
+      this.treeGroup?.userData.dispose?.()
+      if (this.treeGroup) this.worldGroup.remove(this.treeGroup)
+      this.treeGroup = createStreetTrees({
+        furniture: [...(this.roadGroup.userData.verge ?? []), ...parks],
+        groundAt: (x, z) => this.groundAt(x, z),
+      })
+      this.worldGroup.add(this.treeGroup)
+
+      this.parkGroup?.userData.dispose?.()
+      if (this.parkGroup) this.worldGroup.remove(this.parkGroup)
+      this.parkGroup = createParkFurniture({ items: parks, groundAt: (x, z) => this.groundAt(x, z) })
+      this.worldGroup.add(this.parkGroup)
+
+      this._townStamp = stamp
+    }
+
     // Remembered, not replaced: a project that has just lost its last thread keeps its
     // ground on the books, and the oldest entries fall off the end.
     for (const [name, cells] of layout) {
@@ -468,7 +647,7 @@ export class Colony {
     while (this.plotCells.size > LAYOUT_MEMORY) this.plotCells.delete(this.plotCells.keys().next().value)
 
     const wanted = new Map()
-    for (const [name, cells] of layout) wanted.set(name, `${name}:${cells.map((c) => `${c.q},${c.r}`).join('/')}`)
+    for (const [name, cells] of layout) wanted.set(name, `${name}:${cells.map((c) => `${c.x},${c.z}`).join('/')}`)
 
     // A plot is rebuilt whenever its own footprint moved, and left completely alone
     // whenever it did not.
@@ -492,7 +671,7 @@ export class Colony {
       const accent = this._pickAccent(name)
       // Sit the slab on the terrain under its root cell. Near the ship that is ~0; a visiting
       // district anchored far out lands on whatever the ground does there, instead of floating.
-      const root = cellWorld(cells[0].q, cells[0].r)
+      const root = cellWorld(cells[0].x, cells[0].z)
       const groundY = terrainHeight(root.x, root.z, this.planet)
       const plot = new Plot({ id: name, name, index, cells, accent, groundY })
       plot.signature = wanted.get(name)
@@ -521,15 +700,16 @@ export class Colony {
     this.plotOrder = [...this.plots.values()]
     this._syncColonyBanners()
     // Zones that just moved, appeared or grew are zones the scatter does not know about.
-    if (this.scatterGroup && this._plotFootprint() !== this._scatterFootprint) this._buildScatter()
-    // Which hex cells are decked. Ground height is asked for once per moving agent per
+    if (this.scatterGroup && (this._plotFootprint() !== this._scatterFootprint || (this.streets && !this._scatterHadStreets)))
+      this._buildScatter()
+    // Which cells are decked. Ground height is asked for once per moving agent per
     // frame, so it wants to be a lookup rather than a scan over every plot's every tile.
     // Cell → the deck's top height there, so the crew stands on a sunk district's deck rather
     // than at a flat 0.45. Near the ship groundY is ~0, so this is the old DECK_TOP everywhere
     // that mattered before districts existed.
     this.deckedCells = new Map()
     for (const plot of this.plotOrder) {
-      for (const cell of plot.cells) this.deckedCells.set(`${cell.q},${cell.r}`, plot.groundY + DECK_TOP)
+      for (const cell of plot.cells) this.deckedCells.set(`${cell.x},${cell.z}`, plot.groundY + DECK_TOP)
     }
     this._syncLabels()
   }
@@ -591,8 +771,8 @@ export class Colony {
   }
 
   groundAt(x, z) {
-    const cell = worldToHex(x, z)
-    const deck = this.deckedCells?.get(`${cell.q},${cell.r}`)
+    const cell = worldToCell(x, z)
+    const deck = this.deckedCells?.get(`${cell.x},${cell.z}`)
     if (deck !== undefined) return deck
     return terrainHeight(x, z, this.planet)
   }
@@ -736,27 +916,34 @@ export class Colony {
       }
     }
 
-    const ship = shipPosition()
+    const ship = this._shipAnchor
     obstacles.push({ x: ship.x, z: ship.z, r: 3.4 + AGENT_RADIUS })
+    // The hall is its own obstacle. The depot's circle is centred on the anchor and reaches
+    // 3.4, which covers the office and nothing else — the hall stands beside it and its far
+    // corner is 6.5 out, so without this crew would be routed straight through the building.
+    const hall = this.ship.hallObstacle?.()
+    if (hall) obstacles.push({ x: hall.x, z: hall.z, r: hall.r + AGENT_RADIUS })
     this.nav.rebuild(obstacles)
   }
 
-  /** The plot under a world point. On a hex lattice the nearest cell centre is the cell. */
+  /**
+   * The plot under a world point.
+   *
+   * Not a radius around the nearest cell centre: a square lattice's cells are squares, not
+   * circles, so a circular threshold either clips the corners (too small) or reaches past the
+   * cell's own edges into its neighbour's (too large) — the old hex-era radius did neither,
+   * because 7.6 was that hexagon's own circumradius, but it is meaningless on this lattice's
+   * 12-unit cells. `worldToCell` already answers "which cell is this point in" the same way
+   * the deck itself is laid out — round each axis to its nearest centre — so a point is on a
+   * plot exactly when that cell belongs to it, corners included and with no slop either way.
+   */
   plotAt(x, z) {
-    let best = null
-    let bestD = Infinity
+    const cell = worldToCell(x, z)
+    const k = key(cell.x, cell.z)
     for (const plot of this.plotOrder) {
-      for (const local of plot.localCenters) {
-        const dx = x - (plot.center.x + local.x)
-        const dz = z - (plot.center.z + local.z)
-        const d = dx * dx + dz * dz
-        if (d < bestD) {
-          bestD = d
-          best = plot
-        }
-      }
+      if (plot.cellKeys.has(k)) return plot
     }
-    return bestD <= PLOT_CELL * PLOT_CELL ? best : null
+    return null
   }
 
   /**
@@ -793,9 +980,21 @@ export class Colony {
   }
 
   /**
-   * Take the zone layout out of the colony file. Cells arrive as `[q, r]` pairs from a file
+   * Take the zone layout out of the colony file. Cells arrive as `[x, z]` pairs from a file
    * a person can edit, so anything that is not a pair of whole numbers is dropped rather
    * than trusted — a bad entry would put a zone on a cell that does not exist.
+   *
+   * Cells remembered before the lattice was squared are read as square coordinates. They are
+   * valid small integers, so nothing errors -- every plot simply lands somewhere new once and
+   * is sticky from then on.
+   *
+   * It cannot be done more cleanly. `data/colony.json` carries a version, but the gate that
+   * reads it is `server/api.mjs:37`, and `server/` is a colleague's file this branch does not
+   * touch. So there is no way to announce the change through the file.
+   *
+   * This is the one-time rearrangement the whole stickiness machinery exists to prevent,
+   * happening deliberately. Without this note a reader who finds it later will think it is the
+   * bug rather than the migration.
    */
   restoreLayout(saved) {
     const clean = new Map()
@@ -803,9 +1002,9 @@ export class Colony {
       if (!Array.isArray(cells)) continue
       const list = []
       for (const cell of cells) {
-        const q = Array.isArray(cell) ? cell[0] : cell?.q
-        const r = Array.isArray(cell) ? cell[1] : cell?.r
-        if (Number.isInteger(q) && Number.isInteger(r)) list.push({ q, r })
+        const x = Array.isArray(cell) ? cell[0] : cell?.x
+        const z = Array.isArray(cell) ? cell[1] : cell?.z
+        if (Number.isInteger(x) && Number.isInteger(z)) list.push({ x, z })
       }
       if (list.length) clean.set(String(name), list)
     }
@@ -815,7 +1014,7 @@ export class Colony {
   /** The same, on the way out. */
   layoutForSave() {
     const out = {}
-    for (const [name, cells] of this.plotCells) out[name] = cells.map((c) => [c.q, c.r])
+    for (const [name, cells] of this.plotCells) out[name] = cells.map((c) => [c.x, c.z])
     return out
   }
 
@@ -886,8 +1085,8 @@ export class Colony {
     // standing in the neighbouring repo's yard reads as belonging to that repo. The inside
     // of its own plot is always the better answer when the outside is somebody else's.
     const onPlot = (v) => {
-      const cell = worldToHex(v.x, v.z)
-      return plot.cellKeys.has(`${cell.q},${cell.r}`)
+      const cell = worldToCell(v.x, v.z)
+      return plot.cellKeys.has(`${cell.x},${cell.z}`)
     }
     if (!onPlot(site)) {
       const inward = new THREE.Vector3(b.x - Math.cos(a) * stand, 0, b.z - Math.sin(a) * stand)
@@ -921,6 +1120,7 @@ export class Colony {
     // car this frame, and both of those pack their instances from that flag — run it after
     // them and every crew member would be drawn one frame behind its own car.
     this._updateDeliveries(dt)
+    this._updateTraffic(dt)
     this.astronauts.update(dt, elapsed)
     this.astronauts.updateRings(elapsed)
     this.indicators.update(this.astronauts.agents, elapsed, (a) => this._badgeFor(a))
@@ -962,6 +1162,17 @@ export class Colony {
   _isActive(id) {
     const thread = this.threads.get(id)
     return Boolean(thread && (thread.running || thread.unread || thread.hasError))
+  }
+
+  /** How many buildings currently have somebody standing at them, by `_isActive`'s own
+   *  reckoning — the same test `_updateDeliveries` uses to decide whether a site gets a
+   *  delivery car, so traffic density and delivery presence agree on what "active" means. */
+  _activeThreadCount() {
+    let n = 0
+    for (const id of this.buildings.keys()) {
+      if (this._isActive(id)) n++
+    }
+    return n
   }
 
   /**
@@ -1103,13 +1314,15 @@ export class Colony {
       // them idling on the depot pad for every thread the colony has ever seen.
       if (entry.driven <= 0 && !wants) continue
 
-      const at = pointAt(route.points, entry.driven)
+      // `wants` is also which way this car is going: out to the address, or home again. The
+      // lane follows from that, the same as it does for ambient traffic.
+      const at = this._sampleLane(route, entry.driven, wants)
       vehicles.push({
         x: at.x,
         // The route is drawn cell to cell, but the ground under it is not flat: plots sit on
         // raised decks and the terrain rolls between them. Sampling the same height the crew
         // walks on is what keeps a car on the surface instead of through a deck.
-        y: this.groundAt(at.x, at.z),
+        y: this._carY(at.x, at.z),
         z: at.z,
         heading: at.heading,
         distance: entry.driven,
@@ -1127,9 +1340,198 @@ export class Colony {
   }
 
   /**
+   * Ambient traffic: cars nobody owns, driving the same streets a busy colony's deliveries
+   * do. The pool is sized off how many threads are active (`trafficCount`, `traffic.js`) and
+   * grown or shrunk toward that target; each vehicle steps its own four-state machine
+   * (`stepVehicle`) between the depot and a house picked by its own `addressSeed`.
+   *
+   * Deliberately after `_updateDeliveries` in `update()`, the same way that method is
+   * deliberately ahead of the crew: ambient traffic has no rider and nothing downstream
+   * depends on its ordering, so there is no similar constraint here — it simply has to run
+   * once a frame like everything else.
+   */
+  _updateTraffic(dt) {
+    // How much street there is, not just how busy the colony is — see `trafficCount`.
+    const wanted = trafficCount(this._activeThreadCount(), this.streets?.all?.size ?? 0)
+    while (this._trafficVehicles.length < wanted) {
+      this._trafficVehicles.push(newVehicle(this._trafficSeed++))
+    }
+    while (this._trafficVehicles.length > wanted) {
+      const dropped = this._trafficVehicles.pop()
+      // A vehicle dropped from the pool takes its cached route with it, or the cache would
+      // grow by one entry for every car the colony has ever shed instead of staying bounded
+      // by the pool it currently holds.
+      if (dropped._routeKey) this._trafficRoutes.delete(dropped._routeKey)
+    }
+
+    // Where each car stands *before* anything moves. Two passes rather than one, so the gap a
+    // car keeps is measured against this frame's positions instead of last frame's: with
+    // forty cars the extra `pointAt` per car is nothing, and a frame of lag in a following
+    // rule is exactly how a queue starts oscillating.
+    const routes = []
+    const standing = []
+    for (const vehicle of this._trafficVehicles) {
+      const route = this._trafficRouteFor(vehicle)
+      routes.push(route)
+      standing.push(this._sampleRoute(route, vehicle))
+    }
+
+    const rendered = []
+    for (let i = 0; i < this._trafficVehicles.length; i++) {
+      const route = routes[i]
+      // `standing` holds this car's own entry too; `headwayFactor` skips it by identity.
+      const vehicle = stepVehicle(
+        this._trafficVehicles[i],
+        dt,
+        route.length,
+        Math.random,
+        headwayFactor(standing[i], standing, HEADWAY)
+      )
+      this._trafficVehicles[i] = vehicle
+
+      const at = this._sampleRoute(route, vehicle)
+      rendered.push({
+        x: at.x,
+        // Sampled the same way `_updateDeliveries` samples it, for the same reason: the
+        // route is drawn cell to cell, but the ground under it rolls between plots.
+        y: this._carY(at.x, at.z),
+        z: at.z,
+        heading: at.heading,
+        distance: vehicle.driven,
+        body: vehicle.body,
+        tint: vehicle.tint,
+      })
+    }
+    // Parked cars ride along in the same fleet: same buckets, same instanced meshes, and
+    // their fixed `distance` of 0 is what keeps a standing car's wheels from turning.
+    for (const car of this._parkedCars) rendered.push(car)
+
+    this.traffic.update(rendered)
+  }
+
+  /**
+   * The height a car's wheels stand at.
+   *
+   * On a street cell, the carriageway's own surface; anywhere else, the ground. Cars were
+   * placed at `groundAt` everywhere, which is where a road tile's *base* sits rather than the
+   * surface a car drives on, so the whole fleet stood 0.084 down inside the asphalt — more
+   * than a wheel radius — and read as half-melted into the road.
+   *
+   * Decided per position rather than per car, because the one car that must *not* be lifted is
+   * a delivery at the end of its route: it parks at a house's kerb, off the carriageway, where
+   * there is no road surface and the ground is what it stands on.
+   */
+  _carY(x, z) {
+    const ground = this.groundAt(x, z)
+    const cell = worldToCell(x, z)
+    const surface = this.streets?.all?.has(key(cell.x, cell.z)) ? roadSurfaceY(ground) : ground
+    // Plus the drop from the body's own origin to its contact patch. Putting the origin on a
+    // surface is not the same as putting the tyres on it, and the difference is most of a
+    // wheel — see `CAR_GROUND_DROP` in `deliveries.js`.
+    return surface + CAR_GROUND_DROP
+  }
+
+  /**
+   * Where a car is, on the lane it is actually driving.
+   *
+   * A round trip is two journeys, and each keeps to its own right, so the way home is its own
+   * polyline running the other way (`drivingLanes` in `drive-path.js`). Sampling the outbound
+   * line for both is what had every car drive its whole return leg backwards down the wrong
+   * side of the road.
+   *
+   * Progress crosses between them as a **fraction**, not as a distance: offsetting a route
+   * right and offsetting it left cut its corners by different amounts, so the two lanes are
+   * not the same length and `driven` does not mean the same thing on both. A car turning round
+   * does jump across the road once — it is standing still when it happens, which is the
+   * cheapest place for a U-turn nobody animated.
+   */
+  _sampleLane(route, driven, outbound) {
+    if (outbound || !route.back) return pointAt(route.points, driven)
+    const travelled = route.length > 0 ? driven / route.length : 0
+    return pointAt(route.back, (1 - travelled) * route.backLength)
+  }
+
+  /** The same, for an ambient vehicle, whose direction of travel is carried by its phase. */
+  _sampleRoute(route, vehicle) {
+    return this._sampleLane(route, vehicle.driven, vehicle.phase === 'out' || vehicle.phase === 'parked')
+  }
+
+  /**
+   * The route from the depot to one traffic vehicle's address.
+   *
+   * Cached in `this._trafficRoutes`, keyed on `addressSeed` plus `this._streetStamp`, for
+   * the same reason `_routeFor` caches: a route only changes when its destination or the
+   * streets do. `houses` is handed in fresh each frame — the colony's building roster can
+   * change under a vehicle mid-journey — but only consulted on a cache miss, so a vehicle's
+   * route does not jump to a different house just because one was added or removed.
+   *
+   * With no house built yet, there is nowhere to send a car: it gets a single-point,
+   * zero-length route and sits at the depot rather than throwing on an empty `houses`.
+   */
+  _trafficRouteFor(vehicle) {
+    const streetCells = this.streets?.cells
+    const ends = routeEndpoints(vehicle, streetCells?.length ?? 0)
+    // Nowhere to drive between: fewer than two street cells, which is where every colony
+    // starts and what it falls back to if the plan is ever empty.
+    if (!ends) {
+      const depot = this._shipAnchor
+      const standstill = [{ x: depot.x, z: depot.z }]
+      return { points: standstill, back: standstill, length: 0, backLength: 0 }
+    }
+
+    // Keyed on both ends, not just the destination: a car's origin is now its own rather than
+    // the single cell every car in the colony shared.
+    const cacheKey = `${vehicle.originSeed}|${vehicle.addressSeed}|${this._streetStamp}`
+    let route = this._trafficRoutes.get(cacheKey)
+    if (!route) {
+      // Street cell to street cell, and `strict` so it stays there. Both ends being streets was
+      // not enough on its own: `OFF_ROAD_COST` makes tarmac a preference, so a shortcut across
+      // one cell of grass still beat a seven-cell detour, and half of all ambient routes (20 of
+      // 40, measured on the shipping plan) cut a corner across the verge. A delivery may do
+      // that — it has to, to reach a house — but a car with no errand driving over a lawn is
+      // just a car driving over a lawn.
+      const cells = roadCells(streetCells[ends.from], streetCells[ends.to], this.streets.all, {
+        strict: true,
+      })
+      // No street-only route between the two: the car stays where it lives rather than setting
+      // off across a field. Needs a disconnected network to happen at all, which this plan does
+      // not have, but "drive over the grass" is not the right answer when it does.
+      if (!cells) {
+        const home = cellWorld(streetCells[ends.from].x, streetCells[ends.from].z)
+        const standstill = [{ x: home.x, z: home.z }]
+        return { points: standstill, back: standstill, length: 0, backLength: 0 }
+      }
+      const lanes = drivingLanes(
+        cells.map((c) => cellWorld(c.x, c.z)),
+        DRIVING_LANE_OFFSET
+      )
+      // Two lanes, and their lengths are deliberately not assumed equal: offsetting right and
+      // offsetting left cut a corner by different amounts. Progress is carried as a fraction
+      // of the journey rather than as a distance shared between them — see `_sampleRoute`.
+      route = {
+        points: lanes.out,
+        back: lanes.back,
+        length: pathLength(lanes.out),
+        backLength: pathLength(lanes.back),
+      }
+      this._trafficRoutes.set(cacheKey, route)
+    }
+
+    // The vehicle has moved on to a different address since the last time this ran — a
+    // round trip re-seeds `addressSeed` (see `stepVehicle`'s `'back'` phase in `traffic.js`)
+    // — so its previous cache entry is now unreachable by any key this method will look up
+    // again for it, and is dropped here rather than left to sit forever.
+    if (vehicle._routeKey && vehicle._routeKey !== cacheKey) {
+      this._trafficRoutes.delete(vehicle._routeKey)
+    }
+    vehicle._routeKey = cacheKey
+    return route
+  }
+
+  /**
    * The route from the depot to one house, built once and kept on the building entry.
    *
-   * A hex line is cheap but not free, and redrawing one every frame for every thread in a
+   * A route is cheap but not free, and rebuilding one every frame for every thread in a
    * full colony is pure waste — a route only changes when the house it ends at does. Keyed
    * on the plot and slot, plus the house's own position: a zone rebuilt underneath a building
    * keeps its id and its slot but moves the ground, and a route cached on the ids alone would
@@ -1143,15 +1545,27 @@ export class Colony {
       cached.plot === entry.plot &&
       cached.slot === entry.slot &&
       cached.x === p.x &&
-      cached.z === p.z
+      cached.z === p.z &&
+      cached.streets === this._streetStamp
     ) {
       return cached
     }
 
-    const depot = shipPosition()
-    const start = worldToHex(depot.x, depot.z)
-    const end = worldToHex(p.x, p.z)
-    const points = hexLine(start.q, start.r, end.q, end.r).map((c) => cellWorld(c.q, c.r))
+    const depot = this._shipAnchor
+    const start = worldToCell(depot.x, depot.z)
+    const end = worldToCell(p.x, p.z)
+    // The cell sequence is the only thing the streets change. Everything below — the kerb
+    // pull-back, the cache key, the route object — is stage 2's, verified by hand over 600
+    // frames, and is deliberately left alone.
+    // Shifted off the centre line into the right-hand lane, once for each direction. A route
+    // is built from cell centres and the carriageway is drawn centred on those same cells, so
+    // an unshifted route runs straight down the road's own paint, and a single shifted one has
+    // the car come home on the wrong side of it — see `drivingLanes` in `drive-path.js`.
+    const lanes = drivingLanes(
+      roadCells(start, end, this.streets?.all).map((c) => cellWorld(c.x, c.z)),
+      DRIVING_LANE_OFFSET
+    )
+    const points = lanes.out
 
     // The last cell centre is not the address: parking on it leaves the car a half-cell short
     // of the house it was sent to, or sitting in a neighbour's garden. The house's own centre
@@ -1177,8 +1591,21 @@ export class Colony {
       }
     }
     points[points.length - 1] = kerb
+    // The way home starts from the same kerb the way out ended at, or the car would leave from
+    // a point half a cell away from the one it parked on.
+    lanes.back[0] = { x: kerb.x, z: kerb.z }
 
-    const route = { plot: entry.plot, slot: entry.slot, x: p.x, z: p.z, points, length: pathLength(points) }
+    const route = {
+      plot: entry.plot,
+      slot: entry.slot,
+      x: p.x,
+      z: p.z,
+      streets: this._streetStamp,
+      points,
+      back: lanes.back,
+      length: pathLength(points),
+      backLength: pathLength(lanes.back),
+    }
     entry.route = route
     return route
   }
@@ -1251,6 +1678,12 @@ export class Colony {
     this.indicators.dispose()
     this.particles.dispose()
     this.deliveries.dispose()
+    this.traffic.dispose()
+    this.roadGroup?.userData.dispose?.()
+    this.bikeGroup?.userData.dispose?.()
+    this.treeGroup?.userData.dispose?.()
+    this.parkGroup?.userData.dispose?.()
+    this.townGroup?.userData.dispose?.()
     disposeTree(this.worldGroup)
     disposeTree(this.plotGroup)
     disposeTree(this.labelGroup)

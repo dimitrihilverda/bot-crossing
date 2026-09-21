@@ -10,6 +10,7 @@ import { Neighbors, cleanNeighbor } from '../server/neighbors.mjs'
 import { Discovery } from '../server/discovery.mjs'
 import { applyViewed } from '../server/api.mjs'
 import { allocateCells, colonyAnchor } from '../src/world/plots.js'
+import { distance } from '../src/world/grid.js'
 
 // ── the guest socket ──────────────────────────────────────────────────────────
 
@@ -206,8 +207,6 @@ test('removing a neighbour drops its cache with it', () => {
 
 // ── district layout ─────────────────────────────────────────────────────────────
 
-const hexDist = (a, b) => (Math.abs(a.q - b.q) + Math.abs(a.q + a.r - b.q - b.r) + Math.abs(a.r - b.r)) / 2
-
 test("a visiting colony's repos cluster near its anchor, out past the home zones", () => {
   const anchor = colonyAnchor('Chantal')
   const layout = allocateCells([
@@ -217,19 +216,19 @@ test("a visiting colony's repos cluster near its anchor, out past the home zones
     { id: 'Chantal · mios', size: 5, anchor },
   ])
 
-  // Both of Chantal's repos land within a couple of rings of her anchor…
+  // Both of Chantal's repos land within a couple of steps of her anchor…
   for (const id of ['Chantal · wra', 'Chantal · mios']) {
     const cells = layout.get(id)
     assert.ok(cells.length > 0, `${id} got no cells`)
-    const nearest = Math.min(...cells.map((c) => hexDist(c, anchor)))
-    assert.ok(nearest <= 2, `${id} settled ${nearest} rings from its anchor`)
+    const nearest = Math.min(...cells.map((c) => distance(c, anchor)))
+    assert.ok(nearest <= 2, `${id} settled ${nearest} steps from its anchor`)
   }
 
   // …and well clear of the home zones, which sit in the middle.
   const home = [...layout.get('home-a'), ...layout.get('home-b')]
   const guest = layout.get('Chantal · mios')
-  const farthestHome = Math.max(...home.map((c) => hexDist(c, { q: 0, r: 0 })))
-  const nearestGuest = Math.min(...guest.map((c) => hexDist(c, { q: 0, r: 0 })))
+  const farthestHome = Math.max(...home.map((c) => distance(c, { x: 0, z: 0 })))
+  const nearestGuest = Math.min(...guest.map((c) => distance(c, { x: 0, z: 0 })))
   assert.ok(nearestGuest > farthestHome, 'the district overlaps the home zones instead of standing apart')
 })
 
@@ -237,7 +236,7 @@ test("a district member stranded far from its anchor is pulled back to the distr
   const anchor = colonyAnchor('Chantie')
   // Its memory says it sits near the middle of the map — a stale placement from before its
   // colony was known. It must not stay there; it belongs in Chantie's district.
-  const stale = new Map([['Chantie · bot-crossing', [{ q: 0, r: 0 }]]])
+  const stale = new Map([['Chantie · bot-crossing', [{ x: 0, z: 0 }]]])
   const layout = allocateCells(
     [
       { id: 'Chantie · mios', size: 60, anchor },
@@ -246,7 +245,7 @@ test("a district member stranded far from its anchor is pulled back to the distr
     stale
   )
   const root = layout.get('Chantie · bot-crossing')[0]
-  assert.ok(hexDist(root, anchor) <= 3, `bot-crossing stayed ${hexDist(root, anchor)} rings from the anchor`)
+  assert.ok(distance(root, anchor) <= 3, `bot-crossing stayed ${distance(root, anchor)} steps from the anchor`)
 })
 
 test('two colonies that both know a repo called "wra" get separate districts', () => {
@@ -257,8 +256,8 @@ test('two colonies that both know a repo called "wra" get separate districts', (
   const c = layout.get('Chantal · wra')
   const b = layout.get('Bram · wra')
   // No shared cell between the two districts.
-  const cKeys = new Set(c.map((x) => `${x.q},${x.r}`))
-  assert.ok(b.every((x) => !cKeys.has(`${x.q},${x.r}`)), 'the two "wra" districts overlap')
+  const cKeys = new Set(c.map((x) => `${x.x},${x.z}`))
+  assert.ok(b.every((x) => !cKeys.has(`${x.x},${x.z}`)), 'the two "wra" districts overlap')
 })
 
 // ── discovery ─────────────────────────────────────────────────────────────────

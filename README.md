@@ -84,7 +84,7 @@ than have you work around it.
 
 | In the colony | In your threads |
 | --- | --- |
-| One hex zone | One repo. Bigger repos claim more tiles — one per seven threads, grown as a contiguous blob from the middle outward. A zone stays where it is: see below |
+| One square zone | One repo. Bigger repos claim more tiles — one per nine threads, grown as a contiguous blob from the middle outward. A zone stays where it is: see below |
 | One astronaut + one building | One session |
 | How finished a building looks | How large its transcript is, on a log scale |
 | A delivery car parked at a house | Somebody is at that site right now |
@@ -93,6 +93,13 @@ than have you work around it.
 | Walking back into the ship | You archived it |
 
 ### A zone stays where it is
+
+The colony sits on a square lattice, pitched at 12 units to match the art packs' 2-unit
+module and the town's own road period. Each cell is a square block with a kerb bar along
+each of its four edges, holding up to nine buildings — `SLOTS_PER_CELL` — in a 3 × 3
+arrangement. Streets run on the same grid, so every corner a road takes is a real right
+angle, laid with the kit's own corner piece rather than a patch standing in for an angle
+nothing in the pack turns.
 
 The map is only useful if you can learn it, so the layout is *sticky*. The previous
 arrangement is an input to the next one: a repo that still needs the same number of tiles
@@ -342,8 +349,8 @@ so lit surfaces stay crisp instead of going hazy.
 
 ## Where the art comes from
 
-The colony is built out of five CC0 asset packs by **[Kay Lousberg](https://kaylousberg.com)**,
-plus the project's own shaders on top of them.
+The colony is built out of six CC0 asset packs by **[Kay Lousberg](https://kaylousberg.com)**,
+one part borrowed from elsewhere, plus the project's own shaders on top of them.
 
 | Pack | Used for | Licence |
 | --- | --- | --- |
@@ -352,10 +359,22 @@ plus the project's own shaders on top of them.
 | [KayKit : Space Base Bits](https://kaylousberg.itch.io/space-base-bits) | The crates, drums and floodlights stacked around each plot, and the containers stacked in the depot's yard | CC0 |
 | [KayKit : Character Animations](https://kaylousberg.itch.io/kaykit-character-animations) | The crew's body and all seventeen animation clips they play | CC0 |
 | [KayKit : Forest Nature Pack](https://kaylousberg.itch.io/kaykit-forest) | Terra's trees, bushes and grass, and the boulders on every world | CC0 |
+| [KayKit : Prototype Bits](https://kaylousberg.itch.io/prototype-bits) | Walls, roof slopes, beams and pallets — the pieces the depot's hall is composed out of | CC0 |
+| [Quaternius : LowPoly Public Transport](https://opengameart.org/content/lowpoly-public-transport) | The bicycle, and nothing else | CC0 |
 
 CC0 asks for nothing, but crediting Kay costs nothing either. If you rebuild the assets, all
-five packs go in `assets-src/` (see below); `public/assets/CREDITS.md` is the definitive list
+six packs go in `assets-src/` (see below); `public/assets/CREDITS.md` is the definitive list
 of what each `.glb` is built from.
+
+**The bicycle is the one part Kay did not make.** None of KayKit's 23 packs has one — checked
+across all 222 parts of the five packs this colony loads — and a Dutch street without a bicycle
+is missing the thing that makes it Dutch. So a single model is borrowed from Quaternius' CC0
+pack and grafted into the city kit by `tools/build-bike.mjs`: one part, not a pack of its
+own, because a whole foreign pack would sit *beside* KayKit rather than in it. What makes it belong is that
+it is repainted on the way in — the source model's four materials are all the same flat grey
+(Quaternius colours in Blender, not in the OBJ), so each is mapped to a cell of the city atlas
+and the bicycle comes out sampling the same texture, through the same shader, as the buildings
+and cars around it. Its frame takes the accent cell, so a bicycle can be tinted the way a car is.
 
 One design choice, shared by every pack, is what makes the whole approach work: every model in
 a pack UVs into a single 1024px gradient atlas and therefore shares one material, so a house
@@ -401,30 +420,29 @@ metal.
 Both surfaces needed their UVs rebuilt, and both for the same underlying reason: a generated
 primitive's unwrap is made for the primitive, not for what you draw on it.
 
-A hex tile is a six-sided cylinder, and a cylinder's cap UVs are a *disc* — which turns a tiling
-plate pattern into a medallion, one per tile. The deck's **top** is therefore reprojected from
-world XZ, so the seams run straight across a whole plot and seven cells read as one apron. Its
-**rim** keeps the cylinder's own side unwrap, which is the one thing that works: a fixed
-horizontal axis like `x + z` is *constant* along two of every six sides, leaving those faces
-with no UV gradient, a degenerate tangent and — since three builds the normal-mapped shading
-frame out of that — solid black; and arc length from `atan2` fixes the gradient but adds a seam
-where the wrap crushes a dozen repeats into one panel. The generated unwrap has neither problem,
-because it duplicates the vertices at the seam.
+A plot tile is a box, and a box's top and bottom faces come with their own generated UVs —
+unwrapped per tile, seam and all, so they would repeat once at every tile edge rather than
+reading as one surface. The deck's **top** is therefore reprojected from world XZ instead, so
+the seams run straight across a whole plot and its cells read as one apron rather than one
+repeat per cell. Its **rim** keeps the box's own per-face unwrap, only rescaled to world
+density: a box's four side faces are generated independently, each with its own 0..1 UV square
+and no vertices shared with its neighbours, so — unlike a hexagon's flat sides — there is no
+seam to solve for and no degenerate face to special-case.
 
 A kerb bar is a box, and a box hands all six faces the same 0..1 square, so the dash strip was
 stretched down the sides and across the ends as well — which on a bar 14cm tall squashed the
-dark gaps between dashes into what read as a solid black edge, worst where six of them gather at
+dark gaps between dashes into what read as a solid black edge, worst where four of them gather at
 a plot corner. Only the upper face points at the strip now; the rest point at a patch of flat
 colour on the same texture.
 
 ### Rebuilding them
 
-`npm run assets` packs the raw packs into the five glbs the app loads. The built files are
+`npm run assets` packs the raw packs into the six glbs the app loads. The built files are
 checked in and the raw packs are not, so this is a no-op unless you have fetched them:
 
 ```bash
 mkdir -p assets-src && cd assets-src
-# download the FREE tier of all five packs from the links above, then unzip in place
+# download the FREE tier of all six packs from the links above, then unzip in place
 ```
 
 `npm run assets` runs `tools/build-assets.mjs`, which drives `build-kit.mjs` once per model
@@ -510,7 +528,7 @@ sitting down.
 The crew also stands on the ground rather than on `y = 0`. A plot's tiles are a raised slab
 and the terrain between plots rolls half a metre either way, so a fixed height buries them for
 a good part of the colony. `Colony.groundAt()` answers with the deck height when a point is
-over an allocated hex cell — an exact axial lookup, not a nearest-centre radius test — and the
+over an allocated square cell — an exact lookup, not a nearest-centre radius test — and the
 terrain field otherwise. It is sampled only when an astronaut has actually moved, and eased
 into, so walking up onto a deck reads as a step rather than a teleport.
 
@@ -674,7 +692,7 @@ server/
   serve.mjs    static server for the built app
 src/
   core/        settings, renderer + post chain, the Google Earth camera
-  world/       planets, terrain, sky, hex plots, the model kit, buildings, the ship
+  world/       planets, terrain, sky, square plots, the model kit, buildings, the ship
   agents/      the crew rig and its bake, instanced astronauts, faces, badges, particles
   game/        threads → colony, and the API client
   ui/          the HUD

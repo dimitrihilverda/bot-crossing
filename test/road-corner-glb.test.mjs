@@ -1,0 +1,218 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { NodeIO } from '@gltf-transform/core'
+import {
+  CARRIAGEWAY_WIDTH,
+  DRIVING_LANE_OFFSET,
+  EDGE_LINE_AUTHORED,
+  PARKING_LANE_OFFSET,
+  ROAD_SURFACE_AUTHORED,
+  YELLOW_CELL,
+  roadSurfaceY,
+  roadTileScale,
+} from '../src/world/road-mesh.js'
+import { CAR_BODY_WIDTH, CAR_GROUND_DROP, CAR_SCALE } from '../src/world/deliveries.js'
+import { TRAFFIC_BODIES } from '../src/world/traffic.js'
+
+const COLS = 8
+const ROWS = 4
+const doc = await new NodeIO().read('public/assets/city.glb')
+
+/** Bounding boxes of a part's vertices, grouped by which atlas cell they sample. */
+function byAtlasCell(name) {
+  const node = doc.getRoot().listNodes().find((n) => n.getName() === name)
+  assert.ok(node, `${name} is missing from city.glb`)
+  const out = new Map()
+  for (const prim of node.getMesh().listPrimitives()) {
+    const pos = prim.getAttribute('POSITION')
+    const uv = prim.getAttribute('TEXCOORD_0')
+    const p = []
+    const t = []
+    for (let i = 0; i < pos.getCount(); i++) {
+      pos.getElement(i, p)
+      uv.getElement(i, t)
+      const cell =
+        Math.min(COLS - 1, Math.floor(t[0] * COLS)) + COLS * Math.min(ROWS - 1, Math.floor(t[1] * ROWS))
+      const b = out.get(cell) || { x0: Infinity, x1: -Infinity, z0: Infinity, z1: -Infinity }
+      b.x0 = Math.min(b.x0, p[0])
+      b.x1 = Math.max(b.x1, p[0])
+      b.z0 = Math.min(b.z0, p[2])
+      b.z1 = Math.max(b.z1, p[2])
+      out.set(cell, b)
+    }
+  }
+  return out
+}
+
+const near = (a, b) => Math.abs(a - b) < 0.02
+
+test('road_straight runs along its own Z axis', () => {
+  const cells = byAtlasCell('road_straight')
+  const white = cells.get(1)
+  // The centre line: a narrow band of X, the full length of Z.
+  assert.ok(near(white.x0, -0.02) && near(white.x1, 0.02), `centre line x ${white.x0}..${white.x1}`)
+  assert.ok(near(white.z0, -0.9) && near(white.z1, 0.9), `centre line z ${white.z0}..${white.z1}`)
+  const amber = cells.get(11)
+  // The edge lines: two strips at x = +/-0.62, each the full length of Z.
+  assert.ok(near(amber.x0, -0.62) && near(amber.x1, 0.62), `edge lines x ${amber.x0}..${amber.x1}`)
+  assert.ok(near(amber.z0, -1) && near(amber.z1, 1), `edge lines z ${amber.z0}..${amber.z1}`)
+})
+
+test('road_corner joins its +Z edge to its +X edge', () => {
+  const cells = byAtlasCell('road_corner')
+  const white = cells.get(1)
+  // The centre line is a quarter arc of radius 1 about the tile's (+X,+Z) corner, running
+  // from (0,+1) to (+1,0), so it lives entirely in the +X/+Z quadrant. A tile turned 90 or
+  // 180 degrees puts this box in a different quadrant — which is what makes this test able to
+  // see the defect that seam-hunting could not. road_corner and road_straight are the same
+  // slab: a wrong rotation produces no seam, no gap and no z-fighting, only paint that runs
+  // the wrong way.
+  assert.ok(white.x0 > -0.05 && white.z0 > -0.05, `centre arc starts at ${white.x0},${white.z0}`)
+  assert.ok(near(white.x1, 0.9) && near(white.z1, 0.9), `centre arc ends at ${white.x1},${white.z1}`)
+  const amber = cells.get(11)
+  // Inner edge line: radius 0.38 about (+1,+1). Outer: radius 1.62, clipped by the tile.
+  // Their union is exactly this box, and only this rotation produces it.
+  assert.ok(near(amber.x0, -0.62) && near(amber.x1, 1), `edge arcs x ${amber.x0}..${amber.x1}`)
+  assert.ok(near(amber.z0, -0.62) && near(amber.z1, 1), `edge arcs z ${amber.z0}..${amber.z1}`)
+})
+
+test('road_corner_curved joins its +Z edge to its +X edge, the same ports as road_corner', () => {
+  // The playful revision switches bends from the hard 90-degree road_corner to this rounded
+  // piece, and this project's defining defect was a corner rotated the wrong way — the road
+  // pieces are all the same 2x2 slab, so a wrong rotation produces no seam, no gap and no
+  // z-fighting, only paint that runs the wrong way. Measured exactly the way road_corner is
+  // measured above, not assumed to match it: white centre arc bounded x -0.02..0.90, z
+  // -0.02..0.90 (the same radius-1 quarter arc about the tile's +X/+Z corner), amber arcs
+  // bounded x -0.62..1.00, z -0.62..1.00 (the same inner/outer edge-line pair) — identical
+  // bounding boxes to road_corner's, so it joins the same two edges: +Z to +X. That is what
+  // lets `CORNER_ARMS` in road-mesh.js stay `[S, E]` for the curved part too, rather than
+  // needing its own rotation table.
+  const cells = byAtlasCell('road_corner_curved')
+  const white = cells.get(1)
+  assert.ok(white.x0 > -0.05 && white.z0 > -0.05, `centre arc starts at ${white.x0},${white.z0}`)
+  assert.ok(near(white.x1, 0.9) && near(white.z1, 0.9), `centre arc ends at ${white.x1},${white.z1}`)
+  const amber = cells.get(11)
+  assert.ok(near(amber.x0, -0.62) && near(amber.x1, 1), `edge arcs x ${amber.x0}..${amber.x1}`)
+  assert.ok(near(amber.z0, -0.62) && near(amber.z1, 1), `edge arcs z ${amber.z0}..${amber.z1}`)
+})
+
+test('road_tsplit runs along Z with a branch reaching +X', () => {
+  // Measured the same way as road_straight and road_corner above: its white centre line is
+  // the straight's own band (x -0.02..0.90 — widened past 0 by the branch, still the full
+  // length of Z), and its amber edge lines reach x = 1.00 on the branch side only, while
+  // staying at the straight's -0.62 on the other.
+  const cells = byAtlasCell('road_tsplit')
+  const white = cells.get(1)
+  assert.ok(near(white.x0, -0.02) && near(white.x1, 0.9), `centre line x ${white.x0}..${white.x1}`)
+  assert.ok(near(white.z0, -0.9) && near(white.z1, 0.9), `centre line z ${white.z0}..${white.z1}`)
+  const amber = cells.get(11)
+  assert.ok(near(amber.x0, -0.62) && near(amber.x1, 1), `edge lines x ${amber.x0}..${amber.x1}`)
+  assert.ok(near(amber.z0, -1) && near(amber.z1, 1), `edge lines z ${amber.z0}..${amber.z1}`)
+})
+
+test('road_straight_crossing runs along Z, a drop-in replacement for road_straight', () => {
+  // Same amber edge lines as road_straight, at x = +/-0.62 down the full length of Z; the
+  // white zebra stripes cross them as a wide, shallow band (x -0.82..0.82, z -0.30..0.30). A
+  // crossing therefore takes the same position and the same `ry` a straight would.
+  const cells = byAtlasCell('road_straight_crossing')
+  const white = cells.get(1)
+  assert.ok(near(white.x0, -0.82) && near(white.x1, 0.82), `zebra stripes x ${white.x0}..${white.x1}`)
+  assert.ok(near(white.z0, -0.3) && near(white.z1, 0.3), `zebra stripes z ${white.z0}..${white.z1}`)
+  const amber = cells.get(11)
+  assert.ok(near(amber.x0, -0.62) && near(amber.x1, 0.62), `edge lines x ${amber.x0}..${amber.x1}`)
+  assert.ok(near(amber.z0, -1) && near(amber.z1, 1), `edge lines z ${amber.z0}..${amber.z1}`)
+})
+
+test('a car fits the lane and the parking strip the kit actually painted', () => {
+  // The numbers a car is placed by are derived from paint this test reads back off the tile,
+  // so a re-exported kit that moves its markings fails here rather than silently putting the
+  // colony's traffic on top of its own road markings.
+  const yellow = byAtlasCell('road_straight').get(YELLOW_CELL)
+  assert.ok(yellow, 'road_straight has no yellow paint')
+  assert.ok(
+    near(yellow.x1, EDGE_LINE_AUTHORED) && near(yellow.x0, -EDGE_LINE_AUTHORED),
+    `edge lines at x ${yellow.x0.toFixed(3)}..${yellow.x1.toFixed(3)}, expected +/-${EDGE_LINE_AUTHORED}`
+  )
+
+  const halfCar = (CAR_BODY_WIDTH * CAR_SCALE) / 2
+  const edge = EDGE_LINE_AUTHORED * roadTileScale()
+  const kerb = CARRIAGEWAY_WIDTH / 2
+
+  // Running lane: between the white centre line (x=0) and the yellow one, touching neither.
+  assert.ok(DRIVING_LANE_OFFSET - halfCar > 0, `car crosses the centre line by ${(halfCar - DRIVING_LANE_OFFSET).toFixed(3)}`)
+  assert.ok(DRIVING_LANE_OFFSET + halfCar < edge, `car crosses the edge line by ${(DRIVING_LANE_OFFSET + halfCar - edge).toFixed(3)}`)
+
+  // Parking strip: the asphalt outside the yellow line. A car that does not fit between the
+  // paint and the kerb is a car that has to be made smaller — which is the whole reason
+  // CAR_SCALE is what it is.
+  assert.ok(PARKING_LANE_OFFSET - halfCar > edge, `parked car sits on the edge line by ${(edge - (PARKING_LANE_OFFSET - halfCar)).toFixed(3)}`)
+  assert.ok(PARKING_LANE_OFFSET + halfCar < kerb, `parked car hangs off the asphalt by ${(PARKING_LANE_OFFSET + halfCar - kerb).toFixed(3)}`)
+})
+
+/** Every distinct height a part's vertices sit at, for one atlas cell, lowest first. */
+function levelsOf(name, cell) {
+  const node = doc.getRoot().listNodes().find((n) => n.getName() === name)
+  assert.ok(node, `${name} is missing from city.glb`)
+  const levels = new Set()
+  for (const prim of node.getMesh().listPrimitives()) {
+    const pos = prim.getAttribute('POSITION')
+    const uv = prim.getAttribute('TEXCOORD_0')
+    const p = []
+    const t = []
+    for (let i = 0; i < pos.getCount(); i++) {
+      pos.getElement(i, p)
+      uv.getElement(i, t)
+      const c =
+        Math.min(COLS - 1, Math.floor(t[0] * COLS)) + COLS * Math.min(ROWS - 1, Math.floor(t[1] * ROWS))
+      if (c === cell) levels.add(Number(p[1].toFixed(4)))
+    }
+  }
+  return [...levels].sort((a, b) => a - b)
+}
+
+test('a car stands on the road surface rather than sunk into the slab', () => {
+  // A road tile is not a flat plate: its asphalt has a base, a driving surface and a raised
+  // rim, and the lane paint floats just above the surface. Placing a car at ground height —
+  // which is what shipped — buries it to well over a wheel radius, and the whole fleet reads
+  // as half-melted into the road.
+  const asphalt = levelsOf('road_straight', 2)
+  assert.deepEqual(asphalt, [0, ROAD_SURFACE_AUTHORED, 0.1], 'road_straight no longer has base/surface/rim')
+
+  const paint = levelsOf('road_straight', YELLOW_CELL)
+  assert.equal(paint.length, 1)
+  assert.ok(paint[0] > ROAD_SURFACE_AUTHORED, 'the paint should sit above the surface it marks')
+  assert.ok(paint[0] < 0.1, 'the paint should sit below the rim')
+
+  // On flat ground a car stands above the asphalt it drives on and below the rim beside it.
+  const ground = 0
+  const y = roadSurfaceY(ground)
+  const scale = roadTileScale()
+  assert.ok(y > ground + ROAD_SURFACE_AUTHORED * scale - 1e-9, `car at ${y} is inside the asphalt`)
+  assert.ok(y < ground + 0.1 * scale, `car at ${y} floats above the tile's rim`)
+})
+
+test('a car rests on its tyres, not on its own origin', () => {
+  // Putting the car's origin on the road surface is not the same as putting its wheels there.
+  // A kit car's origin sits above its contact patch: the axle is at 0.0113 and the tyre has a
+  // radius of 0.0723, so the rubber reaches 0.0610 below the origin and the first fix left
+  // every tyre that far into the asphalt. Measured here per body, so a re-exported kit that
+  // re-centres one of them fails rather than sinking it.
+  for (const body of TRAFFIC_BODIES) {
+    const node = doc.getRoot().listNodes().find((n) => n.getName() === `${body}_wheel_front_left`)
+    assert.ok(node, `${body} has no front left wheel`)
+    let lowest = Infinity
+    for (const prim of node.getMesh().listPrimitives()) {
+      const pos = prim.getAttribute('POSITION')
+      const p = []
+      for (let i = 0; i < pos.getCount(); i++) {
+        pos.getElement(i, p)
+        lowest = Math.min(lowest, p[1])
+      }
+    }
+    const contact = node.getTranslation()[1] + lowest
+    assert.ok(
+      Math.abs(-contact * CAR_SCALE - CAR_GROUND_DROP) < 1e-5,
+      `${body} touches down at ${contact.toFixed(4)}, but CAR_GROUND_DROP says ${(-CAR_GROUND_DROP / CAR_SCALE).toFixed(4)}`
+    )
+  }
+})

@@ -2,9 +2,11 @@ import * as THREE from 'three'
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 import { buildFaceAtlas, FACE, FACE_LOOPS, FRAME_COLS, FRAME_ROWS } from './faces.js'
 import { attachMatrixAt, decorateSkinned, frameFor } from './crew.js'
+import { hairToneFor } from './hair.js'
+import { GARMENT_SETS, garmentSetIndexFor } from './garment-sets.js'
+import { SUIT_TONES } from './workwear.js'
 import { skinToneFor } from './skin.js'
-import { HAIR_STYLES, hairStyleIndexFor } from './hair.js'
-import { bandPulse } from './band-pulse.js'
+import { CELL_BASE, CELL_HAIR, CELL_SKIN, GARMENT_CELLS, cellRect } from './atlas-cells.js'
 
 /**
  * Every astronaut in the colony, drawn in a handful of draw calls.
@@ -20,119 +22,42 @@ import { bandPulse } from './band-pulse.js'
  * can never be a frame out of step with the bone it sits on.
  *
  * Per-agent variation that would normally need a separate material rides along as instanced
- * attributes instead: suit colour and eye colour through `instanceColor`, the face's atlas
- * frame and the body's animation frame through custom `aFrame` attributes.
+ * attributes instead: suit colour through `instanceColor`, the face's atlas frame and the
+ * body's animation frame through custom `aFrame` attributes.
  *
  * Picking is done analytically rather than by raycasting the instanced meshes — projecting
  * N head positions to screen space is both cheaper and far more forgiving to click at the
  * size these characters render.
  */
 
-const SUIT_TONES = [0xf3f1ec, 0xe8e4dc, 0xf7f4ee, 0xdfe4e8, 0xf1e9df]
-
 /**
- * One hair colour for every style. Deliberately not per-agent: at the size a crew member
- * renders, the silhouette is what tells two of them apart and the shade of a dark head of
- * hair is not, so a second per-agent colour would be spend without a picture to show for it.
- * Dark enough to read as hair against every one of the six skin tones.
- */
-const HAIR_TONE = 0x2b2320
-
-/** The part name a style's instanced mesh is registered under, so `parts` stays one flat map. */
-const hairPartName = (styleIndex) => `hair_${HAIR_STYLES[styleIndex].name}`
-
-/**
- * Trim + eye colour per behaviour. Eyes are pushed past 1.0 so the bloom pass catches them.
+ * The eight statuses an agent can be in: the six of `STATUS_ORDER` plus the two states an
+ * agent passes through on its way in and out. This table used to carry a trim colour (for
+ * the hi-vis band round a crew member's torso) and an eye colour (repainted onto the
+ * garment's own head atlas) per status. The owner asked for both gone — the band read oddly
+ * against the garments, and the eyes should be black or dark rather than a status colour —
+ * so neither field is here any more.
  *
- * The keys are the six statuses of `STATUS_ORDER` plus the two states an agent passes
- * through on its way in and out — that list is the behaviour precedence and is not this
- * table's business. Only the colours are: they read as a removal crew's work clothing now,
- * hi-vis and denim and canvas, rather than as suit trim on a moon base.
+ * Losing them costs nothing a crew member needs: status is still carried by the badge
+ * (`indicators.js`'s `BADGE.waiting`, `blocked`, `working`, `done` and `spawning`, drawn
+ * above the figure and wholly separate from the crew mesh) and by the pose, since each state
+ * drives its own animation clip. `sleeping` and `idle` are `BADGE.none` by design, so
+ * nothing that wants attention loses its signal.
  *
- * Two of them are load-bearing rather than decorative and stay where they are. `blocked` is
- * red and `waiting` is blue because those are the states the `!` and `?` badges point at,
- * and the badge and the figure under it have to agree at a glance.
+ * The eight keys stay even though the values are now empty: they are a project-wide
+ * constraint independent of what this table carries (see `test/crew-look.test.mjs`), not a
+ * detail of the colours that used to live here.
  */
 const AGENT_LOOK = {
-  // Hi-vis vest, which is what somebody actually working on a lot is wearing.
-  working: { trim: 0x74b03c, eye: [0.5, 2.5, 0.9] },
-  // Denim, keeping the blue the `?` badge points at.
-  waiting: { trim: 0x46689e, eye: [0.45, 1.5, 3.0] },
-  // Safety red, keeping the red the `!` badge points at.
-  blocked: { trim: 0xc4483c, eye: [3.0, 0.5, 0.45] },
-  // Hi-vis tape amber — the warm end of the same workwear palette.
-  celebrating: { trim: 0xd9a13c, eye: [2.9, 2.1, 0.6] },
-  // Canvas overalls, still the quietest thing on the lot.
-  idle: { trim: 0xa2937a, eye: [1.1, 1.4, 1.5] },
-  // Navy work jacket, done for the day.
-  sleeping: { trim: 0x4c5468, eye: [0.7, 0.8, 1.4] },
-  // Removal-firm orange, for the crew member climbing out of the delivery car.
-  spawning: { trim: 0xd2703f, eye: [2.4, 1.4, 0.7] },
-  // Oiled leather, on its way back to the depot.
-  leaving: { trim: 0x7a6a58, eye: [1.0, 1.0, 1.05] },
+  working: {},
+  waiting: {},
+  blocked: {},
+  celebrating: {},
+  idle: {},
+  sleeping: {},
+  spawning: {},
+  leaving: {},
 }
-
-/**
- * How far past 1.0 a hi-vis band's trim colour is pushed, so the bloom pass can catch it.
- *
- * The antenna tip and the chest lamp did exactly this and this is their scheme, kept: an
- * unlit material, the status colour, one scalar. The value is the measured one rather than
- * an inherited one, because the shape changed and so did what clears the threshold.
- *
- * `engine.js` runs `UnrealBloomPass` at threshold 0.92 against REC709 luminance in linear
- * space, so what blooms is decided by `0.2126R + 0.7152G + 0.0722B` and not by how bright a
- * colour looks. That weighting is brutally uneven across the trims: hi-vis green comes out
- * at 0.351 and tape amber at 0.406, but safety red at only 0.167, because red carries barely
- * a fifth of the weight green does.
- *
- * So this is deliberately set *below* the threshold for every trim there is. Measured off the
- * running colony: at 4.0 a calm working band reaches 0.92 and blooms all by itself, while an
- * errored band's own peak only reaches 0.668 and never blooms at all — the bloom then says
- * "working" louder than it says "errored", which is upside down from the precedence the whole
- * colony is ordered by. At 2.6 the brightest calm band there is, tape amber, tops out at 0.76
- * and nothing on the vest's plain lower ring ever clears the threshold.
- *
- * The reflective upper ring (`BAND_SPARK` below) is a different story, and not a rare one: at
- * the calm pulse it already sits over 0.92 for five of the eight trims — celebrating 2.58,
- * working 2.23, idle 1.91, spawning 1.63, leaving 0.96 — so most of a colony is quietly
- * blooming, steadily, most of the time. Only waiting (0.87) and sleeping (0.57) stay under.
- * `blocked` is not the one trim that blooms; it is the one trim whose pulse carries the ring
- * *across* the threshold and back, every 0.625s, instead of sitting on one side of it. That
- * crossing — a bloom that switches on and off against a colony of steadily-lit ones — is the
- * beacon, not the bloom itself. See `BAND_SPARK` for the peak/trough numbers.
- *
- * Still well past 1.0 in the dominant channel — amber lands at (1.80, 0.93, 0.12) — which is
- * what an unlit material needs to read at midnight, and what the HDR target exists to carry.
- */
-const BAND_GLOW = 2.6
-
-/**
- * How much brighter the reflective upper band is than the plain lower one — the "small bright
- * detail on the vest" the brief allows for, and what actually carries the errored beacon.
- *
- * It exists because no flat scalar can carry it, and that is arithmetic rather than taste.
- * Bloom is a pure brightness test, and the trims are 2.4x apart in luminance before the pulse
- * is applied at all: tape amber is 0.406 and safety red 0.167. The pulse only spans 0.72 to
- * 1.0, so a calm amber band (0.406 x 0.72 = 0.292) is 1.75x brighter than an errored red one
- * at the very top of its pulse (0.167 x 1.0). *Whatever* single multiplier is chosen, a calm
- * amber band clears the threshold before an errored red one does — so a flat scalar can make
- * the bloom say "celebrating", but never "errored".
- *
- * A second gain breaks that tie, because it is a property of the geometry rather than of the
- * status: it lifts the errored band over the threshold without dragging the plain bands up
- * with it, so the vest keeps its colour and only one thin ring per crew member is ever bright
- * enough to glow.
- *
- * 3.4 is measured against the threshold from both sides on the errored trim, which is the
- * hardest one: safety red reaches 1.48 at the top of the pulse and falls to 0.50 at the
- * bottom, so it crosses 0.92 in both directions every 0.625s. That is the beacon — a bloom
- * that visibly switches on and off, against a colony of steady ones, at a zoom where the band
- * itself is one pixel tall and bloom is the only thing large enough to see.
- *
- * A multiplier on the trim rather than a white fleck, so the bright ring is still the status
- * colour: a white one would read as a headlamp, and this stage takes the headgear off.
- */
-const BAND_SPARK = 3.4
 
 const WALK_SPEED = 2.1
 const TURN_RATE = 7.5
@@ -194,9 +119,9 @@ const CREW_SCALE = 0.56
  * the head under it is a good deal bigger than the helmet was, so a cap sized to the
  * helmet sinks about 0.05 inside the brow and the features disappear into the skull.
  *
- * Hoisted out of `P` so the hi-vis bands below can be written as fractions of it inside the
- * same object literal. Sizing anything on this figure against `helmetR` has now shipped a
- * defect twice — the face cap, and nearly the hair — so the one number a worn part should be
+ * Hoisted out of `P` so a worn part can be written as a fraction of it inside the same
+ * object literal. Sizing anything on this figure against `helmetR` has now shipped a defect
+ * twice — the face cap, and nearly the hair — so the one number a worn part should be
  * measured against is the one that describes a part the crew still has.
  */
 const HEAD_R = 0.554
@@ -210,32 +135,6 @@ const P = {
   helmetR: 0.48,
   headUp: 0.46, // the head bone sits at the neck; the head and the face centre above it
   headR: HEAD_R,
-  /**
-   * The two hi-vis bands round the torso, in the chest bone's own frame.
-   *
-   * Every one of these is a fraction of the head's radius, and every one is checked against
-   * the torso as it is actually modelled. Measured off the live rig rather than guessed:
-   * taking the body mesh's chest- and spine-weighted vertices and slicing them into
-   * horizontal bands gives a torso half-width of 0.365 at y 0.70–0.80 and 0.355 at
-   * 0.80–0.90, and a half-depth of 0.27–0.28 through both. The chest bone itself sits at
-   * y 0.959. So the widest, flattest part of the torso — the part a vest is worn on — runs
-   * from about 0.07 to 0.26 *below* that bone, and it is an ellipse about 0.36 by 0.28
-   * rather than a circle.
-   *
-   * `bandR` is the half-width and `bandDepth` the half-depth, which is what makes the rings
-   * elliptical: a circular ring wide enough to clear the shoulders would stand a fifth of
-   * the body's depth off its chest. Both sit a little proud of the surface they wrap — about
-   * 0.03 in each axis, or 0.017 in world units once CREW_SCALE is applied — which is enough
-   * to keep them out of the torso without reading as a hoop floating around it.
-   *
-   * `bandY` is the pair's midpoint and `bandGap` the distance between the two rings, so they
-   * land at 0.879 and 0.740 in the rig's own units: inside the widest slice at both ends.
-   */
-  bandY: -HEAD_R * 0.27,
-  bandR: HEAD_R * 0.7,
-  bandDepth: HEAD_R * 0.56,
-  bandThickness: HEAD_R * 0.16,
-  bandGap: HEAD_R * 0.25,
   // The hammer, in the right hand's own frame. The hand bone's own +Y runs back down the
   // forearm, so the shaft is turned through half a circle to stand the head up out of the
   // fist rather than hang it through the floor.
@@ -321,23 +220,8 @@ export class Astronauts {
 
     // Only the hammer is still measured off the helmet radius, so it stays in proportion if
     // the rig is ever scaled again — the cabinet and box are sized in their own units, and the
-    // face, hair and hi-vis bands below are all measured off `P.headR` instead (see `HEAD_R`).
+    // face below is measured off `P.headR` instead (see `HEAD_R`).
     const R = P.helmetR
-
-    // The hi-vis bands. They do three jobs at once: they are the largest surface the status
-    // trim colour gets, they are the night glow the antenna tip and the chest lamp used to
-    // carry, and they are the beacon the behaviour table promises for an errored thread.
-    //
-    // Unlit and pushed past 1.0, which is the tip's and the lamp's own scheme rather than a
-    // new one: a `MeshBasicMaterial` ignores the light, so a band is as bright at midnight as
-    // at noon, and a value over 1 survives the HDR target to reach the bloom pass. Sized
-    // against the head rather than the helmet — see `P` for the torso measurements.
-    // `vertexColors` is what lets the reflective upper ring be brighter than the plain lower
-    // one off a single instance colour: the vertex gain and the instance colour multiply
-    // together, so both rings are the same trim and only one is lifted over the bloom
-    // threshold. See `bandsGeometry` for why it is a whole ring and not a patch.
-    const glow = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: true, vertexColors: true })
-    parts.bands = this._mesh(bandsGeometry(), glow, capacity, false)
 
     // The hammer, held in the right hand while a thread is running. Wood and steel rather
     // than suit white, so it reads as a tool at the distance the colony is watched from.
@@ -351,41 +235,45 @@ export class Astronauts {
     parts.cabinet = this._mesh(cabinetGeometry(), suit(0.72, { vertexColors: true }), capacity, true)
     parts.box = this._mesh(movingBoxGeometry(), suit(0.85, { vertexColors: true }), capacity, true)
 
-    // Face: the features only. Built as a sphere cap at a hair over the head's own radius, so
-    // it sits on the curved surface of the head instead of floating flat in front of it — a
-    // flat plane at this radius sinks inside that curve and the features disappear. Now that
-    // there is a solid head behind it rather than a helmet, "a hair over" has to be measured
-    // against the head: at `headR * 1.047` the features clear the brow by 0.026 to 0.053,
-    // which is what keeps them on the front of the face rather than inside it.
-    const faceGeo = sphereCap(P.headR * 1.047, 1.72, 0.98, 16, 10)
+    // Face: the features only. Built as a sphere cap on the curved surface of the head
+    // instead of floating flat in front of it — a flat plane at this radius sinks inside
+    // that curve and the features disappear.
+    //
+    // Sized to `P.headR` exactly, not a hair over it. Stage 3's own ledger recorded two
+    // different measurements of the real head's surface under this cap: the DRAWN patch —
+    // where the eyes and mouth actually are — reaches out to 0.548, while the cap's whole
+    // footprint, corners included, reaches 0.581 at its farthest point. The old `* 1.047`
+    // (cap radius 0.580) was sized to that second, larger number, so the drawn features sat
+    // about 0.03 clear of the skull instead of on it — which is what read as the face
+    // floating off the head. `P.headR` (0.554) clears the drawn patch by about 0.006
+    // instead, which is what "a hair over" should have meant.
+    //
+    // The corners sink into the real head at this radius rather than clearing it — the
+    // worst one (0.581) by about 0.027, worse than the 0.0012 stage 3 already measured at
+    // the old 0.580 — but that is harmless rather than a new defect: nothing is drawn there.
+    // `buildFaceAtlas`'s `DRAW` table keeps every eye, mouth and other shape within roughly
+    // 0.14 to 0.86 of the unit box in both axes, with one exception — the sleep frame's
+    // `zzz` marks reach out to x ~ 0.98 — but even those stay within y ~ 0.15 to 0.38,
+    // nowhere near the y = 0 or y = 1 edge a corner needs both of. So the mask is zero alpha
+    // at every corner, and there is nothing visible to clip into the skull.
+    const faceGeo = sphereCap(P.headR, 1.72, 0.98, 16, 10)
     parts.face = this._mesh(faceGeo, this._faceMaterial(), capacity, false)
     this._attachFrameAttribute(parts.face, capacity)
 
-    // Hair, one instanced mesh per non-bald style. They cannot share a mesh the way the
-    // hammer's shaft and head share one: those are merged into a single geometry, and these
-    // are four *different* geometries only one of which any given crew member wears.
-    //
-    // Sized against `P.headR`, the head's own radius, and not against `R` above — `helmetR`
-    // is the radius of the helmet these figures no longer wear, and the head under it is
-    // about 15% bigger, so a scalp measured off the helmet is a scalp inside the skull. That
-    // is the mistake the face cap made and `hair.js` carries the measurements that fix it.
-    //
-    // Each style keeps its own material rather than sharing one, so the `dispose` and
-    // capacity-rebuild loops over `Object.values(this.parts)` free exactly one material per
-    // mesh and never the same one three times.
-    this.hairMeshes = HAIR_STYLES.map((style, s) => {
-      const geo = style.geometry(P.headR)
-      if (!geo) return null // bald builds no geometry, so there is no mesh to draw it with
-      const hair = new THREE.MeshStandardMaterial({ color: HAIR_TONE, roughness: 0.86, metalness: 0 })
-      const mesh = this._mesh(geo, hair, capacity, true)
-      parts[hairPartName(s)] = mesh
-      return mesh
-    })
-    /** One counter per style, reset and refilled every frame. See `_writeMatrices`. */
-    this._hairCounts = new Uint32Array(HAIR_STYLES.length)
-
-    for (const mesh of Object.values(parts)) {
+    // The four primitive hairstyles (sphere caps and a cylinder skirt) are gone: every
+    // adventurer head now has its hair modelled and painted in as part of the garment mesh
+    // (see `mergeSet` in crew.js), so there is no separate hair mesh to build any more. What
+    // varies per crew member now is the *colour* of that painted-in hair, repainted per
+    // instance by the garment material's own shader — see `_recolorGarment` below.
+    for (const [name, mesh] of Object.entries(parts)) {
       mesh.frustumCulled = false // one bounding volume for every agent everywhere is useless
+      // The face cap is stopped from drawing here, deliberately, ahead of the rest of this
+      // stage's own work. Each garment set's head mesh already carries a painted face, so
+      // drawing this primitive cap on top doubles up: measured in the running colony, every
+      // figure got the old sphere-cap face over a face already on the head. The mesh is
+      // still built and still lives in `parts` — a later task deletes `faces.js` and this
+      // construction — but it is never added to the scene, so nothing about it is drawn.
+      if (name === 'face') continue
       this.group.add(mesh)
     }
     this._applyShadowFlags()
@@ -411,69 +299,67 @@ export class Astronauts {
     this.rig = rig
     this._disposeCrew()
 
-    const geo = rig.geometry.clone()
-    const frames = new Float32Array(this.capacity)
-    this.crewFrameAttr = new THREE.InstancedBufferAttribute(frames, 1)
-    this.crewFrameAttr.setUsage(THREE.DynamicDrawUsage)
-    geo.setAttribute('aFrame', this.crewFrameAttr)
-
-    // One uniform block for the surface and the shadow pass, the same as the buildings do.
+    // One uniform block for the surface and the shadow pass, the same as the buildings do —
+    // and shared, by reference, across every set's material below. `Object.assign` in
+    // `decorateSkinned` copies the object references into each compiled shader's own uniform
+    // block, so `uBones`/`uFrameMax` stay one value updated in one place rather than N copies
+    // that could drift; that sharing is also what lets every set play from the one baked
+    // animation, since the bind pose is identical across sets (see `garment-sets.js`).
     this.crewUniforms = {
       uBones: { value: rig.boneTexture },
       uFrameMax: { value: rig.frameCount - 1 },
     }
 
-    const material = decorateSkinned(
-      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.68, metalness: 0.04 }),
-      this.crewUniforms
-    )
+    // One InstancedMesh per garment set rather than one for the whole crew: each set wears
+    // its own texture, and a texture is a material, and an InstancedMesh draws one material.
+    // Every agent is written into exactly one of these — see `garmentSetIndexFor` and the
+    // per-set counters in `_writeMatrices` — so the sum of their counts is the crew size.
+    this.crewMeshes = rig.sets.map((set) => {
+      const geo = set.geometry.clone()
+      const frames = new Float32Array(this.capacity)
+      const frameAttr = new THREE.InstancedBufferAttribute(frames, 1)
+      frameAttr.setUsage(THREE.DynamicDrawUsage)
+      geo.setAttribute('aFrame', frameAttr)
 
-    const mesh = new THREE.InstancedMesh(geo, material, this.capacity)
-    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
-    mesh.count = 0
-    mesh.receiveShadow = false
-    mesh.frustumCulled = false
-    const white = new THREE.Color(1, 1, 1)
-    for (let i = 0; i < this.capacity; i++) mesh.setColorAt(i, white)
-    mesh.instanceColor.setUsage(THREE.DynamicDrawUsage)
+      // Skin and hair colour, one instanced RGB triple each — itemSize 3, the same shape
+      // `aFrame` above uses for its own per-instance value. Read back and written per agent in
+      // `_writeMatrices`, and sampled by the shader `_recolorGarment` patches onto the material
+      // below.
+      const skinAttr = this._attachColorAttribute(geo, 'aSkin')
+      const hairAttr = this._attachColorAttribute(geo, 'aHair')
 
-    const depth = decorateSkinned(
-      new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking }),
-      this.crewUniforms,
-      { normals: false }
-    )
-    mesh.customDepthMaterial = depth
+      const material = decorateSkinned(
+        new THREE.MeshStandardMaterial({ map: set.texture, roughness: 0.68, metalness: 0.04 }),
+        this.crewUniforms
+      )
+      this._recolorGarment(material, set.id)
 
-    this.crew = mesh
-    this.group.add(mesh)
+      const mesh = new THREE.InstancedMesh(geo, material, this.capacity)
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+      mesh.count = 0
+      mesh.receiveShadow = false
+      mesh.frustumCulled = false
+      const white = new THREE.Color(1, 1, 1)
+      for (let i = 0; i < this.capacity; i++) mesh.setColorAt(i, white)
+      mesh.instanceColor.setUsage(THREE.DynamicDrawUsage)
 
-    // The head. It comes with the rig rather than with the rest of the parts, so it is built
-    // here and not in `_buildMeshes` — and it is its own instanced mesh rather than part of
-    // the body for two reasons: it is rigid, so skinning it would be a weighted sum that can
-    // only ever return one bone's matrix, and it needs an `instanceColor` of its own to carry
-    // the skin tone. The body's is already spoken for by the work clothes.
-    //
-    // `rig.headGeometry` arrives in the head bone's own local frame, and the slot write in
-    // `_writeMatrices` places it at that bone *plus* `P.headUp` — so the geometry is shifted
-    // down by exactly that offset and the two cancel, putting the head back into the rest
-    // pose it had inside the body. Writing it at the face's offset rather than at the bone
-    // is deliberate: the head and the face are then placed by one identical matrix, and a
-    // face cannot drift off the head it is painted on however the neck is turned.
-    const headGeo = rig.headGeometry.clone()
-    headGeo.translate(0, -P.headUp, 0)
-    // Skin: rougher than the work clothes and not metallic at all. `vertexColors` stays off,
-    // so the only thing tinting it is the instance colour — which is the tone itself.
-    const skin = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7, metalness: 0 })
-    this.parts.head = this._mesh(headGeo, skin, this.capacity, true)
-    this.parts.head.frustumCulled = false
-    this.group.add(this.parts.head)
+      mesh.customDepthMaterial = decorateSkinned(
+        new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking }),
+        this.crewUniforms,
+        { normals: false }
+      )
+
+      this.group.add(mesh)
+      return { id: set.id, mesh, frameAttr, skinAttr, hairAttr }
+    })
+    /** One counter per garment set, reset and refilled every frame. See `_writeMatrices`. */
+    this._setCounts = new Uint32Array(this.crewMeshes.length)
 
     this._applyShadowFlags()
 
     // Bones anything worn hangs off. Read back per frame from the same baked table the
     // shader samples, so a worn part is never a frame out of step with the bone under it.
     this.headSlot = rig.attachSlot.get('head') ?? 0
-    this.chestSlot = rig.attachSlot.get('chest') ?? 0
     this.handSlot = rig.attachSlot.get('hand.r') ?? 0
 
     // Where the head sits above the ground at rest, in world units. The picker aims here
@@ -484,22 +370,17 @@ export class Astronauts {
   }
 
   _disposeCrew() {
-    // The head belongs to the rig, not to `_buildMeshes`, so it is torn down with the rig
-    // rather than with the rest of the parts — and taking it off `this.parts` here is what
-    // stops the capacity rebuild, which disposes everything still on that object, from
-    // disposing it a second time.
-    if (this.parts.head) {
-      this.group.remove(this.parts.head)
-      this.parts.head.geometry.dispose()
-      this.parts.head.material.dispose()
-      delete this.parts.head
+    // One entry per garment set — see `setRig`. The head is not a separate part any more: it
+    // is part of each set's own merged, skinned geometry, so it is torn down along with it
+    // here and needs no disposal of its own.
+    if (!this.crewMeshes) return
+    for (const { mesh } of this.crewMeshes) {
+      this.group.remove(mesh)
+      mesh.geometry.dispose()
+      mesh.material.dispose()
+      mesh.customDepthMaterial?.dispose()
     }
-    if (!this.crew) return
-    this.group.remove(this.crew)
-    this.crew.geometry.dispose()
-    this.crew.material.dispose()
-    this.crew.customDepthMaterial?.dispose()
-    this.crew = null
+    this.crewMeshes = null
   }
 
   _mesh(geo, mat, count, castShadow) {
@@ -518,7 +399,10 @@ export class Astronauts {
   /**
    * The face material. The atlas is a mask, so the shader ignores the sampled colour
    * entirely: the red channel becomes *alpha* and the instance's own colour becomes the
-   * glow, which is how every astronaut gets a different eye colour from one shared texture.
+   * paint. Every instance is left at the same white `setColorAt` gave it at construction —
+   * this cap no longer carries a per-agent eye colour, so there is nothing left to vary it —
+   * which does not matter for what this mesh draws, since it is never added to the scene
+   * (see the note where `parts.face` is built).
    *
    * Carrying alpha in the mask means the only thing this draws is the features themselves,
    * so nothing but the features has an edge — there is no panel behind them any more.
@@ -535,7 +419,15 @@ export class Astronauts {
     })
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.uFrameScale = { value: new THREE.Vector2(1 / FRAME_COLS, 1 / FRAME_ROWS) }
-      shader.uniforms.uGlow = { value: 1.85 }
+      // Left at 1.0 rather than pushed past it: a value over 1 survives the HDR target into
+      // the bloom pass, which is what the antenna tip and the chest lamp needed to read as a
+      // beacon before stage 3 removed them. Stage 3 moved that job onto the hi-vis band round
+      // a crew member's torso, and this task has removed that too, at the owner's request —
+      // nothing on this face reads as a beacon any more, and nothing needs to. Pushing this
+      // past 1.0 would only make the
+      // face-off-the-head defect (see the face cap above) easier to notice; at 1.0 the
+      // features stay crisp and readable at colony zoom instead of blown out.
+      shader.uniforms.uGlow = { value: 1.0 }
       this._faceUniforms = shader.uniforms
 
       shader.vertexShader = shader.vertexShader
@@ -580,17 +472,203 @@ export class Astronauts {
     this.frameAttr = attr
   }
 
+  /** One RGB instanced attribute, itemSize 3, the shape `aSkin` and `aHair` both share. */
+  _attachColorAttribute(geo, name) {
+    const data = new Float32Array(this.capacity * 3)
+    const attr = new THREE.InstancedBufferAttribute(data, 3)
+    attr.setUsage(THREE.DynamicDrawUsage)
+    geo.setAttribute(name, attr)
+    return attr
+  }
+
+  /**
+   * Patch a garment material's shader to repaint several cells of its own atlas: skin and
+   * hair (`CELL_SKIN`/`CELL_HAIR`, see `atlas-cells.js`) per *instance*, from the `aSkin`/
+   * `aHair` attributes, plus this set's own garment cells (`GARMENT_CELLS[setId]` — the
+   * tunic and trousers, moved to the Moving-In brand palette) per *set*, from uniforms. The
+   * third cell `atlas-cells.js` documents — eyes and brows — is deliberately left
+   * unrepainted; see its own comment there for why.
+   *
+   * Garment colour is per set, not per agent — every Ranger's tunic is the same Leaf Green —
+   * so unlike skin and hair it has no reason to be an instanced attribute. It is one uniform
+   * pair (base, target) per garment cell instead, set once when this material is built for
+   * `setId`'s `GARMENT_CELLS` entry and shared by every instance drawn with this material.
+   *
+   * Applied on top of `decorateSkinned` — called after it in `setRig`, so this always wraps a
+   * material whose `onBeforeCompile` already carries the skinning patch — rather than folded
+   * into it, because skinning and repainting are different concerns on different meshes (the
+   * depth material is skinned but never repainted). The two must not fight over the same
+   * anchor: `decorateSkinned` consumes the vertex shader's `#include <common>` for its own
+   * declarations, so this patches `#include <uv_pars_vertex>` and `#include <uv_vertex>`
+   * instead, both untouched by it. The fragment shader is entirely `decorateSkinned`'s to
+   * ignore — it only ever touches the vertex stage — so there this uses `#include <common>`
+   * freely.
+   *
+   * Follows `_faceMaterial` above as the shape for patching three's shader chunks in this
+   * file: uniforms assigned onto `shader.uniforms`, chunks found and replaced by their
+   * `#include` marker, comments explaining *why* each anchor was chosen.
+   */
+  _recolorGarment(material, setId) {
+    const skinned = material.onBeforeCompile
+    const skinRect = cellRect(CELL_SKIN)
+    const hairRect = cellRect(CELL_HAIR)
+    // A rectangle test as a GLSL boolean expression, baked from `cellRect` rather than typed
+    // in a second time — so a change to the atlas layout in `atlas-cells.js` cannot drift out
+    // of step with the shader that reads it.
+    const inRect = (uv, r) =>
+      `( ${uv}.x >= ${r.u0.toFixed(6)} && ${uv}.x < ${r.u1.toFixed(6)} && ` +
+      `${uv}.y >= ${r.v0.toFixed(6)} && ${uv}.y < ${r.v1.toFixed(6)} )`
+
+    // This set's own garment cells — tunic and trousers, both sets — and the uniform names
+    // each gets, one base/target pair apiece. Built from the `part` string rather than
+    // hand-listed twice, so a set with a different number of repainted cells (there is none
+    // today) would not need this method rewritten.
+    const garmentCells = GARMENT_CELLS[setId] || []
+    const cap = (s) => s[0].toUpperCase() + s.slice(1)
+    const baseUniform = (part) => `u${cap(part)}Base`
+    const targetUniform = (part) => `u${cap(part)}Target`
+
+    material.onBeforeCompile = (shader) => {
+      skinned(shader)
+      // The two base colours the ratio substitution divides by. Passed in from `CELL_BASE`
+      // rather than typed into the GLSL below, so the atlas and the shader cannot drift
+      // apart.
+      shader.uniforms.uSkinBase = { value: new THREE.Color(CELL_BASE[CELL_SKIN]) }
+      shader.uniforms.uHairBase = { value: new THREE.Color(CELL_BASE[CELL_HAIR]) }
+      // One base/target uniform pair per garment cell this set repaints, read straight from
+      // `GARMENT_CELLS` rather than typed into the GLSL below — same reasoning as the skin
+      // and hair bases above.
+      for (const { part, base, target } of garmentCells) {
+        shader.uniforms[baseUniform(part)] = { value: new THREE.Color(base) }
+        shader.uniforms[targetUniform(part)] = { value: new THREE.Color(target) }
+      }
+
+      // Vertex: carry the two per-instance colours through to the fragment stage. Three's
+      // `MeshStandardMaterial` already declares `vMapUv` for us (via `USE_MAP`, since every
+      // garment material has a `map`), so only the two new varyings need declaring here —
+      // verified against the installed three 0.185's own `uv_pars_fragment.glsl.js` rather
+      // than assumed. The garment colours need no varying: they are per set, not per
+      // instance, so the uniforms declared below are read straight in the fragment stage.
+      shader.vertexShader = shader.vertexShader
+        .replace(
+          '#include <uv_pars_vertex>',
+          `#include <uv_pars_vertex>
+           attribute vec3 aSkin;
+           attribute vec3 aHair;
+           varying vec3 vSkin;
+           varying vec3 vHair;`
+        )
+        .replace(
+          '#include <uv_vertex>',
+          `#include <uv_vertex>
+           vSkin = aSkin;
+           vHair = aHair;`
+        )
+
+      const garmentUniformDecls = garmentCells
+        .map(({ part }) => `uniform vec3 ${baseUniform(part)};\n           uniform vec3 ${targetUniform(part)};`)
+        .join('\n           ')
+
+      // One `else if` branch per garment cell, chained onto the skin/hair pair below. Built
+      // from `GARMENT_CELLS[setId]` rather than hand-written per set, so ranger and rogue
+      // share this one code path and a change to the mapping in `atlas-cells.js` cannot
+      // drift out of step with the shader that reads it — the same discipline `inRect`
+      // follows for the rectangle bounds themselves.
+      const garmentBranches = garmentCells
+        .map(
+          ({ cell, part }) =>
+            ` else if ${inRect('vMapUv', cellRect(cell))} {
+               diffuseColor.rgb = repaintByLuminance( texel, ${baseUniform(part)}, ${targetUniform(part)} );
+             }`
+        )
+        .join('')
+
+      shader.fragmentShader = shader.fragmentShader
+        .replace(
+          '#include <common>',
+          `#include <common>
+           uniform vec3 uSkinBase;
+           uniform vec3 uHairBase;
+           ${garmentUniformDecls}
+           varying vec3 vSkin;
+           varying vec3 vHair;
+
+           // Substitute by RATIO, not by replacement. Every atlas cell is a vertical
+           // gradient, and flattening it to one colour throws away the shading that makes
+           // these models read as cloth. Dividing by the cell's own mid colour and
+           // multiplying by the target keeps the gradient and moves only the hue.
+           //
+           // Used for skin and hair only. It is nearly but not quite safe for the garment
+           // cells below too — measured on the built atlas, ranger cell 7's lightest texel
+           // through this path lands the green channel exactly on 255 on its way to Leaf
+           // Green, flattening the top of that one gradient — so the garments use
+           // \`repaintByLuminance\` instead, which never runs a channel past the target
+           // colour's own.
+           vec3 repaint( vec3 texel, vec3 base, vec3 target ) {
+             return texel * ( target / max( base, vec3( 0.02 ) ) );
+           }
+
+           // Luminance-preserving recolour for the garment cells. Mirrors \`luminanceOf\` and
+           // \`recolorByLuminance\` in atlas-cells.js weight for weight and step for step —
+           // GLSL cannot call that function directly, so this is the hand-kept copy of it;
+           // \`test/crew-look.test.mjs\` exercises the JS original against the atlas's own
+           // measured darkest/mid/lightest texels for every one of these cells. Takes the
+           // texel's own luminance as a fraction of the cell's mid luminance and scales the
+           // *brand* colour by that fraction, rather than scaling the texel by a target/base
+           // ratio — the cell keeps its full light-to-dark ramp, and every channel of the
+           // result is bounded by the brand colour's own, so it cannot run past 1.0 the way
+           // the ratio above can.
+           //
+           // Named \`garmentLuma\`, not \`luminance\`: three's own \`common.glsl.js\` chunk
+           // already declares a \`float luminance( const in vec3 rgb )\` — this material
+           // includes it too, and a same-named redeclaration here fails to compile
+           // ("function already has a body"), which is a mistake that only shows up once the
+           // shader is actually linked, not by reading the string.
+           float garmentLuma( vec3 c ) {
+             return dot( c, vec3( 0.2126, 0.7152, 0.0722 ) );
+           }
+           vec3 repaintByLuminance( vec3 texel, vec3 base, vec3 target ) {
+             float frac = garmentLuma( texel ) / max( garmentLuma( base ), 0.02 );
+             return target * frac;
+           }`
+        )
+        .replace(
+          '#include <color_fragment>',
+          `#include <color_fragment>
+           // Re-sample the raw atlas texel here rather than trust \`diffuseColor\`: the
+           // \`#include <color_fragment>\` line just above has already multiplied it by this
+           // instance's own garment tint (\`agent.suit\`, an unrelated per-agent colour
+           // written in \`_writeMatrices\`). Skin, hair and the brand garment cells are none of
+           // them that tint, so they must not be muddied by it — each branch below overrides
+           // \`diffuseColor.rgb\` outright from a fresh sample rather than building on whatever
+           // the tint left. The eyes-and-brows cell, and every cell not listed in
+           // \`GARMENT_CELLS\` (belts, buckles, boots, straps, trims), are left out of this
+           // chain entirely: for them, the atlas texel already sampled by
+           // \`#include <color_fragment>\` above is exactly what the pack painted, tinted only
+           // by the garment's own suit colour like the rest of the cloth.
+           {
+             vec3 texel = texture2D( map, vMapUv ).rgb;
+             if ${inRect('vMapUv', skinRect)} {
+               diffuseColor.rgb = repaint( texel, uSkinBase, vSkin );
+             } else if ${inRect('vMapUv', hairRect)} {
+               diffuseColor.rgb = repaint( texel, uHairBase, vHair );
+             }${garmentBranches}
+           }`
+        )
+    }
+  }
+
   _applyShadowFlags() {
     const on = this.settings.shadowSize > 0
     for (const [name, mesh] of Object.entries(this.parts)) {
-      // The face and the bands are unlit glows rather than solids, and neither is a
-      // silhouette anybody would miss: the bands are a shell wrapped tight around a torso
-      // that is already casting the shadow. Keeping them out of the shadow pass is what the
-      // antenna tip and the chest lamp did, for the same reason.
-      mesh.castShadow = on && name !== 'face' && name !== 'bands'
+      // The face is an unlit glow rather than a solid, and it is not a silhouette anybody
+      // would miss — it is never added to the scene at all (see where `parts.face` is
+      // built). Keeping it out of the shadow pass is what the antenna tip and the chest
+      // lamp did, for the same reason.
+      mesh.castShadow = on && name !== 'face'
     }
-    // The body is the shadow that matters — it is the whole silhouette.
-    if (this.crew) this.crew.castShadow = on
+    // The body is the shadow that matters — it is the whole silhouette. One flag per set.
+    if (this.crewMeshes) for (const { mesh } of this.crewMeshes) mesh.castShadow = on
   }
 
   /** The colony hands over the navigation grid once it has been built. */
@@ -622,7 +700,7 @@ export class Astronauts {
         this.rig = null
         this.setRig(rig)
         for (const agent of this.agents) {
-          agent.index = -1
+          agent.setSlot = -1
           agent.colorDirty = true
         }
       }
@@ -707,14 +785,13 @@ export class Astronauts {
       faceTimer: 0,
       faceIndex: 0,
       suit: SUIT_TONES[(hash(entry.id) >>> 3) % SUIT_TONES.length],
-      // Which hairstyle this thread wears. Resolved once, here, because it is a pure function
-      // of the id and can never change — and because hashing a string per agent per frame is
-      // work the frame loop does not need. Never derived from status: hair says who a crew
-      // member is, the way its skin tone does, and it is the only thing on the figure that a
-      // status change cannot move.
-      hair: hairStyleIndexFor(entry.id),
-      eye: new THREE.Color(1, 1, 1),
-      trim: new THREE.Color(0xffffff),
+      // Which garment set this thread wears. Resolved once, here, because it is a pure
+      // function of the id and can never change — and because hashing a string per agent per
+      // frame is work the frame loop does not need. Never derived from status: the set says
+      // who a crew member is, the way its skin and hair tone do — see `_writeMatrices`, which
+      // reads `skinToneFor`/`hairToneFor` straight off `agent.id` rather than caching a third
+      // field here, since both are already cached by tone index inside their own modules.
+      garmentSet: garmentSetIndexFor(entry.id),
       hop: 0,
       // Ground tracking. `groundAt` is the height last sampled and `groundY` the eased value
       // actually stood on; both start null so the first frame snaps instead of easing up.
@@ -741,7 +818,10 @@ export class Astronauts {
       pathVersion: -1,
       pathGoal: new THREE.Vector3(NaN, 0, NaN),
       colorDirty: true,
-      index: -1,
+      /** `-1` until the first frame this agent is drawn writes a real slot; the same
+       *  sentinel a capacity rebuild resets it to. Scoped to this agent's own garment set's
+       *  InstancedMesh — see the colour gate in `_writeMatrices`. */
+      setSlot: -1,
       walkAmp: 0,
       screen: new THREE.Vector3(), // filled by the picker each frame
     }
@@ -774,11 +854,8 @@ export class Astronauts {
     }
   }
 
-  /** Status change → new behaviour, new trim, new eye colour. */
+  /** Status change → new behaviour and new face loop. */
   _applyStatus(agent, status) {
-    const look = AGENT_LOOK[status] || AGENT_LOOK.idle
-    agent.trim.set(look.trim)
-    agent.eye.setRGB(look.eye[0], look.eye[1], look.eye[2])
     agent.loop = FACE_LOOPS[status] || null
     agent.colorDirty = true
 
@@ -842,7 +919,7 @@ export class Astronauts {
       write++
     }
 
-    this._writeMatrices(elapsed, anim)
+    this._writeMatrices(anim)
     return write
   }
 
@@ -1330,10 +1407,10 @@ export class Astronauts {
 
   // ── writing the instance buffers ────────────────────────────────────────────────────
 
-  _writeMatrices(elapsed, anim) {
-    const { head, face, bands, hammer, cabinet, box } = this.parts
+  _writeMatrices(anim) {
+    const { face, hammer, cabinet, box } = this.parts
     const rig = this.rig
-    const crew = this.crew
+    const crewMeshes = this.crewMeshes
     const root = this._m
     const child = this._m2
     const bone = this._m3
@@ -1343,9 +1420,6 @@ export class Astronauts {
     const v = this._v
     const one = this._one
     const frames = this.frameAttr.array
-    const crewFrames = this.crewFrameAttr?.array
-    const hairMeshes = this.hairMeshes
-    const hairCounts = this._hairCounts
 
     let i = 0
     // One counter per prop, for the same reason the hammer has one: an unused slot in the
@@ -1354,9 +1428,12 @@ export class Astronauts {
     let hands = 0
     let cabinets = 0
     let boxes = 0
-    // And one per hairstyle, for exactly that reason: each style's mesh is packed only with
-    // the crew members wearing it, so none of them can use the crew's own index either.
-    hairCounts.fill(0)
+    // And one per garment set: an agent is written into its own set's InstancedMesh and its
+    // slot in the other set's stays unused, so the two sets need their own slot spaces
+    // rather than sharing the packing index `i` below (see `agent.garmentSet`,
+    // `garmentSetIndexFor`).
+    const setCounts = this._setCounts
+    setCounts?.fill(0)
     let staticDirty = false
     for (const agent of this.agents) {
       // Never write past the end of the instance buffers. Going over is not a rendering
@@ -1376,15 +1453,16 @@ export class Astronauts {
       // draw-time skip and nothing more — the agent keeps its state, its status and its
       // place in the roster while it rides.
       //
-      // Giving up the index matters as much as skipping the write. The colour gate below
-      // fires on `index !== i`, and every agent behind this one shifts down a slot and
-      // overwrites the colours in the slot this one vacated. Keep the stale index and the
-      // agent reclaims that same `i` on its way back with the gate reading "unchanged", so
-      // it is drawn in whatever suit, skin tone, trim and eye its neighbour left there — until
-      // some unrelated status change happens to set `colorDirty`. `-1` is the same sentinel
-      // a capacity rebuild uses, and nothing else reads `index`.
+      // Giving up the slot matters as much as skipping the write. The colour gate below
+      // fires on `setSlot !== crewSlot`, and every agent behind this one shifts down a slot
+      // and overwrites the colours in the slot this one vacated. Left stale instead of reset,
+      // the agent would reclaim that same `crewSlot` on its way back with the gate reading
+      // "unchanged", so it would be drawn in whatever suit its neighbour left there — until
+      // some unrelated status change happens to set `colorDirty`. Resetting it to `-1` forces
+      // a rewrite instead. `-1` is the same sentinel a capacity rebuild uses, and nothing else
+      // reads the field.
       if (agent.riding) {
-        agent.index = -1
+        agent.setSlot = -1
         continue
       }
       const s = agent.scale
@@ -1398,9 +1476,17 @@ export class Astronauts {
       root.compose(v, q, one.setScalar(s * CREW_SCALE))
       one.setScalar(1)
 
-      if (crew) {
-        crew.setMatrixAt(i, root)
-        crewFrames[i] = agent.frame
+      // Written into its own garment set's InstancedMesh — never `i`, which is the shared
+      // slot the one-per-crew-member parts below use. `agent.garmentSet` was resolved once
+      // at spawn (see `_spawnAgent`), so this is a lookup rather than a hash on the frame's
+      // hot path.
+      let crewSlot = -1
+      let cm = null
+      if (crewMeshes) {
+        cm = crewMeshes[agent.garmentSet]
+        crewSlot = setCounts[agent.garmentSet]++
+        cm.mesh.setMatrixAt(crewSlot, root)
+        cm.frameAttr.array[crewSlot] = agent.frame
       }
 
       // Everything worn hangs off a bone at the frame the body is actually on, so a worn
@@ -1408,29 +1494,12 @@ export class Astronauts {
       if (rig) {
         attachMatrixAt(rig, agent.frame, this.headSlot, bone)
         worn.multiplyMatrices(root, bone)
-        // One matrix, two parts. The head is the body's own head put back where skinning
-        // would have left it; the face is drawn on the front of it. Sharing the write is
-        // what guarantees they stay together — see `setRig` for why the offset cancels.
-        setPart(child, worn, head, i, 0, P.headUp, 0, 0, 0, 0)
+        // The head is no longer a separate part: it is baked into each garment set's own
+        // merged, skinned geometry (see `crew.js`'s `mergeSet`) and rides the skeleton
+        // exactly rather than the attach-bone approximation a rigid part needed. Only the
+        // face — the procedural screen the status expressions animate — still rides here,
+        // at the same bone-plus-offset the head used to.
         setPart(child, worn, face, i, 0, P.headUp, 0, 0, 0, 0)
-
-        // Hair, written with that same matrix and that same offset — so it rides the head
-        // bone rather than trailing it, and a crew member walking, looking down or asleep on
-        // the floor keeps its hair on its head. `agent.hair` indexes `HAIR_STYLES`, and a
-        // bald crew member's slot is `null`: it writes nothing at all rather than a hidden
-        // instance, which is why there is a counter per style instead of one shared index.
-        const hair = hairMeshes[agent.hair]
-        if (hair) setPart(child, worn, hair, hairCounts[agent.hair]++, 0, P.headUp, 0, 0, 0, 0)
-
-        // The chest slot, back in use. Task 1 emptied this block because both things that
-        // hung off it — the backpack and the chest lamp — were going; the bands are what
-        // hangs off it now. Off the chest bone rather than off `root` so the bands stay on
-        // the torso through every clip: a crew member stooping for a box, swinging a hammer
-        // or asleep on the floor is bent at the spine, and a band placed off the root would
-        // stay upright in mid-air while the body it belongs to leaned out of it.
-        attachMatrixAt(rig, agent.frame, this.chestSlot, bone)
-        worn.multiplyMatrices(root, bone)
-        setPart(child, worn, bands, i, 0, P.bandY, 0, 0, 0, 0)
 
         // The hammer only exists while a thread is running, so it gets its own instance
         // counter — an unused slot in the middle of an instanced mesh still draws.
@@ -1453,51 +1522,46 @@ export class Astronauts {
         setPart(child, root, box, boxes++, 0, 0, P.boxZ, 0, 0, 0)
       }
 
-      // Suit and trim only change when the status does, or when an agent leaving the roster
-      // shuffles everyone's slot along — so they are written on those frames, not all of them.
+      // The suit lives in its own garment set's mesh, at `crewSlot` rather than at `i` — a
+      // different slot space from the shared per-crew-member one `face` used to share this
+      // gate with (see `agent.setSlot`, below). Neither the suit nor skin nor hair actually
+      // varies with status any more — all three are fixed for the agent's whole life, derived
+      // from `agent.id` — so the only thing that has to force a rewrite is the agent's own
+      // slot being reused by a different agent of the same set after somebody ahead of it in
+      // that set went home.
       const c = this._color
-      if (agent.index !== i || agent.colorDirty) {
-        agent.colorDirty = false
-        crew?.setColorAt(i, c.setHex(agent.suit))
-        face.setColorAt(i, agent.eye)
-        // Skin tone sits under the same gate for the same reason the others do: it is a
-        // property of *which slot this agent is in*, not of the frame. It is keyed off the
-        // thread id rather than off anything in `agent`, so it is the one colour here that
-        // survives a status change untouched — but it still has to be rewritten when the
-        // slot changes, because the agent that used to hold slot `i` left its own tone in it.
-        //
-        // Guarded the way the body is: the head arrives with the rig, so there is a moment
-        // at boot where an agent has a colour to write and nothing to write it on.
-        if (head) head.setColorAt(i, skinToneFor(agent.id))
+      const wasDirty = agent.colorDirty
+      agent.colorDirty = false
+      if (cm && (agent.setSlot !== crewSlot || wasDirty)) {
+        cm.mesh.setColorAt(crewSlot, c.setHex(agent.suit))
+
+        // Skin and hair colour: two more per-instance triples on the same mesh, gated behind
+        // this same slot/dirty check. `wasDirty` still fires this block on every status
+        // change too — a harmless redundant rewrite of the same values, now that neither
+        // depends on status. `skinToneFor` and `hairToneFor` each return a `THREE.Color`
+        // cached and shared by tone index rather than one instance per agent, so its
+        // components are read into the typed array immediately below rather than the object
+        // itself being held — two agents sharing a tone share that one cached `Color`, and it
+        // can be reused by the next lookup before this frame's write is applied.
+        const skin = skinToneFor(agent.id)
+        const hairColour = hairToneFor(agent.id)
+        const so = crewSlot * 3
+        cm.skinAttr.array[so] = skin.r
+        cm.skinAttr.array[so + 1] = skin.g
+        cm.skinAttr.array[so + 2] = skin.b
+        cm.hairAttr.array[so] = hairColour.r
+        cm.hairAttr.array[so + 1] = hairColour.g
+        cm.hairAttr.array[so + 2] = hairColour.b
+
         staticDirty = true
       }
-
-      /**
-       * The bands, written on every frame rather than under the gate above.
-       *
-       * This is the one per-agent colour that is not a property of the slot. All the others
-       * change only when the status does or when an agent leaving the roster shuffles
-       * everyone along, which is exactly what `index !== i || colorDirty` fires on. An
-       * errored band is *pulsing*: it is a different colour on the next frame with nothing
-       * about the agent having changed, so behind that gate it would be written once at the
-       * moment the thread errored and then frozen on whatever phase the pulse happened to be
-       * at — a band stuck bright, or stuck at its dimmest, and no beacon either way. So the
-       * write goes here, below the gate and inside the same loop, which is where the antenna
-       * tip and the chest lamp were written for this exact reason.
-       *
-       * Writing it unconditionally also puts it out of reach of the stale-index bug the
-       * riding skip guards against: whichever slot this agent lands in, the band in that slot
-       * is recomputed from this agent's own trim this frame, so it can never be caught
-       * wearing the colour its predecessor left behind.
-       */
-      bands.setColorAt(i, c.copy(agent.trim).multiplyScalar(BAND_GLOW * bandPulse(elapsed, agent.status === 'blocked')))
+      agent.setSlot = crewSlot
 
       // Atlas frame for the face.
       const f = agent.faceFrame
       frames[i * 2] = (f % FRAME_COLS) / FRAME_COLS
       frames[i * 2 + 1] = 1 - (Math.floor(f / FRAME_COLS) + 1) / FRAME_ROWS
 
-      agent.index = i
       i++
     }
 
@@ -1505,28 +1569,28 @@ export class Astronauts {
     // Everything worn is drawn once per crew member; the tool and the props only as often as
     // the state that owns them came up this frame.
     const props = { hammer: hands, cabinet: cabinets, box: boxes }
-    // Every hairstyle's own count, the zeroes included. A style nobody is wearing this frame
-    // has to be *told* it is empty: `count` is sticky, so a mesh left on last frame's value
-    // goes on drawing hair at stale matrices — a head of hair hovering where a crew member
-    // used to stand, which is the ghost the delivery cars used to leave parked on a plot.
-    // `props[name] ?? n` below reads a zero as a zero, which is the whole reason it is `??`.
-    for (let s = 0; s < hairMeshes.length; s++) {
-      if (hairMeshes[s]) props[hairPartName(s)] = hairCounts[s]
-    }
     for (const [name, mesh] of Object.entries(this.parts)) {
       mesh.count = props[name] ?? n
       mesh.instanceMatrix.needsUpdate = true
-      // The bands' colour buffer is new every frame, because an errored band is pulsing —
-      // so it re-uploads unconditionally. Everything else only when a status changed or an
-      // agent moved slot. The tip and the lamp had a `Set` of animated parts here for the
-      // same reason; there is one such part now, so it is one name.
-      if (mesh.instanceColor && (staticDirty || name === 'bands')) mesh.instanceColor.needsUpdate = true
+      // Re-uploaded only when a status changed or an agent moved slot — nothing here is
+      // animated frame to frame any more, now that the hi-vis band (which was, and needed an
+      // unconditional re-upload every frame) is gone.
+      if (mesh.instanceColor && staticDirty) mesh.instanceColor.needsUpdate = true
     }
-    if (crew) {
-      crew.count = n
-      crew.instanceMatrix.needsUpdate = true
-      this.crewFrameAttr.needsUpdate = true
-      if (staticDirty && crew.instanceColor) crew.instanceColor.needsUpdate = true
+    if (crewMeshes) {
+      for (let s = 0; s < crewMeshes.length; s++) {
+        const set = crewMeshes[s]
+        set.mesh.count = setCounts[s]
+        set.mesh.instanceMatrix.needsUpdate = true
+        set.frameAttr.needsUpdate = true
+        if (staticDirty && set.mesh.instanceColor) set.mesh.instanceColor.needsUpdate = true
+        // Skin and hair are written under the same gate as the suit tint above (see the
+        // comment there), so they re-upload exactly when it does.
+        if (staticDirty) {
+          set.skinAttr.needsUpdate = true
+          set.hairAttr.needsUpdate = true
+        }
+      }
     }
     this.frameAttr.needsUpdate = true
     this.visibleCount = n
@@ -1678,59 +1742,6 @@ function angleDamp(current, target, lambda, dt) {
   while (delta > Math.PI) delta -= Math.PI * 2
   while (delta < -Math.PI) delta += Math.PI * 2
   return current + delta * (1 - Math.exp(-lambda * dt))
-}
-
-/**
- * The two hi-vis bands round the torso, as one geometry in the chest bone's own frame.
- *
- * Open-ended cylinders rather than tori: a cylinder wall is a flat vertical surface, so the
- * whole of `bandThickness` shows in projection wherever you are standing, where a tube of
- * the same thickness only presents its full width side-on. Under an unlit material that
- * makes the band a solid block of colour of a known height — which is the only thing that
- * decides whether it survives at colony zoom. It is also the cheaper of the two by a long
- * way, and this is drawn once per crew member.
- *
- * Scaled in Z rather than built round, because the torso is not round — see `P`. The rings
- * are centred on y=0 and the write places the pair at `P.bandY`, so the two numbers that
- * decide where they sit stay next to the measurements that justify them.
- */
-function bandsGeometry() {
-  const pieces = []
-  // The upper ring is the reflective one and the lower is plain. Which ring carries the gain
-  // is not cosmetic: it was first built as a short bright patch at the front and back of both
-  // rings, and measured at the colony's rest distance that turned out to depend entirely on
-  // which way the crew member happened to be standing. Facing the camera the pulse moved
-  // 55,845 pixels; side-on, with the patch edge-on and the arms over the sides of the band,
-  // it moved 7 and produced no bloom at all — an errored thread you can only see from some
-  // angles is not a beacon. A whole ring presents the same bright area whichever way the
-  // figure turns, and the plain ring below it is what keeps the trim colour readable close
-  // up, where the bright one is inevitably washed towards white.
-  for (const [side, value] of [
-    [1, BAND_SPARK],
-    [-1, 1],
-  ]) {
-    const geo = new THREE.CylinderGeometry(P.bandR, P.bandR, P.bandThickness, 20, 1, true)
-    geo.scale(1, 1, P.bandDepth / P.bandR)
-    geo.translate(0, (side * P.bandGap) / 2, 0)
-    gain(geo, value)
-    pieces.push(geo)
-  }
-
-  const merged = BufferGeometryUtils.mergeGeometries(pieces, false)
-  pieces.forEach((g) => g.dispose())
-  return merged
-}
-
-/**
- * Bake a flat multiplier into a geometry's vertex colours.
- *
- * `paint` below cannot do this: it goes through `THREE.Color`, which is where a hex arrives
- * already clamped to 1, and the whole point of the reflective patch is a value above it.
- */
-function gain(geo, value) {
-  const n = geo.attributes.position.count
-  const colors = new Float32Array(n * 3).fill(value)
-  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3))
 }
 
 /** A cheap rounded box: a low-segment sphere squashed to the requested proportions. */

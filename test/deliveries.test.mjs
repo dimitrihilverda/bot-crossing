@@ -672,13 +672,21 @@ test('riding is only ever set behind a badge check', () => {
   assert.doesNotMatch(status[0], /riding/, '_statusBadgeFor must not consult riding')
 })
 
-test('a riding crew member gives up its instance index, so it does not return miscoloured', () => {
-  // The colour write is gated on `index !== i || colorDirty`. A skipped agent that kept its
-  // index would reclaim the same slot on its return with the gate reading "unchanged", and
-  // wear whatever suit the agent that shifted into that slot left behind.
+test('a riding crew member gives up its suit slot, so it does not return miscoloured', () => {
+  // The suit colour write is gated on `setSlot !== crewSlot || colorDirty`. A skipped agent
+  // that kept its slot would reclaim the same one on its return with the gate reading
+  // "unchanged", and wear whatever suit the agent that shifted into that slot left behind.
+  //
+  // A sibling gate used to exist here too, on a field called `agent.index`, guarding a colour
+  // write on the procedural screen-face mesh that carried a per-status eye colour. Task 4r
+  // removed that eye colour entirely (the owner asked for the eyes to read as the pack painted
+  // them, not a status colour), so the face mesh no longer writes a per-agent colour at all —
+  // there is nothing left for a stale `index` to make miscoloured, and the field is gone along
+  // with it.
   const src = readFileSync('src/agents/astronauts.js', 'utf8')
   const skip = src.match(/if \(agent\.riding\) \{[\s\S]*?\n {6}\}/)
   assert.ok(skip, 'the riding skip in the packing loop is not there')
-  assert.match(skip[0], /agent\.index = -1/, 'a riding agent must give up its index')
+  assert.match(skip[0], /agent\.setSlot = -1/, 'a riding agent must give up its suit slot')
   assert.match(skip[0], /continue/, 'the riding agent must still be skipped')
+  assert.doesNotMatch(src, /\bagent\.index\b/, 'agent.index should be gone along with the eye colour it guarded')
 })

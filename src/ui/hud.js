@@ -567,7 +567,7 @@ export class Hud {
     this.avatarTmp.width = 108
     this.avatarTmp.height = 108
     this.avatarTmpCtx = this.avatarTmp.getContext('2d')
-    this._avatarState = { frame: -1, color: '' }
+    this._avatarState = { frame: -1 }
   }
 
   _wire() {
@@ -860,10 +860,9 @@ export class Hud {
 
     this.$('.thread-pop .title').textContent = thread.title || 'Untitled thread'
     const status = STATUS_LABEL[agent.status] || agent.status
+    const swatch = hex(STATUS_SWATCH[statusClass(agent.status)])
     const meta = this.$('.thread-pop .meta')
-    const bits = [
-      `<span class="tag"><i class="swatch" style="background:${hex(agent.trim.getHex())}"></i>${escapeHtml(status)}</span>`,
-    ]
+    const bits = [`<span class="tag"><i class="swatch" style="background:${swatch}"></i>${escapeHtml(status)}</span>`]
     // A visiting colony's thread wears its origin, so it is never mistaken for one of yours —
     // and the card's actions are pared back to match, since none of them can reach her machine.
     if (thread.colony) {
@@ -880,7 +879,7 @@ export class Hud {
 
     const pct = Math.round((this.actions.progressFor?.(thread.id) ?? 0) * 100)
     this.$('.thread-pop .progress > i').style.width = `${pct}%`
-    this.$('.thread-pop .progress > i').style.background = hex(agent.trim.getHex())
+    this.$('.thread-pop .progress > i').style.background = swatch
     // Measured once per selection rather than per frame: placing the card beside its
     // crew member needs its size sixty times a second, and asking the layout for it that
     // often is how a HUD starts costing frames.
@@ -979,27 +978,23 @@ export class Hud {
     if (!this.selected || !faceAtlasCanvas) return
     const agent = this.selected.agent
     const frame = agent.faceFrame ?? FACE.idle
-    const color = agent.eye
-    const css = cssFromGlow(color)
-    if (this._avatarState.frame === frame && this._avatarState.color === css) return
-    this._avatarState = { frame, color: css }
+    if (this._avatarState.frame === frame) return
+    this._avatarState = { frame }
 
     const size = 108
     const cell = faceAtlasCanvas.width / FRAME_COLS
     const sx = (frame % FRAME_COLS) * cell
     const sy = Math.floor(frame / FRAME_COLS) * (faceAtlasCanvas.height / FRAME_ROWS)
 
-    // The atlas is an opaque white-on-black mask, so the tint is a `multiply`, not a
-    // `source-in`: black stays black and the white features take the eye colour. Keying on
-    // alpha instead would flood the whole cell, because every pixel in it is opaque.
+    // The atlas is an opaque white-on-black mask. It used to be tinted with the crew
+    // member's own status-driven eye colour here — a `multiply` against white-on-black, so
+    // black stayed black and the white features took the tint — but the owner had that
+    // colour removed (it should read as the pack painted it: plain white on black), so this
+    // is now a straight copy with no tint pass at all.
     const t = this.avatarTmpCtx
     t.globalCompositeOperation = 'source-over'
     t.clearRect(0, 0, size, size)
     t.drawImage(faceAtlasCanvas, sx, sy, cell, cell, 0, 0, size, size)
-    t.globalCompositeOperation = 'multiply'
-    t.fillStyle = css
-    t.fillRect(0, 0, size, size)
-    t.globalCompositeOperation = 'source-over'
 
     const c = this.avatarCtx
     c.fillStyle = '#06070c'
@@ -1133,16 +1128,6 @@ function chips(items, current, onPick, registry) {
 }
 
 const hex = (n) => '#' + (n >>> 0).toString(16).padStart(6, '0').slice(-6)
-/**
- * Eye colours are authored above 1.0 so the bloom pass catches them in the scene. For the
- * card they are normalised by the brightest channel — which keeps the hue the crew member
- * actually has rather than clipping a 3.0-red down to the same white as a 3.0-blue.
- */
-function cssFromGlow(color) {
-  const peak = Math.max(color.r, color.g, color.b, 1)
-  const enc = (v) => Math.round(Math.pow(Math.min(1, v / peak), 1 / 2.2) * 255)
-  return `rgb(${enc(color.r)},${enc(color.g)},${enc(color.b)})`
-}
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
@@ -1156,6 +1141,15 @@ function statusClass(status) {
   if (status === 'celebrating') return 'done'
   return 'idle'
 }
+
+/**
+ * The same colour family `statusClass` points CSS at (`.side .thread.*` in `styles.css`), as
+ * hex ints for the two inline swatches the selected-thread card paints itself. These used to
+ * be read straight off the crew figure — `agent.trim`, from `astronauts.js`'s `AGENT_LOOK` —
+ * but the owner had that trim colour removed from the 3D scene (it read oddly against the
+ * garments), so this card now carries its own copy of the same palette instead.
+ */
+const STATUS_SWATCH = { working: 0x7fd39a, waiting: 0x8fb4ee, blocked: 0xe88b8b, done: 0xe6c67f, idle: 0x7c7b86 }
 
 /**
  * A path that fits, trimmed from the *left* so the repo end survives — the deep end is the

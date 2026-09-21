@@ -19,7 +19,7 @@
 
 /**
  * Structural equality, deep enough for the values that live in this file: `plots` holds arrays
- * of `[q, r]` integer pairs and `seen` holds numbers. Reference equality is no use — every one
+ * of `[x, z]` integer pairs and `seen` holds numbers. Reference equality is no use — every one
  * of these values is rebuilt from scratch on each poll, so a cell list that never moved is still
  * a different array than the one in `base`, and comparing by identity would call every zone
  * "changed by this tab" and defeat the merge entirely.
