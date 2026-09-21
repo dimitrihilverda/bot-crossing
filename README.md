@@ -349,7 +349,7 @@ so lit surfaces stay crisp instead of going hazy.
 
 ## Where the art comes from
 
-The colony is built out of five CC0 asset packs by **[Kay Lousberg](https://kaylousberg.com)**,
+The colony is built out of six CC0 asset packs by **[Kay Lousberg](https://kaylousberg.com)**,
 one part borrowed from elsewhere, plus the project's own shaders on top of them.
 
 | Pack | Used for | Licence |
@@ -359,17 +359,18 @@ one part borrowed from elsewhere, plus the project's own shaders on top of them.
 | [KayKit : Space Base Bits](https://kaylousberg.itch.io/space-base-bits) | The crates, drums and floodlights stacked around each plot, and the containers stacked in the depot's yard | CC0 |
 | [KayKit : Character Animations](https://kaylousberg.itch.io/kaykit-character-animations) | The crew's body and all seventeen animation clips they play | CC0 |
 | [KayKit : Forest Nature Pack](https://kaylousberg.itch.io/kaykit-forest) | Terra's trees, bushes and grass, and the boulders on every world | CC0 |
+| [KayKit : Prototype Bits](https://kaylousberg.itch.io/prototype-bits) | Walls, roof slopes, beams and pallets — the pieces the depot's hall is composed out of | CC0 |
 | [Quaternius : LowPoly Public Transport](https://opengameart.org/content/lowpoly-public-transport) | The bicycle, and nothing else | CC0 |
 
 CC0 asks for nothing, but crediting Kay costs nothing either. If you rebuild the assets, all
-five packs go in `assets-src/` (see below); `public/assets/CREDITS.md` is the definitive list
+six packs go in `assets-src/` (see below); `public/assets/CREDITS.md` is the definitive list
 of what each `.glb` is built from.
 
 **The bicycle is the one part Kay did not make.** None of KayKit's 23 packs has one — checked
-across all 203 parts of the four packs this colony loads — and a Dutch street without a bicycle
+across all 222 parts of the five packs this colony loads — and a Dutch street without a bicycle
 is missing the thing that makes it Dutch. So a single model is borrowed from Quaternius' CC0
-pack and grafted into the city kit by `tools/build-bike.mjs`: one part, not a sixth kit, because
-a whole foreign pack would sit *beside* KayKit rather than in it. What makes it belong is that
+pack and grafted into the city kit by `tools/build-bike.mjs`: one part, not a pack of its
+own, because a whole foreign pack would sit *beside* KayKit rather than in it. What makes it belong is that
 it is repainted on the way in — the source model's four materials are all the same flat grey
 (Quaternius colours in Blender, not in the OBJ), so each is mapped to a cell of the city atlas
 and the bicycle comes out sampling the same texture, through the same shader, as the buildings
@@ -436,12 +437,12 @@ colour on the same texture.
 
 ### Rebuilding them
 
-`npm run assets` packs the raw packs into the five glbs the app loads. The built files are
+`npm run assets` packs the raw packs into the six glbs the app loads. The built files are
 checked in and the raw packs are not, so this is a no-op unless you have fetched them:
 
 ```bash
 mkdir -p assets-src && cd assets-src
-# download the FREE tier of all five packs from the links above, then unzip in place
+# download the FREE tier of all six packs from the links above, then unzip in place
 ```
 
 `npm run assets` runs `tools/build-assets.mjs`, which drives `build-kit.mjs` once per model

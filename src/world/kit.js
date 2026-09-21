@@ -3,9 +3,9 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 
 /**
- * The model kits — KayKit's *Space Base Bits*, *Forest Nature Pack*, *City Builder Bits* and
- * *Furniture Bits* (all CC0), each packed into one glb by `tools/build-kit.mjs` and loaded
- * exactly once here.
+ * The model kits — KayKit's *Space Base Bits*, *Forest Nature Pack*, *City Builder Bits*,
+ * *Furniture Bits* and *Prototype Bits* (all CC0), each packed into one glb by
+ * `tools/build-kit.mjs` and loaded exactly once here.
  *
  * Their shared design is what makes them worth building on: every model in a pack UVs into
  * a single 1024px gradient atlas and therefore shares a single material, so a colony
@@ -81,6 +81,17 @@ const KITS = {
   city: { file: 'city.glb', parts: new Map(), solo: new Map(), atlas: null },
   /** Furniture Bits: everything that goes inside a house. */
   furniture: { file: 'furniture.glb', parts: new Map(), solo: new Map(), atlas: null },
+  /**
+   * Prototype Bits: walls, openings, roof slopes, beams and pillars.
+   *
+   * The odd one out, deliberately. Every other kit here supplies *things* — a house, a tree, a
+   * car — and this one supplies the pieces to build a thing none of the others has. It is here
+   * because the depot stands for a real building, a brick office with an industrial hall
+   * attached, and the city pack has no hall: all eight of its shells are 2 x 2 townhouse
+   * blocks. Composing one out of walls and a roof is how to get it without borrowing a model
+   * whose style then has to be argued with.
+   */
+  prototype: { file: 'prototype.glb', parts: new Map(), solo: new Map(), atlas: null },
 }
 
 let loading = null
