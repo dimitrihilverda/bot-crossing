@@ -1053,10 +1053,12 @@ export class Colony {
       label.visible = next > 0.01
     }
     // District banners stay up whenever their colony is on the map — they are the sign you
-    // read to know whose settlement you are looking at. An offline colony's banner dims
-    // rather than vanishing, so a sleeping machine reads as "away", not "gone".
+    // read to know whose settlement you are looking at, so unlike the repo labels they are not
+    // "chrome" and do NOT hide with the rest of the UI on H. Hiding them lost exactly the
+    // context a shared wall needs: whose district is whose. An offline colony's banner still
+    // dims rather than vanishing, so a sleeping machine reads as "away", not "gone".
     for (const banner of this.colonyBanners.values()) {
-      const wanted = this.uiVisible ? (banner.userData.online ? 1 : 0.4) : 0
+      const wanted = banner.userData.online ? 1 : 0.4
       const next = THREE.MathUtils.damp(banner.material.opacity, wanted, 9, dt)
       banner.material.opacity = next
       banner.visible = next > 0.01
