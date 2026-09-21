@@ -178,12 +178,13 @@ function box(shape, spot, ridgeAxis) {
  * The sign over the loods' big door.
  *
  * The lintel already carries the depot's own colour — it is the one piece of either building
- * that takes the accent, and the one that lights up after dark — so the wordmark goes on that
- * band rather than on a plate of its own. What is added here is the lettering.
+ * that takes the accent, and the one that lights up after dark — so the logo goes on that band
+ * rather than on a white plate of its own, which is what the supplied artwork came on.
  */
-const SIGN_TEXT = 'moving-in'
-/** Cream, the same off-white the name plates and district banners are lettered in. */
-const SIGN_COLOUR = '#f4f2ee'
+/** The company's own mark, served out of `public/` beside the kits. Not a wordmark this
+ *  project draws: it is the real logo, with the white card it was supplied on knocked out to
+ *  transparency so it sits on the band rather than on a rectangle of its own. */
+const SIGN_FILE = 'moving-in-logo.png'
 /** How far the lettering stands off the wall: enough to clear the band it sits on, and well
  *  inside the roof's own 0.2 overhang, so it stays under the canopy. */
 const SIGN_PROUD = 0.012
@@ -285,7 +286,7 @@ export function officePieces() {
  */
 export function loodsPieces() {
   const { halfX, halfZ, wall, rise, eaveOut, door } = LOODS
-  const { GREY, PALE, SLATE, DARK, ACCENT } = CELL_PROTOTYPE
+  const { GREY, PALE, SLATE, DARK } = CELL_PROTOTYPE
   const pieces = []
   const add = (part, o) => pieces.push({ part, ...o })
 
@@ -314,8 +315,11 @@ export function loodsPieces() {
   add('Primitive_Wall', { y: M, x: doorEast + eastRun / 2, z: halfZ, sx: eastRun / M, cell: PALE })
 
   // --- the big door ----------------------------------------------------------------------
-  // A shutter filling the opening, and the depot's own colour on the lintel over it: the one
-  // piece of the loods that takes the accent, and the one piece that lights up after dark.
+  // A shutter filling the opening, and a pale fascia on the lintel over it for the logo to
+  // sit on. Pale, not the depot's own terracotta, because the logo's lettering is a dark navy
+  // and on terracotta it is dark-on-dark: legible with your nose against it and a smear from
+  // the street. The accent has not left the depot — the office still carries its band — and
+  // the sign itself is emissive, so this fascia still lights up after dark.
   add('Primitive_Wall', { x: centre, z: halfZ, sx: door.width / M, sy: door.height / M, sz: GLAZING, cell: DARK })
   add('Primitive_Beam', {
     x: centre,
@@ -323,7 +327,7 @@ export function loodsPieces() {
     z: halfZ,
     sx: door.width / M,
     sy: wall - door.height,
-    cell: ACCENT,
+    cell: PALE,
   })
 
   // --- the roof, ridge along x ------------------------------------------------------------
@@ -381,50 +385,6 @@ const DEPOT_ACCENT_MASK = cellMask([CELL_PROTOTYPE.ACCENT])
  *  unowned structure. Nothing about the depot belongs to one thread, so unlike a house or a
  *  colony building it never takes a per-repo accent as an argument. */
 const DEPOT_ACCENT = 0xc96442
-
-/**
- * The wordmark, drawn to a canvas once.
- *
- * The same recipe `plots.js` uses for its name plates — measured, drawn at a pixel ratio,
- * mipmapped — but without the halo and the billboarding those need. This one is painted on a
- * wall: it is lit like the wall, it turns with the building, and it is read from the street
- * rather than from wherever the camera happens to be.
- */
-function createWordmark(text, colour, pixelRatio = 4) {
-  const fontSize = 64
-  const font = `600 ${fontSize}px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif`
-  const pad = fontSize * 0.3
-
-  const measure = document.createElement('canvas').getContext('2d')
-  measure.font = font
-  // Letter-spacing is what makes a word read as a sign rather than as a caption. Chrome has
-  // had it since 99; a browser without it ignores the assignment and the wordmark comes out
-  // a little tighter, which is a worse sign rather than a broken one.
-  measure.letterSpacing = '2px'
-  const textWidth = Math.ceil(measure.measureText(text).width)
-
-  const w = textWidth + pad * 2
-  const h = fontSize + pad * 2
-  const canvas = document.createElement('canvas')
-  canvas.width = Math.ceil(w * pixelRatio)
-  canvas.height = Math.ceil(h * pixelRatio)
-  const c = canvas.getContext('2d')
-  c.scale(pixelRatio, pixelRatio)
-  c.font = font
-  c.letterSpacing = '2px'
-  c.textAlign = 'center'
-  c.textBaseline = 'middle'
-  c.fillStyle = colour
-  c.fillText(text, w / 2, h / 2)
-
-  const texture = new THREE.CanvasTexture(canvas)
-  texture.colorSpace = THREE.SRGBColorSpace
-  texture.minFilter = THREE.LinearMipmapLinearFilter
-  texture.magFilter = THREE.LinearFilter
-  texture.generateMipmaps = true
-  texture.anisotropy = 8
-  return { texture, aspect: w / h }
-}
 
 export class Ship {
   constructor(scene, position) {
@@ -522,39 +482,52 @@ export class Ship {
   }
 
   /**
-   * The wordmark on the band over the big door.
+   * The logo on the band over the big door.
    *
    * Its own mesh and its own material, because it is the one thing on either building that is
-   * not a swatch of the prototype atlas — it is a canvas. Which is also what lets the depot
-   * say whose depot it is.
+   * not a swatch of the prototype atlas — it is an image, and the company's real one. Which
+   * is also what lets the depot say whose depot it is.
    *
    * Lit like the wall by day and emissive after dark, the same way the dock's edge strips and
    * the pad lights work: the band behind it already comes on at night, so lettering that did
    * not would read as a shadow across it.
    */
   _buildSign() {
-    const at = signPlacement()
-    const { texture, aspect } = createWordmark(SIGN_TEXT, SIGN_COLOUR)
-    // Whichever of the two runs out first decides the size, so a longer word sets itself
-    // smaller rather than running off the end of the band.
-    const height = Math.min(at.maxHeight, at.maxWidth / aspect)
+    new THREE.TextureLoader().load(`${import.meta.env.BASE_URL}assets/${SIGN_FILE}`, (texture) => {
+      if (this._disposed) return // archived before the image arrived
+      texture.colorSpace = THREE.SRGBColorSpace
+      texture.minFilter = THREE.LinearMipmapLinearFilter
+      texture.magFilter = THREE.LinearFilter
+      texture.generateMipmaps = true
+      texture.anisotropy = 8
 
-    this.signTexture = texture
-    this.signMaterial = new THREE.MeshStandardMaterial({
-      map: texture,
-      transparent: true,
-      roughness: 0.6,
-      metalness: 0,
-      emissive: new THREE.Color(SIGN_COLOUR),
-      emissiveMap: texture,
-      emissiveIntensity: 0,
-      // It sits a hair off a wall it never has to sort against, and writing depth would have
-      // it z-fight its own transparent margin.
-      depthWrite: false,
+      const at = signPlacement()
+      // The artwork's own proportions, not a shape chosen here: the file is trimmed to the
+      // ink, so this is the logo's aspect and nothing else.
+      const aspect = texture.image.width / texture.image.height
+      // Whichever of the band's height and the door's width runs out first decides the size,
+      // so a wider logo sets itself smaller rather than running off the end of the band.
+      const height = Math.min(at.maxHeight, at.maxWidth / aspect)
+
+      this.signTexture = texture
+      this.signMaterial = new THREE.MeshStandardMaterial({
+        map: texture,
+        transparent: true,
+        roughness: 0.6,
+        metalness: 0,
+        // White, so the emission is the logo's own colours rather than the logo tinted: the
+        // mark is green and the lettering is navy, and at night both should stay themselves.
+        emissive: new THREE.Color(0xffffff),
+        emissiveMap: texture,
+        emissiveIntensity: 0,
+        // It sits a hair off a wall it never has to sort against, and writing depth would
+        // have it z-fight its own transparent margin.
+        depthWrite: false,
+      })
+      this.sign = new THREE.Mesh(new THREE.PlaneGeometry(height * aspect, height), this.signMaterial)
+      this.sign.position.set(at.x, at.y, at.z)
+      this.group.add(this.sign)
     })
-    this.sign = new THREE.Mesh(new THREE.PlaneGeometry(height * aspect, height), this.signMaterial)
-    this.sign.position.set(at.x, at.y, at.z)
-    this.group.add(this.sign)
   }
 
   /**

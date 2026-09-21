@@ -18,5 +18,15 @@ them in the public domain.
 CC0 requires nothing of you. Crediting Kay costs nothing either — and the same goes for
 Quaternius, whose bicycle is the one part of `city.glb` Kay did not make.
 
+## One file here is not CC0
+
+`moving-in-logo.png` is **Moving-In's own logo**, used with permission on the depot's sign.
+It is a company trademark: not CC0, not MIT, and not ours to licence to anyone. If you fork
+this, replace it with your own mark or take the sign off — `SIGN_FILE` in
+`src/world/ship.js` is the one place it is named.
+
+The file is the artwork as supplied, with the white card it came on knocked out to
+transparency and trimmed to the ink, so the sign takes the logo's own proportions.
+
 See the repository README under "Where the art comes from" for how these are packed, and
 "Rebuilding them" if you want to regenerate them from the original packs.

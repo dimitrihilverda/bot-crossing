@@ -361,10 +361,15 @@ one part borrowed from elsewhere, plus the project's own shaders on top of them.
 | [KayKit : Forest Nature Pack](https://kaylousberg.itch.io/kaykit-forest) | Terra's trees, bushes and grass, and the boulders on every world | CC0 |
 | [KayKit : Prototype Bits](https://kaylousberg.itch.io/prototype-bits) | Walls, openings, roof slopes and beams — the pieces the depot's two buildings are composed out of | CC0 |
 | [Quaternius : LowPoly Public Transport](https://opengameart.org/content/lowpoly-public-transport) | The bicycle, and nothing else | CC0 |
+| Moving-In's own logo | The sign over the depot's loading door — **a trademark, not CC0** | © Moving-In |
 
 CC0 asks for nothing, but crediting Kay costs nothing either. If you rebuild the assets, all
 six packs go in `assets-src/` (see below); `public/assets/CREDITS.md` is the definitive list
 of what each `.glb` is built from.
+
+**One file is not CC0 and never was.** `public/assets/moving-in-logo.png` is this company's
+own logo, on the depot's sign. It is a trademark rather than an asset — if you fork this,
+swap it for your own or take the sign down. `SIGN_FILE` in `src/world/ship.js` names it once.
 
 **The bicycle is the one part Kay did not make.** None of KayKit's 23 packs has one — checked
 across all 222 parts of the five packs this colony loads — and a Dutch street without a bicycle
