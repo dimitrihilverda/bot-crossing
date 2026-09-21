@@ -174,6 +174,41 @@ function box(shape, spot, ridgeAxis) {
     : out(shape.halfX * PROTO_SCALE + wall, shape.halfZ * PROTO_SCALE + eave)
 }
 
+/**
+ * The sign over the loods' big door.
+ *
+ * The lintel already carries the depot's own colour — it is the one piece of either building
+ * that takes the accent, and the one that lights up after dark — so the wordmark goes on that
+ * band rather than on a plate of its own. What is added here is the lettering.
+ */
+const SIGN_TEXT = 'moving-in'
+/** Cream, the same off-white the name plates and district banners are lettered in. */
+const SIGN_COLOUR = '#f4f2ee'
+/** How far the lettering stands off the wall: enough to clear the band it sits on, and well
+ *  inside the roof's own 0.2 overhang, so it stays under the canopy. */
+const SIGN_PROUD = 0.012
+
+/**
+ * Where the wordmark goes and how big it may be, in the depot's own frame.
+ *
+ * Off the door's own measurements rather than typed: a wider door takes a wider sign, and a
+ * door moved along the front takes the sign with it. `maxWidth` and `maxHeight` are the box
+ * the lettering has to fit — how much of it the word actually fills depends on how long the
+ * word is, which only the canvas can measure.
+ */
+export function signPlacement() {
+  const bottom = LOODS_SPOT.y + LOODS.door.height * PROTO_SCALE
+  const top = LOODS_SPOT.y + LOODS.wall * PROTO_SCALE
+  return {
+    x: DOOR_X,
+    y: (bottom + top) / 2,
+    z: DEPOT_FRONT + SIGN_PROUD,
+    // Signwriting proportions: most of the door's width, about half the band's height.
+    maxWidth: LOODS.door.width * PROTO_SCALE * 0.88,
+    maxHeight: (top - bottom) * 0.52,
+  }
+}
+
 export const officeBox = () => box(OFFICE, OFFICE_SPOT, 'z')
 export const loodsBox = () => box(LOODS, LOODS_SPOT, 'x')
 
@@ -347,6 +382,50 @@ const DEPOT_ACCENT_MASK = cellMask([CELL_PROTOTYPE.ACCENT])
  *  colony building it never takes a per-repo accent as an argument. */
 const DEPOT_ACCENT = 0xc96442
 
+/**
+ * The wordmark, drawn to a canvas once.
+ *
+ * The same recipe `plots.js` uses for its name plates — measured, drawn at a pixel ratio,
+ * mipmapped — but without the halo and the billboarding those need. This one is painted on a
+ * wall: it is lit like the wall, it turns with the building, and it is read from the street
+ * rather than from wherever the camera happens to be.
+ */
+function createWordmark(text, colour, pixelRatio = 4) {
+  const fontSize = 64
+  const font = `600 ${fontSize}px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif`
+  const pad = fontSize * 0.3
+
+  const measure = document.createElement('canvas').getContext('2d')
+  measure.font = font
+  // Letter-spacing is what makes a word read as a sign rather than as a caption. Chrome has
+  // had it since 99; a browser without it ignores the assignment and the wordmark comes out
+  // a little tighter, which is a worse sign rather than a broken one.
+  measure.letterSpacing = '2px'
+  const textWidth = Math.ceil(measure.measureText(text).width)
+
+  const w = textWidth + pad * 2
+  const h = fontSize + pad * 2
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.ceil(w * pixelRatio)
+  canvas.height = Math.ceil(h * pixelRatio)
+  const c = canvas.getContext('2d')
+  c.scale(pixelRatio, pixelRatio)
+  c.font = font
+  c.letterSpacing = '2px'
+  c.textAlign = 'center'
+  c.textBaseline = 'middle'
+  c.fillStyle = colour
+  c.fillText(text, w / 2, h / 2)
+
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.colorSpace = THREE.SRGBColorSpace
+  texture.minFilter = THREE.LinearMipmapLinearFilter
+  texture.magFilter = THREE.LinearFilter
+  texture.generateMipmaps = true
+  texture.anisotropy = 8
+  return { texture, aspect: w / h }
+}
+
 export class Ship {
   constructor(scene, position) {
     this.group = new THREE.Group()
@@ -383,6 +462,7 @@ export class Ship {
       if (this._disposed) return // archived/rebuilt before the kit ever arrived
       this.office = this._buildFrom(officePieces(), OFFICE_SPOT)
       this.loods = this._buildFrom(loodsPieces(), LOODS_SPOT)
+      this._buildSign()
       this._buildYard()
     })
   }
@@ -439,6 +519,42 @@ export class Ship {
     // pass already puts every vertex exactly where this mesh does.
     this.group.add(mesh)
     return mesh
+  }
+
+  /**
+   * The wordmark on the band over the big door.
+   *
+   * Its own mesh and its own material, because it is the one thing on either building that is
+   * not a swatch of the prototype atlas — it is a canvas. Which is also what lets the depot
+   * say whose depot it is.
+   *
+   * Lit like the wall by day and emissive after dark, the same way the dock's edge strips and
+   * the pad lights work: the band behind it already comes on at night, so lettering that did
+   * not would read as a shadow across it.
+   */
+  _buildSign() {
+    const at = signPlacement()
+    const { texture, aspect } = createWordmark(SIGN_TEXT, SIGN_COLOUR)
+    // Whichever of the two runs out first decides the size, so a longer word sets itself
+    // smaller rather than running off the end of the band.
+    const height = Math.min(at.maxHeight, at.maxWidth / aspect)
+
+    this.signTexture = texture
+    this.signMaterial = new THREE.MeshStandardMaterial({
+      map: texture,
+      transparent: true,
+      roughness: 0.6,
+      metalness: 0,
+      emissive: new THREE.Color(SIGN_COLOUR),
+      emissiveMap: texture,
+      emissiveIntensity: 0,
+      // It sits a hair off a wall it never has to sort against, and writing depth would have
+      // it z-fight its own transparent margin.
+      depthWrite: false,
+    })
+    this.sign = new THREE.Mesh(new THREE.PlaneGeometry(height * aspect, height), this.signMaterial)
+    this.sign.position.set(at.x, at.y, at.z)
+    this.group.add(this.sign)
   }
 
   /**
@@ -589,6 +705,10 @@ export class Ship {
     const gain = 0.35 + night * 2.2
     this.padMaterial.color.setRGB(0.55 * gain, 0.82 * gain, 1.1 * gain)
 
+    // The sign lights up with the band it is painted on. Guarded because the depot runs from
+    // its first frame and the buildings only exist once the kit has loaded.
+    if (this.signMaterial) this.signMaterial.emissiveIntensity = night * 1.15
+
     // Dock edge lights brighten while anyone is using the dock.
     this.traffic = Math.max(0, this.traffic - dt * 1.5)
     const busy = Math.min(1, this.traffic)
@@ -604,6 +724,9 @@ export class Ship {
 
   dispose() {
     this._disposed = true // in case the kit resolves after this call
+    // The sign's texture is the depot's own. Every other map here is a kit atlas, shared with
+    // every building on the map, and disposing one of those would blank the colony.
+    this.signTexture?.dispose()
     this.group.traverse((o) => {
       if (o.isMesh) {
         o.geometry.dispose()

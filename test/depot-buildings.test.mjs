@@ -10,6 +10,7 @@ import {
   loodsPieces,
   officeBox,
   officePieces,
+  signPlacement,
 } from '../src/world/ship.js'
 import { CELL_SIZE } from '../src/world/grid.js'
 
@@ -304,6 +305,40 @@ test('each roof lands on the walls it stands on, and falls away from its own rid
       )
     }
   }
+})
+
+test('the sign sits on the band over the big door', () => {
+  // The wordmark is drawn to a canvas, which node has no way to run — but everything about
+  // *where* it goes is arithmetic on the door, and that is the part that can be wrong in a
+  // way nobody notices: a sign a module off centre still looks like a sign.
+  const at = signPlacement()
+  const door = loodsPieces().find((p) => p.part === 'Primitive_Wall' && p.sy !== undefined)
+  const leaf = placed(door, LOODS_SPOT)
+
+  assert.ok(near(at.x, (leaf.min[0] + leaf.max[0]) / 2), `the sign is at x ${at.x}, the door at ${((leaf.min[0] + leaf.max[0]) / 2).toFixed(2)}`)
+  assert.ok(at.maxWidth <= leaf.max[0] - leaf.min[0] + 1e-6, `the sign may run ${at.maxWidth.toFixed(2)} wide on a ${(leaf.max[0] - leaf.min[0]).toFixed(2)} door`)
+
+  // Between the head of the door and the eaves — which is exactly the lintel band, the one
+  // piece of the building already painted in the depot's colour.
+  const head = leaf.max[1]
+  const eaves = loodsBox().eaveY
+  assert.ok(
+    at.y - at.maxHeight / 2 >= head - 1e-6 && at.y + at.maxHeight / 2 <= eaves + 1e-6,
+    `the sign spans y ${(at.y - at.maxHeight / 2).toFixed(2)}..${(at.y + at.maxHeight / 2).toFixed(2)}, off the band at ${head.toFixed(2)}..${eaves.toFixed(2)}`
+  )
+})
+
+test('the sign stands off the wall, and stays under the roof that shelters it', () => {
+  // Flat against the wall it z-fights the band; past the eaves it is a sign in the rain with
+  // its own shadow on the building. It belongs in the gap between the two.
+  const at = signPlacement()
+  const wall = Math.max(
+    ...loodsPieces()
+      .filter((p) => p.part !== 'Primitive_Slope')
+      .map((p) => placed(p, LOODS_SPOT).max[2])
+  )
+  assert.ok(at.z > wall + 1e-6, `the sign is at z ${at.z}, flat against the wall at ${wall.toFixed(2)}`)
+  assert.ok(at.z < loodsBox().maxZ, `the sign is at z ${at.z}, out past the roof's overhang at ${loodsBox().maxZ.toFixed(2)}`)
 })
 
 test('nothing is left buried in the ground or hanging over it', () => {
