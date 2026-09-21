@@ -28,12 +28,20 @@
  * The most vehicles that will ever be on the road at once.
  *
  * A ceiling on cost, not a design statement: every car on the road holds a cached route and
- * an instance slot, and nothing about the colony is clearer at sixty cars than at forty.
+ * an instance slot. Which is exactly what it stopped being at 40 — this town lays 150 street
+ * cells, the density below wanted 50 before a single thread was counted, and the ceiling was
+ * quietly deciding the number for every colony anyone here has ever looked at. Both knobs
+ * under it were dead: doubling the density or running fifty threads changed nothing at all.
+ *
+ * 90 puts it back to being a ceiling. The cost it guards is real but small — the headway
+ * check is the only part that grows with the square of the count, and at ninety cars that is
+ * some eight thousand distance tests a frame, which is tenths of a millisecond.
+ * `test/traffic.test.mjs` pins that this town sits under it rather than against it.
  */
-export const MAX_TRAFFIC = 40
+export const MAX_TRAFFIC = 90
 
 /** How many active threads it takes to put one more vehicle on the road. */
-const THREADS_PER_VEHICLE = 4
+export const THREADS_PER_VEHICLE = 4
 
 /**
  * How many street cells the town gets one ambient car for, before any activity is counted.
@@ -44,11 +52,15 @@ const THREADS_PER_VEHICLE = 4
  * was doubled and the parked share cut (`PARK_PERCENT`) — the balance between the two is what
  * makes a street look driven rather than photographed.
  *
+ * 3 to 2 is the second halving, and the first one that actually reached the road: while
+ * `MAX_TRAFFIC` stood at 40 this number could be set to anything and the town still put out
+ * forty cars. One car per two cells is one per 24 units of street, against a block of 12.
+ *
  * What makes this density affordable is `headwayFactor`: cars following one another ease off
  * rather than driving through each other. Crossing traffic still can — see that function for
  * why braking on it would be worse than the overlap it prevents.
  */
-const CELLS_PER_AMBIENT_CAR = 3
+const CELLS_PER_AMBIENT_CAR = 2
 
 /** Seconds a vehicle stands at an address before heading back. */
 export const DWELL_MIN = 4
@@ -228,8 +240,15 @@ const PARKABLE_PART = 'road_straight'
  *
  * 22, down from the 38 first tried. Both sides of every straight tile are a space, so 38 put a
  * car at nearly every second one and the street read as a car park with a road through it. The
- * point of these is to break up an empty kerb, not to line it — and they should be outnumbered
- * by the cars that are actually going somewhere (`CELLS_PER_AMBIENT_CAR`).
+ * point of these is to break up an empty kerb, not to line it.
+ *
+ * **They are not outnumbered by moving traffic, and this used to claim they were.** A space
+ * every 2.4 units on both sides of 150 cells' worth of street is some 1500 of them, so even at
+ * 22 in a hundred there are around 320 cars at the kerb against the 77 on the road — four to
+ * one, and it was eight to one before `MAX_TRAFFIC` was raised. That is the right way round
+ * for a Dutch street, where most cars at any moment are parked, but it is the opposite of what
+ * was written here, and the number to change if the kerb ever reads as too full is this one
+ * rather than the moving count.
  */
 const PARK_PERCENT = 22
 

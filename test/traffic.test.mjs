@@ -4,6 +4,7 @@ import {
   DWELL_MAX,
   DWELL_MIN,
   MAX_TRAFFIC,
+  THREADS_PER_VEHICLE,
   TRAFFIC_BODIES,
   newVehicle,
   stepVehicle,
@@ -112,6 +113,57 @@ test('traffic never exceeds the cap', () => {
       )
     }
   }
+})
+
+test('the cap is a ceiling, not the setting', () => {
+  // It was the setting, for every colony anyone has looked at. This town lays 150 street
+  // cells; at one car per three that is 50 wanted before a single thread is counted, against
+  // a cap of 40 — so the cap decided the number, and both knobs under it were dead. Doubling
+  // the density changed nothing. Running fifty threads changed nothing.
+  //
+  // That is invisible from the outside: the streets had cars on them and the number was
+  // stable, which is what a working density looks like. Only the arithmetic says otherwise.
+  const cells = planStreets().all.size
+  assert.ok(cells > 0, 'the town lays no streets at all')
+
+  const idle = trafficCount(0, cells)
+  assert.ok(idle < MAX_TRAFFIC, `an idle town of ${cells} cells already wants ${idle} cars, at the cap of ${MAX_TRAFFIC} — the density below it is doing nothing`)
+
+  // And the activity term has somewhere to go on top of it. Two things have to hold, and
+  // neither one is enough alone.
+  //
+  // The rate has to be one a real machine reaches: "more than idle" passes for a term that
+  // rounds up, which adds exactly one car however broken its rate is, and one car is more
+  // than none. Forty threads is a busy afternoon here and it has to show on the road.
+  assert.ok(
+    trafficCount(40, cells) - idle >= 5,
+    `forty threads adds only ${trafficCount(40, cells) - idle} cars to the town's own ${idle}`
+  )
+  // And the rate has to be the one the constant says it is.
+  for (const cars of [1, 4, 10]) {
+    assert.equal(
+      trafficCount(cars * THREADS_PER_VEHICLE, cells) - idle,
+      cars,
+      `${cars * THREADS_PER_VEHICLE} threads should add ${cars} cars on top of the town's own ${idle}`
+    )
+  }
+})
+
+test('a bigger town gets proportionally more traffic, not a fixed handful', () => {
+  // The baseline is a density, and the way to tell a density from a constant is to change the
+  // input: a town of eighty street cells has to put out meaningfully more cars than one of
+  // forty. Both are well under the cap, so nothing here is clamped.
+  const small = trafficCount(0, 40)
+  const large = trafficCount(0, 80)
+  assert.ok(large > small, `40 cells gave ${small} cars and 80 gave ${large} — the baseline is not a density`)
+  assert.ok(large >= small * 2 - 1, `doubling the town went from ${small} cars to ${large}`)
+})
+
+test('the cap still holds for a town far larger than this one', () => {
+  // The ceiling's actual job. Ten times the streets and ten times the threads must not put
+  // ten times the cars on the road: every one of them holds a cached route, an instance slot
+  // and a place in a headway check that grows with the square of the count.
+  assert.equal(trafficCount(2000, 20000), MAX_TRAFFIC)
 })
 
 test('traffic is monotonic in both the thread count and the size of the town', () => {
