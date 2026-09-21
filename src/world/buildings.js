@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
-import { ATLAS, part } from './kit.js'
+import { ATLAS, part, recell } from './kit.js'
 
 /**
  * Shared building machinery — the reveal/construction shader (`decorate`, `depthMaterial`)
@@ -50,6 +50,28 @@ const CELL_COUNT = ATLAS.cols * ATLAS.rows
  * A tiny placement helper. Parts are baked to the building's own frame as they are added,
  * each carrying a per-vertex emissive flag, so the whole lot merges into one buffer.
  */
+/**
+ * Put one part where a recipe asked for it: scale, repaint, yaw, offset, in that order.
+ *
+ * Its own function because the order is the whole of it and the order is not obvious. Scale
+ * before yaw, or a part turned a quarter turn is stretched along the wrong axis; yaw before
+ * offset, or a part swings round the building's origin instead of turning on the spot. Both
+ * mistakes look like a placement bug at the call site rather than a bug here.
+ */
+export function placePart(geo, o = {}) {
+  const s = o.s ?? 1
+  const sx = o.sx ?? s
+  const sy = o.sy ?? s
+  const sz = o.sz ?? s
+  if (sx !== 1 || sy !== 1 || sz !== 1) geo.scale(sx, sy, sz)
+  // Repainted before the merge, like every other per-part property: `finish()` leaves one
+  // buffer with no seams left to address.
+  if (o.cell !== undefined) recell(geo, o.cell)
+  if (o.ry) geo.rotateY(o.ry)
+  geo.translate(o.x || 0, o.y || 0, o.z || 0)
+  return geo
+}
+
 export class Composer {
   /**
    * @param {object} [o]
@@ -63,15 +85,17 @@ export class Composer {
 
   /**
    * @param {string} name  a node name from the kit
-   * @param {object} [o]   `x`/`y`/`z` offset, `ry` yaw, `s` uniform scale, `emissive` 0..1,
-   *                       `reveal` the progress this part waits for
+   * @param {object} [o]   `x`/`y`/`z` offset, `ry` yaw, `s` uniform scale, `sx`/`sy`/`sz`
+   *                       per-axis scale overriding it, `cell` an atlas cell to repaint the
+   *                       part into, `emissive` 0..1, `reveal` the progress this part waits for
+   *
+   * Per-axis scale is for a pack whose pieces are plain volumes. Stretching one of KayKit's
+   * *models* shows the moment it stands beside an unstretched copy, but a prototype block is
+   * a box, and a box twice as long is a longer box. Nothing built out of the painted packs
+   * passes it — they all use `s`.
    */
   add(name, o = {}) {
-    const geo = part(name, this.kit, { solo: o.solo })
-    const s = o.s ?? 1
-    if (s !== 1) geo.scale(s, s, s)
-    if (o.ry) geo.rotateY(o.ry)
-    geo.translate(o.x || 0, o.y || 0, o.z || 0)
+    const geo = placePart(part(name, this.kit, { solo: o.solo }), o)
 
     const count = geo.attributes.position.count
     geo.setAttribute('aEmissive', new THREE.BufferAttribute(new Float32Array(count).fill(o.emissive || 0), 1))
