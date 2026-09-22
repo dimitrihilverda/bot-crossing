@@ -22,7 +22,7 @@ import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
  * Each kit keeps its own part registry because each kit has its own atlas: a geometry can
  * only carry one material, so a part from one kit can never merge into the same mesh as a
  * part from another. That is exactly why a house is two meshes (city shell, furniture) and
- * the depot is two meshes (city shell, base-kit containers) rather than one each — every
+ * the depot is three meshes (two prototype-kit buildings, base-kit containers) — every
  * `Composer` in `buildings.js` is built from a single kit for this reason, and mixing kits
  * within one `Composer` would merge two atlases into one material and sample the wrong
  * colours with no error.
@@ -77,8 +77,10 @@ export const CELL_CITY = {
 export const CELL_PROTOTYPE = {
   /** #9b5a45 — the walls, and the nearest thing in the pack to Dutch brick. */
   BRICK: 6,
-  /** #818c91 — the cladding course above the brick. */
+  /** #818c91 — the cladding course above the brick, and the loods' lower course. */
   GREY: 2,
+  /** #d4dbde — the loods' upper course, lighter than the one below it the way clad sheet is. */
+  PALE: 1,
   /** #4a5155 — the roof. */
   SLATE: 3,
   /** #333333 — the big door, and the glazing behind the window openings. */

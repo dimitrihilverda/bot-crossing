@@ -40,6 +40,39 @@ export const CARRIAGEWAY_WIDTH = 2.4
 export const roadTileScale = () => CARRIAGEWAY_WIDTH / ROAD_TILE_SIZE
 
 /**
+ * Bend a stretch of carriageway onto the ground it crosses, in place.
+ *
+ * Every vertex takes the height of the ground at its *own* x and z, instead of the whole
+ * tile taking the height under its middle. That one change is the difference between a road
+ * and a staircase.
+ *
+ * Laying flat slabs each at their own ground height is what a road used to be here, and on
+ * any slope at all it steps: over one straight row of 56 tiles the median riser measured
+ * 0.0196 and the worst 0.0521, against the tile's own raised rim of 0.036. Overlapping the
+ * tiles hid the seam between two risers and left the risers — which is what "it still
+ * doesn't flow" looks like.
+ *
+ * Continuity here is by construction, not by tolerance. This is a pure function of a
+ * vertex's position, so a vertex two tiles share is computed twice and comes out the same
+ * number both times; there is no epsilon anywhere and no seam to close. It also brings the
+ * road into agreement with everything that drives on it — a car already takes its height
+ * from `groundAt` at its own position, and used to ride a surface that stepped underneath it.
+ *
+ * Normals are deliberately left alone. The town's grade is around eight thousandths, so the
+ * tilt is far below anything the shading shows, and recomputing them across a merged road
+ * would average the rim's own hard edges into a smooth roll — trading an invisible error for
+ * a visible one.
+ */
+export function conformToGround(geo, groundAt) {
+  const pos = geo.getAttribute('position')
+  for (let i = 0; i < pos.count; i++) pos.setY(i, pos.getY(i) + groundAt(pos.getX(i), pos.getZ(i)))
+  pos.needsUpdate = true
+  geo.computeBoundingBox()
+  geo.computeBoundingSphere()
+  return geo
+}
+
+/**
  * The atlas cell the kit paints the road's yellow edge lines with, and where those lines sit
  * across a tile in its own authored units (half-width 1).
  *
@@ -268,7 +301,7 @@ export function carriagewayTiles(streetCells, cellSize, connected = new Set()) {
 
 /** The furniture pieces this module draws, all from the city atlas. */
 const LAMP_PART = 'streetlight'
-const CROSSING_PART = 'road_straight_crossing'
+export const CROSSING_PART = 'road_straight_crossing'
 /**
  * `trafficlight_C` — the gantry variant — is deliberately left out. See the "Traffic lights"
  * paragraph in `vergeFurniture`'s own doc comment below for the reach measurement that rules
@@ -739,8 +772,16 @@ export function createRoads({ streets, groundAt, apron = new Set() }) {
   const roadTiles = tiles.filter((t) => !crossingKeys.has(posKey(t.x, t.z)))
 
   const composers = new Map()
-  const place = (part, x, z, ry, s, lift) => {
+  /**
+   * `conform` marks a piece as carriageway: it is placed at its lift alone and bent onto the
+   * ground afterwards, vertex by vertex. Everything else — a streetlight, a tree, a bench —
+   * is placed at its own ground height and stays rigid, because bending a lamp post is not a
+   * thing anybody wants.
+   */
+  const conformed = new Set()
+  const place = (part, x, z, ry, s, lift, conform = false) => {
     if (!hasPart(part, 'city')) return
+    if (conform) conformed.add(part)
     let composer = composers.get(part)
     if (!composer) {
       composer = new Composer({ kit: 'city' })
@@ -753,13 +794,22 @@ export function createRoads({ streets, groundAt, apron = new Set() }) {
     //
     // Every piece stays flat rather than tilting to the local slope: a per-piece tilt would
     // open seams wherever two neighbouring pieces picked slightly different normals.
-    const y = groundAt ? carriagewayHeight(groundAt(x, z), lift) : DECK_TOP
+    // A conformed piece is placed at its lift and picks the ground up per vertex below; a
+    // rigid one takes the ground under its own middle here and keeps its shape.
+    const y = conform ? lift : groundAt ? carriagewayHeight(groundAt(x, z), lift) : DECK_TOP
     composer.add(part, { s, x, y, z, ry })
   }
-  for (const tile of roadTiles) place(tile.part, tile.x, tile.z, tile.ry, scale, ROAD_SURFACE_LIFT)
-  for (const f of furniture) place(f.part, f.x, f.z, f.ry, f.scale, f.lift)
+  // Tiles butt exactly, as the grid intends. Two slabs meeting face to face is only a problem
+  // when their faces sit at different heights; conformed onto the ground they meet exactly,
+  // and two coincident faces pointing opposite ways cull each other.
+  for (const tile of roadTiles) place(tile.part, tile.x, tile.z, tile.ry, scale, ROAD_SURFACE_LIFT, true)
+  for (const f of furniture) place(f.part, f.x, f.z, f.ry, f.scale, f.lift, f.part === CROSSING_PART)
 
-  const meshes = [...composers.values()].map((c) => new THREE.Mesh(c.finish(), roadMaterial()))
+  const meshes = [...composers.entries()].map(([part, c]) => {
+    const geo = c.finish()
+    if (conformed.has(part) && groundAt) conformToGround(geo, groundAt)
+    return new THREE.Mesh(geo, roadMaterial())
+  })
 
   for (const mesh of meshes) {
     mesh.receiveShadow = true

@@ -354,17 +354,22 @@ one part borrowed from elsewhere, plus the project's own shaders on top of them.
 
 | Pack | Used for | Licence |
 | --- | --- | --- |
-| [KayKit : City Builder Bits](https://kaylousberg.itch.io/city-builder-bits) | House shells and the depot shell | CC0 |
+| [KayKit : City Builder Bits](https://kaylousberg.itch.io/city-builder-bits) | House shells, pavement, fences and the delivery car | CC0 |
 | [KayKit : Furniture Bits](https://kaylousberg.itch.io/furniture-bits) | Everything that fills a house as its thread's transcript grows | CC0 |
 | [KayKit : Space Base Bits](https://kaylousberg.itch.io/space-base-bits) | The crates, drums and floodlights stacked around each plot, and the containers stacked in the depot's yard | CC0 |
 | [KayKit : Character Animations](https://kaylousberg.itch.io/kaykit-character-animations) | The crew's body and all seventeen animation clips they play | CC0 |
 | [KayKit : Forest Nature Pack](https://kaylousberg.itch.io/kaykit-forest) | Terra's trees, bushes and grass, and the boulders on every world | CC0 |
-| [KayKit : Prototype Bits](https://kaylousberg.itch.io/prototype-bits) | Walls, roof slopes, beams and pallets — the pieces the depot's hall is composed out of | CC0 |
+| [KayKit : Prototype Bits](https://kaylousberg.itch.io/prototype-bits) | Walls, openings, roof slopes and beams — the pieces the depot's two buildings are composed out of | CC0 |
 | [Quaternius : LowPoly Public Transport](https://opengameart.org/content/lowpoly-public-transport) | The bicycle, and nothing else | CC0 |
+| Moving-In's own logo | The sign over the depot's loading door — **a trademark, not CC0** | © Moving-In |
 
 CC0 asks for nothing, but crediting Kay costs nothing either. If you rebuild the assets, all
 six packs go in `assets-src/` (see below); `public/assets/CREDITS.md` is the definitive list
 of what each `.glb` is built from.
+
+**One file is not CC0 and never was.** `public/assets/moving-in-logo.png` is this company's
+own logo, on the depot's sign. It is a trademark rather than an asset — if you fork this,
+swap it for your own or take the sign down. `SIGN_FILE` in `src/world/ship.js` names it once.
 
 **The bicycle is the one part Kay did not make.** None of KayKit's 23 packs has one — checked
 across all 222 parts of the five packs this colony loads — and a Dutch street without a bicycle
@@ -382,7 +387,8 @@ shell built out of several named parts — wall, roof, door and the rest — sti
 single geometry and a single draw call, exactly as the procedural generators it replaced did.
 Because each pack has its own atlas, and a merged geometry can only carry one material, a house
 is **two meshes**, not one — the shell's parts from the city kit, its contents from the
-furniture kit — and the depot is built the same way, from the city kit and the base kit.
+furniture kit. The depot is three, for the same reason: its office and its loods are both
+composed out of the prototype kit and the crates in its yard come from the base kit.
 `src/world/kit.js` is where that rule is written down.
 
 That atlas is an 8×4 grid of swatches, which turns out to be a useful thing to have. A *cell
