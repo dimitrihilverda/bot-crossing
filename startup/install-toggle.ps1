@@ -36,6 +36,16 @@ $sc.Description       = "$name starten of afsluiten"
 $sc.WindowStyle      = 7   # geminimaliseerd, geen flitsend venster
 $sc.Save()
 
+# 3. eigen app-identiteit, anders erft de knop die van PowerShell
+#
+# Het doel van deze snelkoppeling is powershell.exe. Windows leidt de identiteit van een
+# vastgemaakte taakbalk-knop af uit dat doel, en dan pakt hij het icoon en de groepering van
+# PowerShell in plaats van wat hier in de snelkoppeling staat — vastmaken leverde een vreemd
+# icoon op in plaats van de verhuizer. Een eigen AppUserModelID maakt er voor Windows een losse
+# app van, met zijn eigen icoon en zijn eigen plek.
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $here 'set-appid.ps1') `
+    -Lnk $lnk -AppId 'MovingIn.Crossing.Toggle' | Out-Null
+
 Write-Host ""
 Write-Host "Klaar. Snelkoppeling gemaakt:" -ForegroundColor Green
 Write-Host "  $lnk"
