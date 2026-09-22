@@ -31,3 +31,10 @@ hub/nuc-image/iso.env
 
 # Python bytecode from local testing
 __pycache__/
+
+# Windows taakbalk-toggle: per-machine bits that must not be shared.
+# The Edge profile (cookies/session), the generated icon preview, and any local override.
+startup/browser-profile/
+startup/bot-crossing-icon-preview.png
+startup/toggle.local.ps1
+startup/bot-crossing.vbs
