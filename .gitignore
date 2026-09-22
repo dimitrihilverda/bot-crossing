@@ -38,3 +38,6 @@ startup/browser-profile/
 startup/bot-crossing-icon-preview.png
 startup/toggle.local.ps1
 startup/bot-crossing.vbs
+# Het startprogramma wordt door install-toggle.ps1 uit launcher.cs gebouwd; de bron staat
+# in git, het bouwsel niet.
+startup/*.exe

@@ -13,6 +13,7 @@ $name    = 'Moving-In Crossing'   # moet gelijk zijn aan $name in bot-crossing-t
 $here    = $PSScriptRoot
 $toggle  = Join-Path $here 'bot-crossing-toggle.ps1'
 $iconOff = Join-Path $here 'bot-crossing-off.ico'
+$launcher = Join-Path $here "$name.exe"
 $project = Split-Path -Parent $here
 
 # 1. iconen genereren als ze er nog niet zijn
@@ -21,15 +22,24 @@ if (-not (Test-Path $iconOff)) {
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $here 'make-mover-icon.ps1') | Out-Null
 }
 
+# 1b. het startprogramma bouwen
+#
+# De snelkoppeling wijst hiernaar en niet rechtstreeks naar powershell.exe. Windows 11 biedt
+# "Aan taakbalk vastmaken" namelijk niet aan voor snelkoppelingen naar systeemtools in
+# System32 — die actie stond simpelweg niet in het rechtsklikmenu, ook niet onder "Meer opties
+# weergeven". Een eigen .exe is een gewone toepassing en mag wel vastgemaakt worden.
+Write-Host "Startprogramma bouwen..."
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $here 'make-launcher.ps1') | Out-Null
+if (-not (Test-Path $launcher)) { throw "startprogramma niet gebouwd: $launcher" }
+
 # 2. snelkoppeling op het Bureaublad (lost een eventuele OneDrive-omleiding vanzelf op)
 $desktop = [Environment]::GetFolderPath('Desktop')
 $lnk = Join-Path $desktop "$name.lnk"
-$ps  = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
 
 $sh = New-Object -ComObject WScript.Shell
 $sc = $sh.CreateShortcut($lnk)
-$sc.TargetPath       = $ps
-$sc.Arguments        = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$toggle`""
+$sc.TargetPath       = $launcher
+$sc.Arguments        = ''
 $sc.WorkingDirectory = $project
 $sc.IconLocation     = "$iconOff,0"
 $sc.Description       = "$name starten of afsluiten"
