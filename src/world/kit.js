@@ -3,8 +3,9 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 
 /**
- * The model kits — KayKit's *Space Base Bits* and *Forest Nature Pack* (both CC0), each
- * packed into one glb by `tools/build-kit.mjs` and loaded exactly once here.
+ * The model kits — KayKit's *Space Base Bits*, *Forest Nature Pack*, *City Builder Bits*,
+ * *Furniture Bits* and *Prototype Bits* (all CC0), each packed into one glb by
+ * `tools/build-kit.mjs` and loaded exactly once here.
  *
  * Their shared design is what makes them worth building on: every model in a pack UVs into
  * a single 1024px gradient atlas and therefore shares a single material, so a colony
@@ -18,8 +19,13 @@ import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
  * repaint one swatch — the gold trim band, cell 11 — into each repo's accent colour without
  * touching a texture or splitting the mesh.
  *
- * The two kits keep separate part registries because they have separate atlases: a geometry
- * can only carry one material, so a habitat and a fir tree can never merge into one mesh.
+ * Each kit keeps its own part registry because each kit has its own atlas: a geometry can
+ * only carry one material, so a part from one kit can never merge into the same mesh as a
+ * part from another. That is exactly why a house is two meshes (city shell, furniture) and
+ * the depot is three meshes (two prototype-kit buildings, base-kit containers) — every
+ * `Composer` in `buildings.js` is built from a single kit for this reason, and mixing kits
+ * within one `Composer` would merge two atlases into one material and sample the wrong
+ * colours with no error.
  */
 
 /** Columns and rows in the gradient atlas. */
@@ -44,13 +50,77 @@ export const CELL = {
   SOLAR_B: 29,
 }
 
+/**
+ * The cell worth naming in the city atlas. `ACCENT` is the swatch the shader repaints per
+ * repo; it was chosen with `tools/atlas-cells.mjs` (and a UV-to-part cross-check) as the
+ * warm terracotta swatch that every one of the kit's eight buildings UVs into — not the
+ * single highest-saturation cell in the atlas, but the one that actually reads as "this
+ * building's trim" on every building rather than on one model, a car, or a traffic light.
+ */
+export const CELL_CITY = {
+  ACCENT: 5,
+}
+
+/**
+ * The same, for the prototype atlas — and here the cells are load-bearing in a way they are
+ * not for the other kits.
+ *
+ * Every other pack paints its models: a house arrives brick, a tree arrives green. Prototype
+ * Bits is a greybox kit, so all nineteen of its structural pieces UV into one swatch — cell 0,
+ * which is a yellow gradient. A hall composed straight out of the pack therefore comes out
+ * entirely yellow. The colours it is built in are chosen here instead and applied per piece
+ * with `recell`, which is what turns a pile of prototype blocks into brick walls under a
+ * slate roof.
+ *
+ * Measured from `prototype.glb` with `tools/atlas-cells.mjs`.
+ */
+export const CELL_PROTOTYPE = {
+  /** #9b5a45 — the walls, and the nearest thing in the pack to Dutch brick. */
+  BRICK: 6,
+  /** #818c91 — the cladding course above the brick, and the loods' lower course. */
+  GREY: 2,
+  /** #d4dbde — the loods' upper course, lighter than the one below it the way clad sheet is. */
+  PALE: 1,
+  /** #4a5155 — the roof. */
+  SLATE: 3,
+  /** #333333 — the big door, and the glazing behind the window openings. */
+  DARK: 4,
+  /** #a08c77 — mid-luminance and neutral, so the accent repaint lands on the accent's own
+   *  colour rather than on a tinted version of something already saturated. */
+  ACCENT: 8,
+}
+
+/**
+ * The same, for the furniture atlas. `ACCENT` is the amber swatch used across pillows,
+ * rugs, book covers and decorated cabinet/shelf inlays — the kit's decorative-accessory
+ * colour, not the wood or fabric that makes up a piece's main body.
+ */
+export const CELL_FURNITURE = {
+  ACCENT: 8,
+}
+
 // Served straight out of `public/`, not bundled — a glb is opaque to Vite and there is
 // nothing to gain from hashing a file the loader fetches by hand anyway.
 const KITS = {
-  /** Space Base Bits: every building, and the colony's hard surfaces. */
+  /** Space Base Bits: the original colony's buildings, and its hard surfaces. */
   base: { file: 'spacebase.glb', parts: new Map(), solo: new Map(), atlas: null },
   /** Forest Nature Pack: trees, bushes, grass, and the boulders on every world. */
   forest: { file: 'forest.glb', parts: new Map(), solo: new Map(), atlas: null },
+  /** City Builder Bits: house shells, pavement, fences, and the delivery car. */
+  city: { file: 'city.glb', parts: new Map(), solo: new Map(), atlas: null },
+  /** Furniture Bits: everything that goes inside a house. */
+  furniture: { file: 'furniture.glb', parts: new Map(), solo: new Map(), atlas: null },
+  /**
+   * Prototype Bits: walls, openings, roof slopes, beams and pillars.
+   *
+   * The odd one out, deliberately. Every other kit here supplies *things* — a house, a tree, a
+   * car — and this one supplies the pieces to build a thing none of the others has. It is here
+   * because the depot stands for a real building, a brick office with an industrial hall
+   * attached, and the city pack has no hall: all eight of its shells are 2 x 2 townhouse
+   * blocks. Composing one out of walls and a roof is how to get it without borrowing a model
+   * whose style then has to be argued with.
+   */
+  prototype: { file: 'prototype.glb', parts: new Map(), solo: new Map(), atlas: null },
 }
 
 let loading = null
@@ -185,6 +255,35 @@ export function hasPart(name, kit = 'base') {
 
 export function atlasTexture(kit = 'base') {
   return KITS[kit]?.atlas ?? null
+}
+
+/**
+ * Move a geometry's UVs out of the swatch they were authored in and into `cell`, in place.
+ *
+ * Only for a greybox pack. Every other kit here arrives painted, and repainting a model Kay
+ * coloured would be overriding an artist; the prototype kit arrives on one swatch for all of
+ * it, so choosing a colour per piece *is* the composition — see `CELL_PROTOTYPE`.
+ *
+ * Where in the swatch each vertex sat is kept, because a swatch is a gradient rather than a
+ * flat colour and that gradient is what stops a wall reading as a solid block: the shift is
+ * whole cells, never a re-layout. A piece whose vertices span two cells would be pulled apart
+ * by this, which no piece in the prototype pack does — `test/prototype-kit.test.mjs` pins it.
+ */
+export function recell(geo, cell) {
+  const uv = geo.getAttribute('uv')
+  if (!uv) return geo
+  const toCol = cell % ATLAS.cols
+  const toRow = Math.floor(cell / ATLAS.cols)
+  for (let i = 0; i < uv.count; i++) {
+    const u = uv.getX(i)
+    const v = uv.getY(i)
+    // A UV sitting exactly on the far edge belongs to the last cell, not to one past it.
+    const col = Math.min(ATLAS.cols - 1, Math.floor(u * ATLAS.cols))
+    const row = Math.min(ATLAS.rows - 1, Math.floor(v * ATLAS.rows))
+    uv.setXY(i, u + (toCol - col) / ATLAS.cols, v + (toRow - row) / ATLAS.rows)
+  }
+  uv.needsUpdate = true
+  return geo
 }
 
 /**

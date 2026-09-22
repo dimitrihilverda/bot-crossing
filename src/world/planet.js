@@ -1,5 +1,7 @@
 import * as THREE from 'three'
 import { atlasTexture, hasPart, part } from './kit.js'
+import { mulberry } from './rng.js'
+export { mulberry }
 
 /**
  * The three worlds you can put the colony on, and the terrain generator that draws them.
@@ -70,6 +72,17 @@ export const PLANETS = {
 const GROUND_SIZE = 340
 /** Everything inside this radius is the buildable colony, and is kept nearly flat. */
 export const COLONY_RADIUS = 46
+/**
+ * Everything inside this radius is the town, and is kept flat.
+ *
+ * `TOWN_CELL_RADIUS` (8) cells at `CELL_SIZE` (12) reaches 96 units to the outermost cell
+ * centre, plus half a cell for its far edge: 102. 104 gives the outline a little slack.
+ *
+ * Widening this **moves the hills outward**, which changes the look of the whole world and
+ * not only the town's. That is deliberate: a street network laid over a hill field would ride
+ * up and down it, and the kit's road tiles are flat slabs that cannot follow a slope.
+ */
+export const TOWN_RADIUS = 104
 const DETAIL_SEGMENTS = { low: 72, medium: 128, high: 190 }
 
 /**
@@ -100,7 +113,7 @@ export function createTerrain(planet, detail, seed = 1337) {
 
     // Flat where the colony lives, then hills that ramp in over the next forty metres —
     // so nothing ever builds on a slope but the horizon still has shape to it.
-    const outside = THREE.MathUtils.smoothstep(dist, COLONY_RADIUS - 6, COLONY_RADIUS + 40)
+    const outside = THREE.MathUtils.smoothstep(dist, TOWN_RADIUS - 6, TOWN_RADIUS + 40)
     const gentle = fbm(noise, x * 0.035, z * 0.035, 3) * 0.5
     const hills = fbm(noise, x * 0.012, z * 0.012, 4) * 9 + fbm(noise, x * 0.05, z * 0.05, 2) * 1.4
     let y = gentle * planet.roughness * (1 - outside) + hills * outside * planet.roughness
@@ -151,7 +164,7 @@ export function createTerrain(planet, detail, seed = 1337) {
 
 function sampleHeight(x, z, noise, craters, planet) {
   const dist = Math.hypot(x, z)
-  const outside = THREE.MathUtils.smoothstep(dist, COLONY_RADIUS - 6, COLONY_RADIUS + 40)
+  const outside = THREE.MathUtils.smoothstep(dist, TOWN_RADIUS - 6, TOWN_RADIUS + 40)
   const gentle = fbm(noise, x * 0.035, z * 0.035, 3) * 0.5
   const hills = fbm(noise, x * 0.012, z * 0.012, 4) * 9 + fbm(noise, x * 0.05, z * 0.05, 2) * 1.4
   let y = gentle * planet.roughness * (1 - outside) + hills * outside * planet.roughness
@@ -171,7 +184,7 @@ function makeCraters(count, seed) {
   const out = []
   for (let i = 0; i < count; i++) {
     const a = rand() * Math.PI * 2
-    const d = COLONY_RADIUS + 14 + rand() * 110
+    const d = TOWN_RADIUS + 14 + rand() * 50
     const r = 4 + rand() * 16
     out.push({ x: Math.cos(a) * d, z: Math.sin(a) * d, r, depth: r * (0.18 + rand() * 0.16) })
   }
@@ -199,17 +212,20 @@ const SCATTER_BUDGET = 900
  * takes them to lunar dust or Martian rust without touching the atlas.
  */
 const SCATTER = {
+  // Residential: gardens and street trees, not wilderness — grass and shrubs dominate,
+  // a modest scatter of shade trees gives it structure, and boulders are almost gone
+  // (one rare decorative stone rather than a quarry's worth).
   flora: [
-    { part: 'Tree_1_A_Color1', weight: 3, size: [0.35, 0.6], sink: 0.02, upright: true },
-    { part: 'Tree_3_A_Color1', weight: 3, size: [0.35, 0.6], sink: 0.02, upright: true },
-    { part: 'Tree_4_A_Color1', weight: 2, size: [0.3, 0.55], sink: 0.02, upright: true },
+    { part: 'Tree_1_A_Color1', weight: 2, size: [0.35, 0.6], sink: 0.02, upright: true },
+    { part: 'Tree_3_A_Color1', weight: 2, size: [0.35, 0.6], sink: 0.02, upright: true },
+    { part: 'Tree_4_A_Color1', weight: 1, size: [0.3, 0.55], sink: 0.02, upright: true },
     { part: 'Tree_1_C_Color1', weight: 1, size: [0.25, 0.4], sink: 0.02, upright: true },
     { part: 'Tree_3_C_Color1', weight: 1, size: [0.22, 0.38], sink: 0.02, upright: true },
     { part: 'Tree_4_C_Color1', weight: 1, size: [0.2, 0.35], sink: 0.02, upright: true },
-    { part: 'Bush_1_E_Color1', weight: 3, size: [0.5, 1.1], sink: 0.06, upright: true },
-    { part: 'Bush_3_B_Color1', weight: 3, size: [0.5, 1.1], sink: 0.06, upright: true },
-    { part: 'Grass_2_D_Color1', weight: 4, size: [0.6, 1.3], sink: 0.05, upright: true },
-    { part: 'Rock_1_D_Color1', weight: 2, size: [0.4, 0.9], sink: 0.3, tint: true },
+    { part: 'Bush_1_E_Color1', weight: 4, size: [0.5, 1.1], sink: 0.06, upright: true },
+    { part: 'Bush_3_B_Color1', weight: 4, size: [0.5, 1.1], sink: 0.06, upright: true },
+    { part: 'Grass_2_D_Color1', weight: 6, size: [0.6, 1.3], sink: 0.05, upright: true },
+    { part: 'Rock_1_D_Color1', weight: 1, size: [0.4, 0.9], sink: 0.3, tint: true },
   ],
   rocks: [
     { part: 'Rock_1_D_Color1', weight: 4, size: [0.5, 1.2], sink: 0.3, tint: true },
@@ -233,6 +249,22 @@ function fallbackShapes(isFlora) {
       ]
   for (const g of shapes) g.computeVertexNormals()
   return shapes.map((geo) => ({ geo, sink: 0.25, size: [0.28, 0.83], tint: true, upright: false }))
+}
+
+/**
+ * Is world point `(x, z)` inside a `keepClear` entry?
+ *
+ * Two shapes, because one placement problem needs the other: `{x, z, r}` is a circle — right
+ * for a plot or the ship, which are round-ish footprints planted well inside open ground — and
+ * `{x, z, half}` is an axis-aligned square, right for a grid cell whose *edges* matter, such
+ * as a street or a town block. A circle can only approximate a cell: drawn small enough to fit
+ * inside it, it leaves the corners open; drawn large enough to cover the corners, it bleeds
+ * into the neighbouring cell. A square doesn't have that trade-off, which is the whole reason
+ * this shape was added — see `town-plan.js`'s `keepClearCells`.
+ */
+function inKeepClear(x, z, p) {
+  if (p.half != null) return Math.abs(x - p.x) < p.half && Math.abs(z - p.z) < p.half
+  return Math.hypot(x - p.x, z - p.z) < p.r
 }
 
 export function createScatter(planet, density, keepClear = [], seed = 4242) {
@@ -289,7 +321,7 @@ export function createScatter(planet, density, keepClear = [], seed = 4242) {
     const d = 9 + Math.sqrt(rand()) * 150
     const x = Math.cos(a) * d
     const z = Math.sin(a) * d
-    if (keepClear.some((p) => Math.hypot(x - p.x, z - p.z) < p.r)) continue
+    if (keepClear.some((p) => inKeepClear(x, z, p))) continue
 
     const which = pickKind()
     const kind = kinds[which]
@@ -298,7 +330,7 @@ export function createScatter(planet, density, keepClear = [], seed = 4242) {
     if (slot >= mesh.instanceMatrix.count) continue
 
     // Far-field props are allowed to be much bigger, which reads as distance.
-    const far = THREE.MathUtils.smoothstep(d, COLONY_RADIUS, 130)
+    const far = THREE.MathUtils.smoothstep(d, TOWN_RADIUS, 200)
     const [lo, hi] = kind.size
     const s = (lo + rand() * (hi - lo)) * (1 + far * 1.9)
 
@@ -356,18 +388,6 @@ function sampleY(x, z, planet, seed) {
 }
 
 // ── noise ─────────────────────────────────────────────────────────────────────────────
-
-/** Small deterministic PRNG — same seed, same world, every reload. */
-export function mulberry(seed) {
-  let a = seed >>> 0
-  return function () {
-    a = (a + 0x6d2b79f5) >>> 0
-    let t = a
-    t = Math.imul(t ^ (t >>> 15), t | 1)
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
 
 /** Value noise on a hashed lattice with smoothstep interpolation — cheap and smooth enough. */
 function makeNoise(seed) {

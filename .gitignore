@@ -18,3 +18,23 @@ assets-src
 
 # Local capture output — not part of the project.
 recordings
+
+# SDD scratch (ledgers, briefs, review packages)
+.superpowers
+
+# NUC installer: the operator's filled-in config (holds a Tailscale key) and the generated seed
+hub/nuc-image/config.env
+hub/nuc-image/build/
+
+# NUC installer: the ISO-build config (account password)
+hub/nuc-image/iso.env
+
+# Python bytecode from local testing
+__pycache__/
+
+# Windows taakbalk-toggle: per-machine bits that must not be shared.
+# The Edge profile (cookies/session), the generated icon preview, and any local override.
+startup/browser-profile/
+startup/bot-crossing-icon-preview.png
+startup/toggle.local.ps1
+startup/bot-crossing.vbs

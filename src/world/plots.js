@@ -3,14 +3,19 @@ import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 import { DECK_TEXTURE_SCALE, KERB_UV, deckSurface, kerbSurface } from './surfaces.js'
 import { atlasTexture, hasPart, part } from './kit.js'
 import { mulberry } from './planet.js'
+import { CELL_SIZE, DIRS, cellWorld, distance, key, neighbours, ring, worldToCell } from './grid.js'
+
+// Re-exported so the rest of the app can keep pulling the lattice's world<->cell mapping from
+// plots.js rather than reaching into grid.js directly at every call site.
+export { CELL_SIZE, DIRS, cellWorld, distance, key, neighbours, ring, worldToCell }
 
 /**
  * Project plots — the fenced-off sections of the map, one per repo.
  *
- * Plots sit on a hexagonal lattice, and a project claims **as many cells as it has threads
- * to house**: a repo with forty sessions sprawls across six tiles, a one-off gets a single
- * tile. The cells tile exactly, so a multi-cell plot reads as one continuous zone, and the
- * accent border is drawn only on the edges that actually face something else — internal
+ * Plots sit on a square lattice (see `grid.js`), and a project claims **as many cells as it
+ * has threads to house**: a repo with forty sessions sprawls across five tiles, a one-off gets
+ * a single tile. The cells tile exactly, so a multi-cell plot reads as one continuous zone, and
+ * the accent border is drawn only on the edges that actually face something else — internal
  * seams between a project's own cells get no border at all.
  *
  * Cells are handed out in a spiral from the middle, biggest project first, so the busiest
@@ -22,12 +27,6 @@ export const PLOT_PALETTE = [
   0x3fa8a0, 0xc97f4f, 0x6f8f4f, 0x5c7fc9, 0xc95c5c, 0x7f6fc9,
 ]
 
-/** Hex size, centre to corner. Cells tile exactly at this radius. */
-const CELL = 7.6
-/** Exported for hit-testing: on a hex lattice the nearest cell centre *is* the containing cell. */
-export const PLOT_CELL = CELL
-/** Pulled in a hair so two neighbouring plots never z-fight along a shared edge. */
-const TILE = CELL * 0.992
 /**
  * Top face of a plot's tile slab — the surface everything on a plot stands on, and the one
  * height every prop, building, kerb and pair of boots on a plot is measured from.
@@ -54,80 +53,56 @@ export const DECK_TOP = 0.45
 const DECK_SKIRT = 0.4
 /** The whole prism: the rim you can see, plus the skirt buried under it. */
 const DECK_HEIGHT = DECK_TOP + DECK_SKIRT
-/** Building slots per cell: one in the middle and six around it. */
-const SLOTS_PER_CELL = 7
+/** Building slots per cell, laid out 3 x 3 — see `grid.js`'s `CELL_SIZE` comment for why. */
+const SLOTS_PER_CELL = 9
 const MAX_CELLS = 9
-/** The lattice cell the ship owns. Nothing else may be placed there. */
-const SHIP_CELL = { q: -2, r: 1 }
-
-const HEX_DIRS = [
-  [1, 0],
-  [1, -1],
-  [0, -1],
-  [-1, 0],
-  [-1, 1],
-  [0, 1],
-]
-
 /**
- * Edge j of a flat-top hexagon runs between the corners at 60j° and 60(j+1)°, so its
- * midpoint faces 60j+30°. This maps that edge to the neighbour sitting across it.
+ * The lattice cell the ship owns. Nothing else may be placed there.
+ *
+ * Picked as the square cell nearest the depot's old position on the hex lattice (hex cell
+ * `{ q: -2, r: 1 }`, world `(-22.8, 0)`): `worldToCell(-22.8, 0)` rounds to `(-2, 0)`.
  */
-const EDGE_TO_DIR = [0, 5, 4, 3, 2, 1]
+const SHIP_CELL = { x: -2, z: 0 }
 
-const key = (q, r) => `${q},${r}`
-const ORIGIN = { q: 0, r: 0 }
-
-/** Flat-top axial hex → world. */
-function hexToWorld(q, r, size = CELL) {
-  return { x: size * 1.5 * q, z: size * Math.sqrt(3) * (r + q / 2) }
-}
-
-/** The world XZ of a cell's centre — so the colony can sample terrain height under a plot. */
-export function cellWorld(q, r) {
-  return hexToWorld(q, r)
-}
-
+/** One square cell's own footprint, in world units — the Plot class's own copy of `CELL_SIZE`. */
+const CELL = CELL_SIZE
 /**
- * The inverse: which cell a world point falls in. Exact rather than nearest-centre, because
- * it decides whether something is standing on a plot's raised deck or on bare ground, and a
- * radius test would put an astronaut on a deck it is not actually over.
+ * Pulled in a hair so two neighbouring plots never z-fight along a shared edge — the same
+ * trick the hex lattice used, at the same fraction: 11.904 out of a 12-unit cell, where the
+ * hex tile pulled 7.54 out of 7.6.
  */
-export function worldToHex(x, z, size = CELL) {
-  const q = x / (size * 1.5)
-  const r = z / (size * Math.sqrt(3)) - q / 2
-  return cubeRound(q, r)
-}
+const TILE = CELL * 0.992
 
-/** Round fractional axial coordinates to the cell that actually contains the point. */
-function cubeRound(q, r) {
-  const y = -q - r
-  let rq = Math.round(q)
-  let rr = Math.round(r)
-  const ry = Math.round(y)
-  const dq = Math.abs(rq - q)
-  const dr = Math.abs(rr - r)
-  const dy = Math.abs(ry - y)
-  // Whichever axis drifted furthest is the one recomputed from the other two.
-  if (dq > dr && dq > dy) rq = -rr - ry
-  else if (dr > dy) rr = -rq - ry
-  return { q: rq, r: rr }
-}
+/** Kerb bar thickness, and how far its centreline sits in from the tile's own edge. */
+const BORDER_WIDTH = 0.32
+const BORDER_INSET = 0.05
+/**
+ * Distance from a cell's centre to the kerb's inner face, measured along an axis. `_buildBorder`
+ * derives the same number itself; `_buildClutter` reads it here to know how close to the kerb a
+ * prop may sit.
+ */
+const KERB_INNER = TILE / 2 - BORDER_INSET - BORDER_WIDTH
 
-function hexRing(radius) {
-  if (radius === 0) return [{ q: 0, r: 0 }]
-  const out = []
-  let q = HEX_DIRS[4][0] * radius
-  let r = HEX_DIRS[4][1] * radius
-  for (let i = 0; i < 6; i++) {
-    for (let j = 0; j < radius; j++) {
-      out.push({ q, r })
-      q += HEX_DIRS[i][0]
-      r += HEX_DIRS[i][1]
-    }
-  }
-  return out
-}
+/** 3 x 3 arrangement, matching `SLOTS_PER_CELL` — see `grid.js`'s `CELL_SIZE` comment for why. */
+const SLOTS_SIDE = 3
+/** Spacing between adjacent slot centres: 12 / 3 = 4.0, leaving 1.1 of clearance around a
+ *  2.9-wide house (`HOUSE_SCALE = 1.45` in `houses.js`, applied to a 2-unit building). */
+const SLOT_SPACING = CELL_SIZE / SLOTS_SIDE
+/** Half-width of a house at that scale — the other half of the 1.1 clearance measurement. */
+const HOUSE_HALF_WIDTH = 1.45
+/**
+ * Centreline of the gap between two adjacent columns (or rows) of houses in the 3 x 3 slot
+ * grid — the midpoint between two slot centres one `SLOT_SPACING` apart.
+ */
+const CHANNEL_OFFSET = SLOT_SPACING / 2
+/**
+ * Half-width of that gap: what is left of the distance between two slot centres once a
+ * house's own half-width is subtracted from each side. 2.0 - 1.45 = 0.55, so the gap is 1.1
+ * wide — `_buildClutter`'s only ground on a cell that is actually wide enough for a prop.
+ */
+const CHANNEL_HALF_WIDTH = CHANNEL_OFFSET - HOUSE_HALF_WIDTH
+
+const ORIGIN = { x: 0, z: 0 }
 
 const cellsNeeded = (threadCount) =>
   Math.max(1, Math.min(MAX_CELLS, Math.ceil(threadCount / SLOTS_PER_CELL)))
@@ -139,15 +114,20 @@ const cellsNeeded = (threadCount) =>
  * deliberate: a district you walk to reads as somebody else's settlement, not as your own
  * colony growing a lobe.
  */
-const ANCHOR_RING = 5
-export function colonyAnchor(name) {
-  const ring = hexRing(ANCHOR_RING)
-  return ring[hashString(`colony:${name}`) % ring.length]
+let ANCHOR_RING = 4
+/** How far visiting colonies are anchored from the centre — driven by the `colonySpacing`
+ *  setting so the wall's colony spacing can be tuned live. Clamped to a sane range. */
+export function setColonySpacing(n) {
+  ANCHOR_RING = Math.max(2, Math.min(8, Math.round(Number(n) || 4)))
 }
-
-/** Hex distance in axial coordinates: the cube distance, halved. */
-function hexDistance(a, b) {
-  return (Math.abs(a.q - b.q) + Math.abs(a.q + a.r - b.q - b.r) + Math.abs(a.r - b.r)) / 2
+export function colonyAnchor(name, index = null, count = null) {
+  const anchorRing = ring(ANCHOR_RING)
+  // With an index among the colonies, spread them evenly around the ring so they surround the
+  // centre (the Hub) rather than clumping wherever their names happen to hash.
+  if (index != null && count > 0) {
+    return anchorRing[Math.round((index / count) * anchorRing.length) % anchorRing.length]
+  }
+  return anchorRing[hashString(`colony:${name}`) % anchorRing.length]
 }
 
 /**
@@ -167,9 +147,9 @@ function hexDistance(a, b) {
  * Each list is ordered root-first and growth appends, so a shrink is a slice, and
  * grow-then-shrink puts a zone back in exactly the shape it started in.
  *
- * Contiguity still comes from a flood fill: slicing runs out of a hex spiral looks like it
- * would work and does not, because the last cell of one ring and the first of the next sit
- * on opposite sides of the colony.
+ * Contiguity still comes from a flood fill: slicing runs out of a spiral looks like it would
+ * work and does not, because the last cell of one ring and the first of the next sit on
+ * opposite sides of the colony.
  *
  * @param projects [{ id, size }], biggest first — the order only decides who gets the
  *   innermost seed among repos that are *new*.
@@ -191,48 +171,55 @@ function hexDistance(a, b) {
  * The ship's cell counts as walkable here even though nobody may claim it: a colony that
  * happens to wrap around the ship is not two colonies.
  */
-function isConnected(out, anchored = new Set()) {
+function isConnected(out, anchored = new Set(), streets = new Set()) {
   const cells = new Map()
   // Anchored zones are *meant* to be islands — a visiting colony's district sits out past
   // the home zones by design — so they neither have to be reached nor count as unreachable.
   for (const [id, list] of out) {
     if (anchored.has(id)) continue
-    for (const c of list) cells.set(key(c.q, c.r), c)
+    for (const c of list) cells.set(key(c.x, c.z), c)
   }
   if (cells.size < 2) return true
-  const ship = key(SHIP_CELL.q, SHIP_CELL.r)
-  const passable = new Set([...cells.keys(), ship])
+  const ship = key(SHIP_CELL.x, SHIP_CELL.z)
+  // Street cells are stepping stones on exactly the same footing as the ship's cell: they
+  // may be crossed and need not be reached. A ring road runs *through* the colony, so
+  // without this a colony the road divides is judged broken and every plot re-seeds from
+  // the middle on every poll — which is the upheaval `allocateCells` exists to prevent,
+  // arriving by the back door.
+  const passable = new Set([...cells.keys(), ship, ...streets])
   const [start] = cells.keys()
   const seen = new Set([start])
   const queue = [cells.get(start)]
   while (queue.length) {
     const c = queue.pop()
-    for (const [dq, dr] of HEX_DIRS) {
-      const n = { q: c.q + dq, r: c.r + dr }
-      const k = key(n.q, n.r)
+    for (const [dx, dz] of DIRS) {
+      const n = { x: c.x + dx, z: c.z + dz }
+      const k = key(n.x, n.z)
       if (!passable.has(k) || seen.has(k)) continue
       seen.add(k)
       queue.push(n)
     }
   }
+  // Same reasoning as the ship: a stepping stone is not a member.
+  for (const street of streets) seen.delete(street)
   // The ship is a stepping stone, not a member: it does not have to be reached for the colony
   // to be whole, and it does not count toward what has to be.
   seen.delete(ship)
   return seen.size === cells.size
 }
 
-export function allocateCells(projects, previous = new Map()) {
+export function allocateCells(projects, previous = new Map(), streets = new Set()) {
   const anchored = new Set(projects.filter((p) => p.anchor).map((p) => p.id))
-  const laid = layOut(projects, previous)
+  const laid = layOut(projects, previous, streets)
   // Remembering where a zone sat is worth a great deal, right up until it leaves the colony
   // as scattered islands. Then the memory is describing a map that no longer exists, and
   // starting over — compact, from the middle, the way a first run does it — is the lesser
   // upheaval. It only happens when the alternative is visibly broken.
-  return isConnected(laid, anchored) ? laid : layOut(projects, new Map())
+  return isConnected(laid, anchored, streets) ? laid : layOut(projects, new Map(), streets)
 }
 
-function layOut(projects, previous) {
-  const reserved = key(SHIP_CELL.q, SHIP_CELL.r)
+function layOut(projects, previous, streets = new Set()) {
+  const reserved = key(SHIP_CELL.x, SHIP_CELL.z)
   const wanted = projects.map((p) => ({ id: p.id, want: cellsNeeded(p.size), anchor: p.anchor || null }))
   const total = wanted.reduce((n, w) => n + w.want, 0)
 
@@ -247,15 +234,17 @@ function layOut(projects, previous) {
   // prevent, arriving by the back door.
   let farthest = 0
   for (const project of projects) {
-    for (const cell of previous.get(project.id) || []) farthest = Math.max(farthest, hexDistance(cell, ORIGIN))
+    for (const cell of previous.get(project.id) || []) farthest = Math.max(farthest, distance(cell, ORIGIN))
     // An anchored district sits out past the home zones, so the pool has to reach it — plus
     // a ring of slack for the district to grow into.
-    if (project.anchor) farthest = Math.max(farthest, hexDistance(project.anchor, ORIGIN) + 2)
+    if (project.anchor) farthest = Math.max(farthest, distance(project.anchor, ORIGIN) + 2)
   }
-  for (let ring = 0; (pool.length < total + 30 || ring <= farthest) && ring < ANCHOR_RING + 5; ring++) {
-    for (const cell of hexRing(ring)) {
-      const k = key(cell.q, cell.r)
-      if (k === reserved) continue
+  for (let radius = 0; (pool.length < total + 30 || radius <= farthest) && radius < ANCHOR_RING + 5; radius++) {
+    for (const cell of ring(radius)) {
+      const k = key(cell.x, cell.z)
+      // The ship's cell and every street cell are off the market. A street cell in `free`
+      // would be handed to a plot, and the road would then run through a zone.
+      if (k === reserved || streets.has(k)) continue
       pool.push(cell)
       free.add(k)
     }
@@ -274,17 +263,17 @@ function layOut(projects, previous) {
     // on the zone is placed relative to it. A blob that loses its root has *moved*, so if
     // the root is gone this project is seeded afresh rather than quietly re-rooted onto
     // whichever of its old cells happens to still be free.
-    if (!free.has(key(before[0].q, before[0].r))) continue
+    if (!free.has(key(before[0].x, before[0].z))) continue
     // A district member whose memory drifted far from the anchor is re-seeded, so a stale
     // placement cannot hold a repo out on its own away from the rest of its colony.
-    if (anchor && hexDistance(before[0], anchor) > DISTRICT_DRIFT) continue
+    if (anchor && distance(before[0], anchor) > DISTRICT_DRIFT) continue
     const keep = []
     for (const cell of before) {
       if (keep.length >= want) break // shrunk: whatever it claimed last is what it gives up
-      const k = key(cell.q, cell.r)
+      const k = key(cell.x, cell.z)
       if (!free.has(k)) continue // the ship's cell, or a duplicate in a hand-edited file
       free.delete(k)
-      keep.push({ q: cell.q, r: cell.r })
+      keep.push({ x: cell.x, z: cell.z })
     }
     if (keep.length) held.set(id, keep)
   }
@@ -306,13 +295,13 @@ function layOut(projects, previous) {
     // one district instead of scattering them through the home zones.
     const seed = anchor
       ? nearestFree(pool, free, anchor)
-      : pool.find((c) => free.has(key(c.q, c.r)))
+      : pool.find((c) => free.has(key(c.x, c.z)))
     if (!seed) {
       out.set(id, [])
       continue
     }
-    free.delete(key(seed.q, seed.r))
-    const cells = [{ q: seed.q, r: seed.r }]
+    free.delete(key(seed.x, seed.z))
+    const cells = [{ x: seed.x, z: seed.z }]
     growBlob(cells, want, free, anchor)
     out.set(id, cells)
   }
@@ -324,8 +313,8 @@ function nearestFree(pool, free, to) {
   let best = null
   let bestD = Infinity
   for (const c of pool) {
-    if (!free.has(key(c.q, c.r))) continue
-    const d = hexDistance(c, to)
+    if (!free.has(key(c.x, c.z))) continue
+    const d = distance(c, to)
     if (d < bestD) {
       bestD = d
       best = c
@@ -344,11 +333,11 @@ function growBlob(cells, want, free, anchor = null) {
     let best = null
     let bestScore = Infinity
     for (const c of cells) {
-      for (const [dq, dr] of HEX_DIRS) {
-        const n = { q: c.q + dq, r: c.r + dr }
-        if (!free.has(key(n.q, n.r))) continue
+      for (const [dx, dz] of DIRS) {
+        const n = { x: c.x + dx, z: c.z + dz }
+        if (!free.has(key(n.x, n.z))) continue
         // Hug the root first, then the middle of the colony, so blobs come out compact.
-        const score = hexDistance(n, root) * 100 + hexDistance(n, pull)
+        const score = distance(n, root) * 100 + distance(n, pull)
         if (score < bestScore) {
           bestScore = score
           best = n
@@ -356,44 +345,51 @@ function growBlob(cells, want, free, anchor = null) {
       }
     }
     if (!best) break // completely hemmed in by neighbours
-    free.delete(key(best.q, best.r))
+    free.delete(key(best.x, best.z))
     cells.push(best)
   }
 }
 
+/**
+ * How far around the depot the ground is kept clear of crew.
+ *
+ * The same 3.4 `colony.js` has always pushed walking crew out of; named here because it is now
+ * also the bound on how far the depot may be shifted toward the road.
+ */
+export const DEPOT_CLEAR_RADIUS = 3.4
+
+/**
+ * How far the depot stands from the middle of its cell, toward the street beside it.
+ *
+ * The depot used to sit dead centre in its own cell, which put it in the middle of a field
+ * with its yard opening on to grass. It fronts the road now — but it can only lean, not move:
+ * `SHIP_CELL` is reserved against plots and protected in the street plan, and the whole layout
+ * is built around that cell being the depot's.
+ *
+ * 2.4, one carriageway tile, which is as far as it can go: at that shift its keep-clear circle
+ * reaches 5.8 of the cell's 6, so the depot stays inside the ground it owns and the apron
+ * (`carriagewayTiles`, given this cell as a connection) covers the rest of the way to the
+ * carriageway. A test pins both halves of that.
+ */
+export const DEPOT_ROAD_SHIFT = 2.4
+
 export const shipPosition = () => {
-  const { x, z } = hexToWorld(SHIP_CELL.q, SHIP_CELL.r)
+  const { x, z } = cellWorld(SHIP_CELL.x, SHIP_CELL.z)
   return new THREE.Vector3(x, 0, z)
 }
 
-/**
- * Three builds a 6-sided cylinder with its first vertex on +Z, which puts its corners at
- * 30°, 90°, 150°… — a *pointy-top* hexagon. The lattice, the edge-to-neighbour mapping and
- * the border bars all assume a **flat-top** hexagon with corners at 0°, 60°, 120°… so every
- * hexagonal prism has to be turned by this much to agree with them. Without it the decks sit
- * a half-step out of phase and their corners poke through the borders.
- */
-const HEX_PHASE = Math.PI / 6
-
 /** How many times the deck plate repeats around a tile's rim, at the deck's own scale. */
-const PERIMETER_REPEATS = (6 * TILE) / DECK_TEXTURE_SCALE
+const PERIMETER_REPEATS = (4 * TILE) / DECK_TEXTURE_SCALE
 
-/** Corner i of a flat-top hexagon, in plot-local coordinates. */
-function corner(cx, cz, i, size) {
-  const a = (Math.PI / 3) * i
-  return [cx + size * Math.cos(a), cz + size * Math.sin(a)]
-}
-
-/** A flat-top hexagonal prism, phase-corrected. */
 /**
  * Replace a geometry's UVs with a world-planar projection.
  *
- * A hex tile is a six-sided cylinder, and a cylinder's cap UVs are a disc — which turns a
- * tiling plate pattern into a medallion, one per tile. Projecting from XZ instead makes the
- * seams run straight across a whole plot, so seven cells read as one apron rather than seven
- * repeats. Upright faces get the rim treatment: the deck's edge is a shallow band next to
- * the plot it wraps, and a flat XZ projection smears it into streaks at exactly the grazing
- * angle it is seen from.
+ * A box's top and bottom faces come with their own generated UVs, but unwrapped per tile they
+ * would still repeat once per tile, seam and all, at every tile edge. Projecting from XZ
+ * instead makes the seams run straight across a whole plot, so seven cells read as one apron
+ * rather than seven repeats. Upright faces get the rim treatment: the deck's edge is a
+ * shallow band next to the plot it wraps, and a flat XZ projection smears it into streaks at
+ * exactly the grazing angle it is seen from.
  *
  * `height` is the prism's own height, which is what the rim's texel density is set against.
  * It is not `DECK_TOP`: the slab reaches below the ground as well as above it, and a rim
@@ -406,32 +402,30 @@ function planarUv(geo, scale, offsetX = 0, offsetZ = 0, height = DECK_TOP) {
   const uv = new Float32Array(pos.count * 2)
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i)
-    const y = pos.getY(i)
     const z = pos.getZ(i)
     if (Math.abs(nrm.getY(i)) > 0.5) {
       // Top and bottom: straight down, in world space, so the pattern runs across tiles.
       uv[i * 2] = (x + offsetX) / scale
       uv[i * 2 + 1] = (z + offsetZ) / scale
     } else {
-      // The rim keeps the cylinder's own unwrap, only rescaled to world density.
-      //
-      // Two simpler ideas both fail here. A fixed horizontal axis like `x + z` is *constant*
-      // along two of every six sides of a hexagon, which leaves those faces with no UV
-      // gradient, a degenerate tangent, and — since three builds the normal-mapped shading
-      // frame out of that — solid black. Arc length from `atan2` fixes the gradient but
-      // introduces a seam: the face straddling ±π jumps a full turn in one step, crushing a
-      // dozen repeats of the texture into one panel, which reads as fine stripes at the
-      // corners and as mud once mipmapping averages them. The generated unwrap already
-      // solves both, because it duplicates the vertices at the seam.
+      // The rim keeps the box's own per-face unwrap, only rescaled to world density. A box's
+      // four side faces are generated independently, each with its own 0..1 UV square and no
+      // vertices shared with its neighbours, so — unlike a hexagon's flat sides — there is no
+      // seam to solve for and no degenerate face to special-case.
       uv[i * 2] = src.getX(i) * PERIMETER_REPEATS
-      // The cylinder's own v runs 0 at the foot of the prism to 1 at its top, so scaling it
-      // by the prism's real height is what keeps the plate at world density whatever the
-      // slab's total depth. Lifted off zero so a rim this shallow samples the middle of a
-      // plate rather than straddling the seam that runs along the texture's own edge.
+      // Each face's own v runs 0 at the foot of the prism to 1 at its top, so scaling it by
+      // the prism's real height is what keeps the plate at world density whatever the slab's
+      // total depth. Lifted off zero so a rim this shallow samples the middle of a plate
+      // rather than straddling the seam that runs along the texture's own edge.
       uv[i * 2 + 1] = 0.25 + src.getY(i) * (height / scale)
     }
   }
   geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2))
+}
+
+/** A square tile prism, `size` on a side. */
+function tilePrism(size, height) {
+  return new THREE.BoxGeometry(size, height, size)
 }
 
 /**
@@ -455,11 +449,13 @@ function kerbUv(geo) {
   uv.needsUpdate = true
 }
 
-function hexPrism(radius, height) {
-  const geo = new THREE.CylinderGeometry(radius, radius, height, 6)
-  geo.rotateY(HEX_PHASE)
-  return geo
-}
+/** The tile's four corners, as unit sign pairs — which one a cell's lamp post sits near. */
+const POST_CORNERS = [
+  [1, 1],
+  [1, -1],
+  [-1, 1],
+  [-1, -1],
+]
 
 // ── plot mesh ─────────────────────────────────────────────────────────────────────────
 
@@ -470,7 +466,7 @@ export class Plot {
     this.index = index
     this.cells = cells
     this.accent = accent
-    this.cellKeys = new Set(cells.map((c) => key(c.q, c.r)))
+    this.cellKeys = new Set(cells.map((c) => key(c.x, c.z)))
     /**
      * The terrain height the whole slab sits on. Near the ship this is ~0 and changes nothing,
      * but a visiting colony's district is anchored far out where the ground rolls, and a slab
@@ -483,11 +479,11 @@ export class Plot {
     // — rather than the centroid of whatever cells it holds this minute. A zone that gains
     // a tile must not drag its buildings, its crew and its name sideways: the root stays
     // exactly where it was and the new tile appears beside it.
-    const origin = hexToWorld(cells[0].q, cells[0].r)
+    const origin = cellWorld(cells[0].x, cells[0].z)
     let sx = 0
     let sz = 0
     this.localCenters = cells.map((c) => {
-      const { x, z } = hexToWorld(c.q, c.r)
+      const { x, z } = cellWorld(c.x, c.z)
       sx += x
       sz += z
       return { x: x - origin.x, z: z - origin.z }
@@ -521,14 +517,14 @@ export class Plot {
     this.slots = this._buildSlots()
   }
 
-  /** One merged slab of hex tiles. */
+  /** One merged slab of square tiles. */
   _buildDeck() {
     // UVs are assigned per tile, before it is moved into place: the rim wraps around the
     // tile's own centre, so it has to be at the origin when that is worked out. The top's
     // projection takes the tile's offset explicitly, which keeps the plate pattern running
     // continuously across a whole plot.
     const parts = this.localCenters.map(({ x, z }) => {
-      const geo = hexPrism(TILE, DECK_HEIGHT)
+      const geo = tilePrism(TILE, DECK_HEIGHT)
       planarUv(geo, DECK_TEXTURE_SCALE, x, z, DECK_HEIGHT)
       // Positioned by its *top* face rather than by its middle: everything on a plot is
       // measured from that face, so it is the end of the prism that has to stay put when
@@ -567,7 +563,7 @@ export class Plot {
 
   /**
    * The glowing accent kerb, drawn as one bar per *outside* edge — skipping shared edges is
-   * what makes six tiles read as one zone instead of a honeycomb.
+   * what makes a multi-cell plot read as one zone instead of a checkerboard.
    *
    * Two things here exist purely to stop the borders flickering. The bar is inset so it lies
    * wholly **inside** its own tile: centred on the edge it would overlap the neighbouring
@@ -577,23 +573,22 @@ export class Plot {
    */
   _buildBorder() {
     const parts = []
-    const apothem = TILE * Math.cos(Math.PI / 6)
-    const width = 0.32
-    const inset = 0.05
+    const apothem = TILE / 2
     // Centreline of the bar, pulled inboard far enough to clear the tile edge entirely.
-    const mid = apothem - inset - width / 2
-    // The bars form a smaller regular hexagon, whose side equals its own circumradius.
-    const side = mid / Math.cos(Math.PI / 6)
+    const mid = apothem - BORDER_INSET - BORDER_WIDTH / 2
+    // The bars form a smaller square than the tile itself, so a bar's length is simply
+    // twice its own distance from the centre — the square analogue of the hex lattice's
+    // "the smaller hexagon's side equals its own circumradius".
+    const side = mid * 2
 
     this.cells.forEach((cell, i) => {
       const { x, z } = this.localCenters[i]
-      for (let edge = 0; edge < 6; edge++) {
-        const dir = HEX_DIRS[EDGE_TO_DIR[edge]]
-        if (this.cellKeys.has(key(cell.q + dir[0], cell.r + dir[1]))) continue
+      for (const [dx, dz] of DIRS) {
+        if (this.cellKeys.has(key(cell.x + dx, cell.z + dz))) continue
 
-        const angle = (Math.PI / 3) * edge + Math.PI / 6
+        const angle = Math.atan2(dz, dx)
         // Sits on the deck: bottom flush with the deck's top face, never inside it.
-        const geo = new THREE.BoxGeometry(width, 0.14, side * 1.02)
+        const geo = new THREE.BoxGeometry(BORDER_WIDTH, 0.14, side * 1.02)
         kerbUv(geo)
         geo.rotateY(-angle)
         geo.translate(x + Math.cos(angle) * mid, DECK_TOP + 0.07, z + Math.sin(angle) * mid)
@@ -628,8 +623,13 @@ export class Plot {
     const posts = []
     const lamps = []
     this.localCenters.forEach(({ x, z }, i) => {
-      const [px, pz] = corner(x, z, (i * 2) % 6, TILE * 0.72)
-      const pole = new THREE.CylinderGeometry(0.055, 0.085, 1.8, 6)
+      // Cycle through the tile's four corners, pulled in from the true corner so the post
+      // stands clear of the kerb bars meeting there.
+      const [sx, sz] = POST_CORNERS[i % POST_CORNERS.length]
+      const px = x + sx * TILE * 0.5 * 0.72
+      const pz = z + sz * TILE * 0.5 * 0.72
+      // A square post, to match the plot's own square corners.
+      const pole = new THREE.BoxGeometry(0.09, 1.8, 0.09)
       pole.translate(px, DECK_TOP + 0.9, pz)
       posts.push(pole)
       const head = new THREE.SphereGeometry(0.14, 8, 6)
@@ -651,12 +651,31 @@ export class Plot {
   }
 
   /**
-   * Ground clutter — crates, drums and a floodlight or two, hugging the kerb.
+   * Ground clutter — crates, drums and a floodlight or two, in the gaps between house rows.
    *
    * A plot with buildings on its slots and nothing anywhere else reads as a car park. This
-   * fills the gap for one extra draw call: a merged mesh of kit props, placed against the
-   * outer edge of each cell where the crew's routes between slots do not run, so nothing
-   * has to be added to the navigation grid and nobody ends up walking through a barrel.
+   * fills the gap for one extra draw call: a merged mesh of kit props.
+   *
+   * There is nowhere along the kerb wide enough for one: the 3 x 3 slot grid's houses reach
+   * to `SLOT_SPACING + HOUSE_HALF_WIDTH` (5.45) from the cell's centre and the kerb's own
+   * inner face (`KERB_INNER`) sits at 5.58, a band only 0.13 wide against a prop whose own
+   * navigation-radius floor is 0.3. The ground that is actually open is the cross of gaps
+   * *between* the houses — `CHANNEL_HALF_WIDTH` either side of the midpoint between two
+   * adjacent slot centres, 1.1 wide in total, eight times the kerb band and wide enough for
+   * a prop scaled down to 0.55-0.7.
+   *
+   * That gap is also, unavoidably, part of the crew's own way in: the corner and edge slots
+   * can be reached straight from outside a cell, but nothing reaches the middle slot except
+   * through one of these four channels. The kerb band never touched a route for exactly that
+   * reason; this one sometimes will. What still holds is the property that actually keeps
+   * nobody walking into a barrel — every spot pushed to `clutterSpots` below is handed to
+   * `_rebuildNavigation` (`colony.js`) as an obstacle, on the same footing as a building, so
+   * the crew is routed *around* whatever lands here exactly as it is around a house. What no
+   * longer holds without qualification is that a route runs clear of clutter altogether: a
+   * path down a channel can be nudged toward one side of it instead of running straight down
+   * the middle. Placement stays light (up to two spots per channel, better than half skipped)
+   * and is pushed off-centre within the channel's width, so slack across it survives for a
+   * path to use.
    *
    * Seeded off the plot's own name, so a repo's yard is laid out the same on every reload.
    */
@@ -670,25 +689,36 @@ export class Plot {
     this.clutterSpots = []
 
     this.localCenters.forEach(({ x, z }) => {
-      // Two bands, both chosen to miss the buildings. The slot ring sits at 0.58 of a tile
-      // and a building reaches about 1.5 units past it, so the gaps *between* consecutive
-      // ring slots are clear — and so is the strip inside the kerb, past every slot.
+      // A channel's length is capped by the kerb, the same inner face the old band measured
+      // against.
+      const reach = KERB_INNER
+      // One candidate point along a channel, offset toward one side of it rather than centred,
+      // so clearance survives on the other side for a path to use.
+      const along = (min, max) => min + (max - min) * rand()
+      const across = (centre) => centre + (rand() < 0.5 ? -1 : 1) * CHANNEL_HALF_WIDTH * (0.3 + rand() * 0.35)
+
       const spots = []
-      for (let i = 0; i < 6; i++) {
-        if (rand() > 0.45) spots.push({ a: (Math.PI / 3) * i + Math.PI / 3, r: TILE * (0.52 + rand() * 0.1) })
+      // The two vertical channels — between the x = -4/0 and 0/4 columns of houses — run the
+      // full reach along z.
+      for (const cx of [x - CHANNEL_OFFSET, x + CHANNEL_OFFSET]) {
+        for (let i = 0; i < 2; i++) {
+          if (rand() > 0.4) spots.push({ x: across(cx), z: along(z - reach, z + reach) })
+        }
       }
-      for (let i = 0; i < 3; i++) {
-        if (rand() > 0.35) spots.push({ a: rand() * Math.PI * 2, r: TILE * (0.78 + rand() * 0.07) })
+      // The two horizontal channels — between the z = -4/0 and 0/4 rows — run the full reach
+      // along x.
+      for (const cz of [z - CHANNEL_OFFSET, z + CHANNEL_OFFSET]) {
+        for (let i = 0; i < 2; i++) {
+          if (rand() > 0.4) spots.push({ x: along(x - reach, x + reach), z: across(cz) })
+        }
       }
 
-      for (const { a, r } of spots) {
+      for (const { x: px, z: pz } of spots) {
         const name = props[Math.floor(rand() * props.length)]
         const geo = part(name)
-        const s = name === 'lights' ? 1.1 : 1.35
+        const s = name === 'lights' ? 0.55 : 0.7
         geo.scale(s, s, s)
         geo.rotateY(rand() * Math.PI * 2)
-        const px = x + Math.cos(a) * r
-        const pz = z + Math.sin(a) * r
         // How much ground this prop actually covers, rather than a guess: a stack of cargo
         // containers is three times the footprint of a lamp, and a radius that splits the
         // difference is one an astronaut walks into the corner of.
@@ -697,7 +727,7 @@ export class Plot {
         const spread = Math.max(box.max.x - box.min.x, box.max.z - box.min.z) * 0.5
         geo.translate(px, DECK_TOP, pz)
         parts.push(geo)
-        this.clutterSpots.push({ x: px, z: pz, r: Math.max(0.45, spread * 0.86) })
+        this.clutterSpots.push({ x: px, z: pz, r: Math.max(0.3, spread * 0.86) })
       }
     })
 
@@ -714,17 +744,18 @@ export class Plot {
   }
 
   /**
-   * Slots, in plot-local coordinates: cell centre first, then the ring around it, cell by
-   * cell. Fixed rather than random, so a session keeps its spot as siblings come and go —
-   * a building must never jump because a neighbour was archived.
+   * Slots, in plot-local coordinates: a fixed 3 x 3 grid inside each cell, `SLOTS_PER_CELL`
+   * of them, row by row, cell by cell. Fixed rather than random, so a session keeps its spot
+   * as siblings come and go — a building must never jump because a neighbour was archived.
    */
   _buildSlots() {
     const slots = []
+    const half = (SLOTS_SIDE - 1) / 2
     for (const { x, z } of this.localCenters) {
-      slots.push({ x, z })
-      for (let i = 0; i < 6; i++) {
-        const a = (Math.PI / 3) * i + Math.PI / 6
-        slots.push({ x: x + Math.cos(a) * TILE * 0.58, z: z + Math.sin(a) * TILE * 0.58 })
+      for (let iz = 0; iz < SLOTS_SIDE; iz++) {
+        for (let ix = 0; ix < SLOTS_SIDE; ix++) {
+          slots.push({ x: x + (ix - half) * SLOT_SPACING, z: z + (iz - half) * SLOT_SPACING })
+        }
       }
     }
     return slots

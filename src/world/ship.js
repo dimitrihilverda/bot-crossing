@@ -1,288 +1,705 @@
 import * as THREE from 'three'
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
+import { Composer, decorate, buildingUniforms } from './buildings.js'
+import { ATLAS, CELL_PROTOTYPE, atlasTexture, cellMask, loadKit } from './kit.js'
 
 /**
- * The lander. Every astronaut walks out of its ramp when a thread appears and back up it
- * when one is archived, so it is the colony's one fixed piece of narrative furniture.
+ * The depot. Every astronaut walks out of its loading dock when a thread appears and back in
+ * when one is archived, so it is the colony's one fixed piece of narrative furniture — what
+ * used to be the lander is now the yard the whole colony's crew works out of.
  *
- * The hull is merged into a single geometry; only the parts that actually move or glow —
- * the ramp, the beacon, the engine wash — stay separate.
+ * **It is two buildings, and neither of them came out of a pack.** The depot stands for the
+ * owner's own premises: a brick office with a much larger grey loods attached. No pack here
+ * has either shape. `city-parts.txt` has no warehouse, depot, industrial, garage or hangar —
+ * checked with `grep -iE "warehouse|depot|shop|industrial|garage|hangar"` before any of this
+ * was written — and its eight shells are all 2 x 2 townhouse blocks.
+ *
+ * Three things were tried in order, and the first two are worth not repeating. A base-kit
+ * `basemodule_D` repainted brick read as what it is, a space-station pod. The same pod with a
+ * city shell balanced on its roof read as a pod with a storey on it. And the city shell that
+ * held the middle of the cell for both of those — `building_G_withoutBase`, the pack's
+ * largest — read as a townhouse with a shop awning, because that is what it is.
+ *
+ * So both buildings are composed, piece by piece, out of KayKit's *Prototype Bits*: a greybox
+ * pack of walls, openings, roof slopes and beams cut to one 4-unit module, which is the kit
+ * for a shape nobody sells. Each is its own merged mesh — see `_buildFrom` — and the
+ * base-kit crates in the yard are a third, because a merged geometry carries one material and
+ * the two packs have different atlases.
+ *
+ * The loading dock, the rooftop beacon, the yard floodlights and the apron stay procedural,
+ * as they were on the lander: they are operational dressing, not the building itself, and
+ * none of them existed as a nameable part in any pack to begin with.
  */
 
-const HULL = 0xf0ece4
-const HULL_DARK = 0xc4bfb4
-const TRIM = 0xc96442
-const METAL = 0x8f9299
-const GLASS = 0x7fc4e0
+/**
+ * The prototype pack's 4-unit module, brought onto the colony's scale.
+ *
+ * At 0.4 a module is 1.6 world units, which is what puts a wall piece at a believable storey
+ * height beside houses built on the city kit's own 2.4. Both buildings here are cut to it, so
+ * their courses line up across the join.
+ */
+const PROTO_SCALE = 0.4
 
-/** Roughness / metalness per material, so the hull reads as painted panel over bare strut. */
-const SURFACE = new Map([
-  [HULL, [0.48, 0.05]],
-  [HULL_DARK, [0.62, 0.08]],
-  [TRIM, [0.45, 0.1]],
-  [METAL, [0.26, 0.95]],
-  [GLASS, [0.06, 0]],
-  [0x4a4d55, [0.35, 0.85]],
-])
-const DEFAULT_SURFACE = [0.55, 0.15]
+/** The pack's module, which every piece is cut to, and a quarter turn — the only two numbers
+ *  the piece lists below repeat often enough to be worth naming. */
+const M = 4
+const QUARTER = Math.PI / 2
+
+/** How thin a panel has to be to hide inside a wall's own thickness: the glazing behind a
+ *  window opening and the leaf in a doorway are both one of these, invisible except through
+ *  the hole they sit in. */
+const GLAZING = 0.3
+
+/** How far the paved yard reaches from the depot's anchor. Sized to the working yard in front
+ *  of the dock, deliberately not to the buildings: the depot owns a 12-unit cell, and an apron
+ *  that covered both of them would run out into the street's own verge. */
+const YARD_REACH = 1.6
+
+/**
+ * Where the depot's front is, and where its big door lands.
+ *
+ * The loading dock, the crew's door point and the cars' arrival all key off this one line, so
+ * it is a number the buildings are placed against rather than one read back off whichever
+ * building happens to be at the front. `DOOR_X` is the depot's own anchor, which is where the
+ * dock plate already sits — the loods is positioned so its big door is centred on it.
+ */
+const DEPOT_FRONT = 1.6
+const DOOR_X = 0
+
+/**
+ * The office: a brick block on the west end, and the smaller half of the depot.
+ *
+ * It was the first thing built here out of Prototype Bits, as a hall, and it turned out to be
+ * an office — brick, low, a rank of windows down the street, its own door. The owner's real
+ * depot is that shape too: a modest brick office with a much larger grey loods attached, and
+ * once the loods existed this stopped needing to be anything else.
+ *
+ * Everything is in the pack's own authored units, scaled once on the way out. Working in
+ * module units is the point of the pack: a wall is 4 wide, a window is 4 wide, three of them
+ * fill a 12-unit side exactly, and no joint needs a measured offset.
+ */
+export const OFFICE = {
+  /** The long walls' centre lines, so the footprint is 8 units across: two modules. */
+  halfX: 4,
+  /** The gable walls' centre lines: three modules deep, and a window module in each. */
+  halfZ: 6,
+  /** The brick course — one module, the full height of a wall piece. */
+  wall: 4,
+  /** The cladding course standing on it, which is what this has instead of a first floor. */
+  clad: 2,
+  /** The ridge above the eaves. Two units over a five-unit run is a 22-degree pitch. */
+  rise: 2,
+  /** How far the eaves reach past the wall's centre line — half of it is the wall's own
+   *  thickness, so the overhang proper is half a unit. */
+  eaveOut: 1,
+}
+
+/**
+ * The loods: the grey shed, and the building the depot actually is.
+ *
+ * The depot used to be a city-kit shell — `building_G_withoutBase`, the pack's largest — and
+ * the owner's verdict on it was that it looked too much like a *building*. It did: it is a
+ * townhouse with a shop awning, and no amount of placing it beside an industrial hall stops it
+ * reading as somewhere you live. So the shell is gone and the mass it held is a loods.
+ *
+ * It is the wider of the two and the taller, 16 units across against the office's 8 and eight
+ * to the eaves against its six. Its ridge runs along **x**, its own long axis, so the street
+ * front is an eaves side with the big door in it rather than a gable — which is what a loods
+ * looks like, and what lets the door sit on the dock that was already there.
+ */
+export const LOODS = {
+  /** Four modules across, against the office's two. */
+  halfX: 8,
+  /** The same depth as the office, so the two share a back wall line. */
+  halfZ: 6,
+  /** Two full wall courses, plain: a loods has no storeys to mark. */
+  wall: 8,
+  /** Three units over a seven-unit run: 23 degrees, the office's pitch within a degree, so
+   *  two roofs at different heights still read as one roofscape. */
+  rise: 3,
+  eaveOut: 1,
+  /** The big door, in modules. `west` is the stretch of wall between the west corner and the
+   *  door, and it is what makes the front modular: 2 + 6 + 8 is the full 16, so every piece
+   *  either side of the opening is a whole wall or a whole half wall. */
+  door: { width: 6, height: 6, west: 2 },
+}
+
+/** Where the big door's centre falls along the loods' own front, in the pack's units. The
+ *  building is placed by this rather than by its walls: the door has to land on the dock, and
+ *  everything else follows from that. */
+const doorCentre = () => -LOODS.halfX + LOODS.door.west + LOODS.door.width / 2
+
+/**
+ * Where each building stands in the depot's own frame.
+ *
+ * The office's front wall face and the loods' front wall face both land on `DEPOT_FRONT`, so
+ * the two present one line to the street and neither stands ahead of the loading dock. Across
+ * the depot they are placed to *overlap*: the office's east wall and the loods' west wall share
+ * the same centre line, so there is no slot of daylight between two buildings meant to read as
+ * one, and each one's eaves disappear into the other's wall.
+ */
+export const OFFICE_SPOT = {
+  x: -2.0 - (OFFICE.halfX + 0.5) * PROTO_SCALE,
+  z: DEPOT_FRONT - (OFFICE.halfZ + 0.5) * PROTO_SCALE,
+  /** Set into the ground rather than balanced on it. The town's ground is flat to within a
+   *  fraction of a unit, not perfectly flat, and a building five units deep is long enough for
+   *  that fraction to show as daylight under a corner. */
+  y: -0.1,
+}
+
+export const LOODS_SPOT = {
+  x: DOOR_X - doorCentre() * PROTO_SCALE,
+  z: DEPOT_FRONT - (LOODS.halfZ + 0.5) * PROTO_SCALE,
+  y: -0.1,
+}
+
+/** What a composed building occupies, in the depot's frame — eaves included, which is the part
+ *  that reaches furthest and the part nobody remembers to check.
+ *
+ *  `ridgeAxis` is which way the roof runs: the office's ridge runs along z, so its eaves
+ *  overhang in x; the loods' runs along x, so its eaves overhang in z. */
+function box(shape, spot, ridgeAxis) {
+  const out = (halfX, halfZ) => ({
+    minX: spot.x - halfX,
+    maxX: spot.x + halfX,
+    minZ: spot.z - halfZ,
+    maxZ: spot.z + halfZ,
+    eaveY: spot.y + (shape.wall + (shape.clad ?? 0)) * PROTO_SCALE,
+    ridgeY: spot.y + (shape.wall + (shape.clad ?? 0) + shape.rise) * PROTO_SCALE,
+  })
+  const wall = 0.5 * PROTO_SCALE
+  const eave = shape.eaveOut * PROTO_SCALE
+  return ridgeAxis === 'z'
+    ? out(shape.halfX * PROTO_SCALE + eave, shape.halfZ * PROTO_SCALE + wall)
+    : out(shape.halfX * PROTO_SCALE + wall, shape.halfZ * PROTO_SCALE + eave)
+}
+
+/**
+ * The sign over the loods' big door.
+ *
+ * The lintel already carries the depot's own colour — it is the one piece of either building
+ * that takes the accent, and the one that lights up after dark — so the logo goes on that band
+ * rather than on a white plate of its own, which is what the supplied artwork came on.
+ */
+/** The company's own mark, served out of `public/` beside the kits. Not a wordmark this
+ *  project draws: it is the real logo, with the white card it was supplied on knocked out to
+ *  transparency so it sits on the band rather than on a rectangle of its own. */
+const SIGN_FILE = 'moving-in-logo.png'
+/** How far the lettering stands off the wall: enough to clear the band it sits on, and well
+ *  inside the roof's own 0.2 overhang, so it stays under the canopy. */
+const SIGN_PROUD = 0.012
+
+/**
+ * Where the wordmark goes and how big it may be, in the depot's own frame.
+ *
+ * Off the door's own measurements rather than typed: a wider door takes a wider sign, and a
+ * door moved along the front takes the sign with it. `maxWidth` and `maxHeight` are the box
+ * the lettering has to fit — how much of it the word actually fills depends on how long the
+ * word is, which only the canvas can measure.
+ */
+export function signPlacement() {
+  const bottom = LOODS_SPOT.y + LOODS.door.height * PROTO_SCALE
+  const top = LOODS_SPOT.y + LOODS.wall * PROTO_SCALE
+  return {
+    x: DOOR_X,
+    y: (bottom + top) / 2,
+    z: DEPOT_FRONT + SIGN_PROUD,
+    // Signwriting proportions: most of the door's width, about half the band's height.
+    maxWidth: LOODS.door.width * PROTO_SCALE * 0.88,
+    maxHeight: (top - bottom) * 0.52,
+  }
+}
+
+export const officeBox = () => box(OFFICE, OFFICE_SPOT, 'z')
+export const loodsBox = () => box(LOODS, LOODS_SPOT, 'x')
+
+/**
+ * Every piece of the office, in the pack's authored units, as data.
+ *
+ * A list rather than a run of `c.add` calls because it is the composition that has to be
+ * right — that the sides are covered by whole pieces, that the roof reaches the walls it
+ * stands on, that nothing sticks out past the cell. All of that is arithmetic on this array,
+ * so `test/depot-buildings.test.mjs` checks the building it will actually be rather than the
+ * numbers it was typed from.
+ *
+ * Offsets are the piece's own centre on its own centre line. Walls stand on their footprint
+ * line, so a piece stretched to a side's full length closes both corners by overlapping the
+ * walls it meets.
+ */
+export function officePieces() {
+  const { halfX, halfZ, wall, clad, rise, eaveOut } = OFFICE
+  const { BRICK, GREY, SLATE, DARK, ACCENT } = CELL_PROTOTYPE
+  const pieces = []
+  const add = (part, o) => pieces.push({ part, ...o })
+
+  // --- the brick course ---------------------------------------------------------------
+  add('Primitive_Wall', { z: -halfZ, sx: (halfX * 2) / M, cell: BRICK })
+  add('Primitive_Wall', { x: halfX, ry: QUARTER, sx: (halfZ * 2) / M, cell: BRICK })
+  // The street side gets the windows — three window modules fill it exactly.
+  for (const z of [-M, 0, M]) add('Primitive_Window', { x: -halfX, z, ry: QUARTER, cell: BRICK })
+  // Glazing: one dark panel inside the wall's own thickness, so it is invisible except through
+  // the three openings, where it is the only thing there is to see.
+  add('Primitive_Wall', { x: -halfX, ry: QUARTER, sx: (halfZ * 2) / M, sz: GLAZING, cell: DARK })
+  // The front, which is a gable end: a wall for half of it and the door for the other half,
+  // out on the street side where nothing has to reach past the loods to use it.
+  add('Primitive_Wall', { x: halfX / 2, z: halfZ, sx: halfX / M, cell: BRICK })
+  add('Primitive_Wall', { x: -halfX / 2, z: halfZ, sx: halfX / M, sz: GLAZING, cell: DARK })
+
+  // --- the cladding course ------------------------------------------------------------
+  add('Primitive_Wall_Short', { y: wall, z: -halfZ, sx: (halfX * 2) / M, cell: GREY })
+  add('Primitive_Wall_Short', { y: wall, x: halfX, ry: QUARTER, sx: (halfZ * 2) / M, cell: GREY })
+  add('Primitive_Wall_Short', { y: wall, x: -halfX, ry: QUARTER, sx: (halfZ * 2) / M, cell: GREY })
+  add('Primitive_Wall_Short', { y: wall, x: halfX / 2, z: halfZ, sx: halfX / M, cell: GREY })
+  // ...except directly over the door, which is the sign band.
+  add('Primitive_Wall_Short', { y: wall, x: -halfX / 2, z: halfZ, sx: halfX / M, cell: ACCENT })
+
+  // --- the roof, ridge along z ----------------------------------------------------------
+  // Two solid wedges meeting over the middle. Solid, not two planes, which is what closes the
+  // gable ends: the wedge's own end face is the triangle above the wall, so there is no hole
+  // to fill and no third piece to fit into it.
+  const run = halfX + eaveOut
+  for (const side of [1, -1]) {
+    add('Primitive_Slope', {
+      sx: run / M,
+      sy: rise / M,
+      // Out to the gable walls' outer faces, so the roof covers what it stands on.
+      sz: (halfZ * 2 + 1) / M,
+      // The slope piece falls toward its own +x; the far side is the same piece turned round.
+      ry: side > 0 ? 0 : Math.PI,
+      x: (side * run) / 2,
+      y: wall + clad,
+      cell: SLATE,
+    })
+  }
+
+  return pieces
+}
+
+/**
+ * Every piece of the loods, the same way.
+ *
+ * Two differences from the office, both of them what makes it a loods rather than a big
+ * office. Its walls are two plain courses with nothing marking a storey, lighter above than
+ * below the way a clad shed is. And its ridge runs along **x**, so the street front is an
+ * eaves side: the big door sits under a roof that slopes toward it, and its overhang carries
+ * a little way over the dock, which is what a loading bay has.
+ */
+export function loodsPieces() {
+  const { halfX, halfZ, wall, rise, eaveOut, door } = LOODS
+  const { GREY, PALE, SLATE, DARK } = CELL_PROTOTYPE
+  const pieces = []
+  const add = (part, o) => pieces.push({ part, ...o })
+
+  // Where the big door sits along the front, and the two stretches of wall either side of it.
+  const centre = doorCentre()
+  const doorEast = centre + door.width / 2
+  const westRun = door.west
+  const eastRun = halfX - doorEast
+
+  // --- the lower course, y 0..4 ---------------------------------------------------------
+  add('Primitive_Wall', { z: -halfZ, sx: (halfX * 2) / M, cell: GREY })
+  add('Primitive_Wall', { x: -halfX, ry: QUARTER, sx: (halfZ * 2) / M, cell: GREY })
+  add('Primitive_Wall', { x: halfX, ry: QUARTER, sx: (halfZ * 2) / M, cell: GREY })
+  add('Primitive_Wall', { x: -halfX + westRun / 2, z: halfZ, sx: westRun / M, cell: GREY })
+  add('Primitive_Wall', { x: doorEast + eastRun / 2, z: halfZ, sx: eastRun / M, cell: GREY })
+
+  // --- the upper course, y 4..8 ---------------------------------------------------------
+  add('Primitive_Wall', { y: M, z: -halfZ, sx: (halfX * 2) / M, cell: PALE })
+  add('Primitive_Wall', { y: M, x: -halfX, ry: QUARTER, sx: (halfZ * 2) / M, cell: PALE })
+  // The east side carries the clerestory: three window modules high up, which is where a shed
+  // takes its daylight from. Their openings land at 5..7, well clear of anything stacked
+  // against the wall inside.
+  for (const z of [-M, 0, M]) add('Primitive_Window', { y: M, x: halfX, z, ry: QUARTER, cell: PALE })
+  add('Primitive_Wall', { y: M, x: halfX, ry: QUARTER, sx: (halfZ * 2) / M, sz: GLAZING, cell: DARK })
+  add('Primitive_Wall', { y: M, x: -halfX + westRun / 2, z: halfZ, sx: westRun / M, cell: PALE })
+  add('Primitive_Wall', { y: M, x: doorEast + eastRun / 2, z: halfZ, sx: eastRun / M, cell: PALE })
+
+  // --- the big door ----------------------------------------------------------------------
+  // A shutter filling the opening, and a pale fascia on the lintel over it for the logo to
+  // sit on. Pale, not the depot's own terracotta, because the logo's lettering is a dark navy
+  // and on terracotta it is dark-on-dark: legible with your nose against it and a smear from
+  // the street. The accent has not left the depot — the office still carries its band — and
+  // the sign itself is emissive, so this fascia still lights up after dark.
+  add('Primitive_Wall', { x: centre, z: halfZ, sx: door.width / M, sy: door.height / M, sz: GLAZING, cell: DARK })
+  add('Primitive_Beam', {
+    x: centre,
+    y: door.height,
+    z: halfZ,
+    sx: door.width / M,
+    sy: wall - door.height,
+    cell: PALE,
+  })
+
+  // --- the roof, ridge along x ------------------------------------------------------------
+  const run = halfZ + eaveOut
+  for (const side of [1, -1]) {
+    add('Primitive_Slope', {
+      sx: run / M,
+      sy: rise / M,
+      sz: (halfX * 2 + 1) / M,
+      // A quarter turn from the office's: this ridge runs the other way, so the piece that
+      // falls toward its own +x has to be turned to fall along z instead.
+      ry: side > 0 ? -QUARTER : QUARTER,
+      z: (side * run) / 2,
+      y: wall,
+      cell: SLATE,
+    })
+  }
+
+  return pieces
+}
+
+/** Crates stacked in the yard, in the base kit's own grid units — scaled by `CONTAINER_SCALE`
+ *  after `finish()`, the same order of operations `buildings.js` uses for its own recipes:
+ *  offsets baked in before the merge, one uniform scale after it.
+ *
+ *  Behind the loods, in the strip between its back wall and the cell's own edge. They used to
+ *  stand in the middle of the cell, which is where the loods now is — and a crate inside a
+ *  closed building is invisible rather than obviously wrong, which is the kind of thing that
+ *  survives a move unnoticed. Nothing here pokes out past the loading dock at the front,
+ *  which is still the rule. */
+const CONTAINER_SCALE = 1.4
+const CONTAINER_SPOTS = [
+  { x: 0.45, z: -3.15, ry: 0.32 },
+  { x: 1.05, z: -3.45, ry: -0.41 },
+  { x: 1.75, z: -3.15, ry: 0.18 },
+  { x: 2.35, z: -3.5, ry: -0.27 },
+  { x: 1.4, z: -3.1, ry: 0.5, y: 0.2 }, // one crate up on the pile
+]
+
+const CELL_COUNT = ATLAS.cols * ATLAS.rows
+
+/**
+ * Surface response, one flat value for the whole atlas — the same call `houses.js` makes for
+ * the city and furniture packs: brick, clad sheet and glass here are all matte, and a per-cell
+ * table would be guessing dressed up as data.
+ */
+const SHELL_ROUGHNESS = new Float32Array(CELL_COUNT).fill(0.7)
+const NO_METAL = new Float32Array(CELL_COUNT).fill(0)
+/** The one cell either building paints in the depot's own colour: the band over its door.
+ *  Everything else is the pack's own brick, grey and slate, which is what keeps the accent
+ *  reading as a sign rather than as the building. */
+const DEPOT_ACCENT_MASK = cellMask([CELL_PROTOTYPE.ACCENT])
+
+/** The colony's brand colour — the same default `houses.js`/`buildings.js` fall back to for an
+ *  unowned structure. Nothing about the depot belongs to one thread, so unlike a house or a
+ *  colony building it never takes a per-repo accent as an argument. */
+const DEPOT_ACCENT = 0xc96442
 
 export class Ship {
   constructor(scene, position) {
     this.group = new THREE.Group()
     this.group.position.copy(position)
-    // Turned so the ramp points back toward the middle of the colony.
+    // Turned so the loading dock points back toward the middle of the colony.
     this.group.rotation.y = Math.atan2(-position.x, -position.z)
-    this.group.name = 'ship'
+    this.group.name = 'depot'
     scene.add(this.group)
     this.scene = scene
 
-    this._buildHull()
-    this._buildRamp() // sets doorLocal from where the ramp actually lands
+    // Every dimension the dock, the beacon and the yard lights need, solved from the
+    // buildings' own measurements rather than from the buildings themselves — they are
+    // composed after `loadKit()` resolves, and all of this has to be in place before then.
+    this.frontZ = DEPOT_FRONT // the wall the dock runs out from
+    this.ridgeHeight = loodsBox().ridgeY // the loods is the taller of the two
+    this.yardRadius = YARD_REACH
+
+    this._buildDock() // sets doorLocal from where the dock actually ends
     this._buildLights()
 
-    this.traffic = 0 // ramps glow brighter while astronauts are using them
-  }
-
-  _buildHull() {
-    const parts = []
-    const colors = []
-    const push = (geo, color, rot) => {
-      if (rot) {
-        if (rot.x) geo.rotateX(rot.x)
-        if (rot.y) geo.rotateY(rot.y)
-        if (rot.z) geo.rotateZ(rot.z)
-      }
-      parts.push(geo)
-      colors.push(new THREE.Color(color))
-    }
-
-    // Main body — a squat capsule sitting up on its legs.
-    const body = new THREE.SphereGeometry(2.4, 22, 16)
-    body.scale(1, 0.86, 1)
-    body.translate(0, 3.5, 0)
-    push(body, HULL)
-
-    // Skirt under the belly, so the hull does not just stop in mid-air above the legs.
-    const skirt = new THREE.CylinderGeometry(1.75, 1.15, 1.1, 20)
-    skirt.translate(0, 1.5, 0)
-    push(skirt, HULL_DARK)
-
-    // Nose cap + sensor mast.
-    const nose = new THREE.SphereGeometry(1.0, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2)
-    nose.scale(1, 0.9, 1)
-    nose.translate(0, 5.42, 0)
-    push(nose, TRIM)
-    const mast = new THREE.CylinderGeometry(0.08, 0.11, 1.4, 6)
-    mast.translate(0, 6.0, 0)
-    push(mast, METAL)
-
-    // Porthole surrounds, on the widest band where a flat ring genuinely sits flush.
-    for (let i = 0; i < 5; i++) {
-      const a = (i / 5) * Math.PI * 2 + 0.62
-      const ring = new THREE.TorusGeometry(0.4, 0.07, 6, 14)
-      ring.rotateY(-a + Math.PI / 2)
-      ring.translate(Math.cos(a) * 2.33, 3.7, Math.sin(a) * 2.33)
-      push(ring, HULL_DARK)
-    }
+    this.traffic = 0 // the dock glows brighter while crew or a car are using it
 
     /**
-     * Legs. Every dimension is derived from where the foot has to land, so the strut, the
-     * footpad and the ground all agree — eyeballing the offsets separately is exactly how
-     * legs end up floating above a pad or buried under one.
+     * The buildings and the yard all come out of the model kits, and the kits are not
+     * necessarily loaded yet: `game/colony.js` constructs the depot synchronously in its own
+     * constructor, and `main.js` only awaits `loadKit()` afterwards, once `boot()` runs — so
+     * calling `part()` here directly throws ("no part named ...") on every single load.
+     * `loadKit()` is written to be idempotent and safe to call from anywhere — "the first
+     * call owns the requests and everybody else awaits the same promise" — so this just joins
+     * whichever fetch is already in flight rather than starting a second one, and fills the
+     * depot in the moment it resolves.
      */
-    const tilt = 0.46
-    const legLen = 2.9
-    const hipR = 1.55
-    const hipY = 2.75
-    const footR = hipR + Math.sin(tilt) * legLen
-    const footY = hipY - Math.cos(tilt) * legLen
-    this.footRadius = footR
-
-    for (let i = 0; i < 4; i++) {
-      const a = (i / 4) * Math.PI * 2 + Math.PI / 4
-      const leg = new THREE.CylinderGeometry(0.16, 0.21, legLen, 8)
-      leg.rotateZ(tilt)
-      leg.rotateY(-a)
-      leg.translate(Math.cos(a) * ((hipR + footR) / 2), (hipY + footY) / 2, Math.sin(a) * ((hipR + footR) / 2))
-      push(leg, METAL)
-
-      const pad = new THREE.CylinderGeometry(0.6, 0.46, 0.26, 12)
-      pad.translate(Math.cos(a) * footR, Math.max(0.13, footY), Math.sin(a) * footR)
-      push(pad, HULL_DARK)
-
-      // A brace from mid-leg back up into the skirt.
-      const braceR = (hipR + footR) * 0.36
-      const brace = new THREE.CylinderGeometry(0.06, 0.06, 1.7, 5)
-      brace.rotateZ(-0.95)
-      brace.rotateY(-a)
-      brace.translate(Math.cos(a) * (braceR + 0.5), 1.55, Math.sin(a) * (braceR + 0.5))
-      push(brace, METAL)
-    }
-
-    // Engine bell.
-    const bell = new THREE.CylinderGeometry(0.55, 1.05, 1.0, 14, 1, true)
-    bell.translate(0, 0.85, 0)
-    push(bell, 0x4a4d55)
-
-    /**
-     * The airlock. A short tube poking out of the hull rather than a flat ring laid on it —
-     * a torus can never sit flush against a sphere, and one that tries ends up as an arch
-     * with its bottom hanging in the air.
-     */
-    const collar = new THREE.CylinderGeometry(0.92, 0.92, 0.9, 16, 1, true)
-    collar.rotateX(Math.PI / 2)
-    collar.translate(0, 3.15, 2.25)
-    push(collar, HULL_DARK)
-    // Only the top two-thirds of the ring: a full torus leaves a bar hanging in the gap
-    // the ramp comes out of, which reads as a handle rather than as a hatch frame.
-    const lip = new THREE.TorusGeometry(0.92, 0.1, 6, 20, Math.PI * 1.34)
-    lip.rotateZ(-Math.PI * 0.17)
-    lip.translate(0, 3.15, 2.68)
-    push(lip, TRIM)
-
-    const merged = mergeWithColors(parts, colors)
-    this.hull = new THREE.Mesh(merged, hullMaterial())
-    this.hull.castShadow = true
-    this.hull.receiveShadow = true
-    this.group.add(this.hull)
-
-    // The dark hatch opening, set at the back of the collar so it reads as depth.
-    const opening = new THREE.Mesh(
-      new THREE.CircleGeometry(0.9, 20),
-      new THREE.MeshBasicMaterial({ color: 0x05060a, toneMapped: false })
-    )
-    opening.position.set(0, 3.15, 2.3)
-    this.group.add(opening)
-
-    const glassParts = []
-    const glassColors = []
-    for (let i = 0; i < 5; i++) {
-      const a = (i / 5) * Math.PI * 2 + 0.62
-      const pane = new THREE.CircleGeometry(0.36, 14)
-      pane.rotateY(-a + Math.PI / 2)
-      pane.translate(Math.cos(a) * 2.37, 3.7, Math.sin(a) * 2.37)
-      glassParts.push(pane)
-      glassColors.push(new THREE.Color(GLASS))
-    }
-    this.glassMaterial = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: true })
-    this.glass = new THREE.Mesh(mergeWithColors(glassParts, glassColors), this.glassMaterial)
-    this.group.add(this.glass)
+    loadKit().then(() => {
+      if (this._disposed) return // archived/rebuilt before the kit ever arrived
+      this.office = this._buildFrom(officePieces(), OFFICE_SPOT)
+      this.loods = this._buildFrom(loodsPieces(), LOODS_SPOT)
+      this._buildSign()
+      this._buildYard()
+    })
   }
 
   /**
-   * The ramp runs from the lip of the airlock down to the ground. Its length and angle are
-   * solved from those two points rather than set by hand, so it always meets both.
+   * One composed building: its pieces merged, scaled, dropped on its spot, and given the
+   * prototype atlas.
+   *
+   * Both buildings go through this because both are the same idea — a list of pieces out of
+   * one greybox pack, painted per piece. Each is its own mesh: a merged geometry carries one
+   * material, and while these two share an atlas they do not share a position, so keeping
+   * them apart is what lets either be moved or repainted without the other.
    */
-  _buildRamp() {
-    const topY = 3.05
-    const topZ = 2.68
-    const footZ = 6.1
-    const drop = topY - 0.06
-    const run = footZ - topZ
-    const length = Math.hypot(run, drop)
-    const angle = Math.atan2(drop, run)
+  _buildFrom(pieces, spot) {
+    const c = new Composer({ kit: 'prototype' })
+    for (const piece of pieces) c.add(piece.part, piece)
 
-    const geo = new THREE.BoxGeometry(1.8, 0.14, length)
-    geo.translate(0, 0, length / 2) // pivot at the hatch end
-    const mat = new THREE.MeshStandardMaterial({ color: HULL_DARK, roughness: 0.7, metalness: 0.15 })
-    this.ramp = new THREE.Mesh(geo, mat)
-    this.ramp.position.set(0, topY, topZ)
-    this.ramp.rotation.x = angle
-    this.ramp.castShadow = true
-    this.ramp.receiveShadow = true
-    this.group.add(this.ramp)
+    const geo = c.finish()
+    geo.scale(PROTO_SCALE, PROTO_SCALE, PROTO_SCALE)
+    geo.translate(spot.x, spot.y, spot.z)
+    geo.computeBoundingBox()
 
-    // Treads across it, and a lit strip down each edge.
-    const treads = []
-    const treadColors = []
-    const steps = Math.max(3, Math.round(length / 0.55))
+    const mesh = new THREE.Mesh(
+      geo,
+      decorate(
+        new THREE.MeshStandardMaterial({
+          map: atlasTexture('prototype'),
+          roughness: 0.85,
+          metalness: 0,
+          emissive: 0x000000,
+          // Closed on every side — a leaf in each doorway and glazing behind each window, so
+          // there is no inside to see and nothing to render two-sided.
+          side: THREE.FrontSide,
+        }),
+        {
+          uProgress: { value: 1 },
+          uMaxY: { value: geo.boundingBox.max.y },
+          uMinY: { value: geo.boundingBox.min.y },
+          // The depot is whole from its first frame — nothing sinks it out of the ground the
+          // way a growing colony building does, and nothing about it reveals piece by piece.
+          uSink: { value: 0 },
+          uAccent: { value: new THREE.Color(DEPOT_ACCENT) },
+          uNight: buildingUniforms.uNight,
+          uTime: buildingUniforms.uTime,
+          uCellAccent: { value: DEPOT_ACCENT_MASK },
+          uCellRoughness: { value: SHELL_ROUGHNESS },
+          uCellMetalness: { value: NO_METAL },
+        }
+      )
+    )
+    mesh.castShadow = true
+    mesh.receiveShadow = true
+    // No custom depth material: uSink is 0 and uProgress is pinned at 1, so three's own depth
+    // pass already puts every vertex exactly where this mesh does.
+    this.group.add(mesh)
+    return mesh
+  }
+
+  /**
+   * The logo on the band over the big door.
+   *
+   * Its own mesh and its own material, because it is the one thing on either building that is
+   * not a swatch of the prototype atlas — it is an image, and the company's real one. Which
+   * is also what lets the depot say whose depot it is.
+   *
+   * Lit like the wall by day and emissive after dark, the same way the dock's edge strips and
+   * the pad lights work: the band behind it already comes on at night, so lettering that did
+   * not would read as a shadow across it.
+   */
+  _buildSign() {
+    new THREE.TextureLoader().load(`${import.meta.env.BASE_URL}assets/${SIGN_FILE}`, (texture) => {
+      if (this._disposed) return // archived before the image arrived
+      texture.colorSpace = THREE.SRGBColorSpace
+      texture.minFilter = THREE.LinearMipmapLinearFilter
+      texture.magFilter = THREE.LinearFilter
+      texture.generateMipmaps = true
+      texture.anisotropy = 8
+
+      const at = signPlacement()
+      // The artwork's own proportions, not a shape chosen here: the file is trimmed to the
+      // ink, so this is the logo's aspect and nothing else.
+      const aspect = texture.image.width / texture.image.height
+      // Whichever of the band's height and the door's width runs out first decides the size,
+      // so a wider logo sets itself smaller rather than running off the end of the band.
+      const height = Math.min(at.maxHeight, at.maxWidth / aspect)
+
+      this.signTexture = texture
+      this.signMaterial = new THREE.MeshStandardMaterial({
+        map: texture,
+        transparent: true,
+        roughness: 0.6,
+        metalness: 0,
+        // White, so the emission is the logo's own colours rather than the logo tinted: the
+        // mark is green and the lettering is navy, and at night both should stay themselves.
+        emissive: new THREE.Color(0xffffff),
+        emissiveMap: texture,
+        emissiveIntensity: 0,
+        // It sits a hair off a wall it never has to sort against, and writing depth would
+        // have it z-fight its own transparent margin.
+        depthWrite: false,
+      })
+      this.sign = new THREE.Mesh(new THREE.PlaneGeometry(height * aspect, height), this.signMaterial)
+      this.sign.position.set(at.x, at.y, at.z)
+      this.group.add(this.sign)
+    })
+  }
+
+  /**
+   * Where the depot's buildings stand in the world, as circles for the crew's navigation to
+   * walk around.
+   *
+   * The depot's own keep-clear circle is centred on the anchor and reaches 3.4, which covers
+   * neither of these — the loods runs out to 4.8 on one side and the office to 5.8 on the
+   * other. Without this, crew would route straight through them.
+   *
+   * Computed here rather than in `colony.js` because the positions are in the depot's own
+   * turned frame, and this is where that frame is known.
+   */
+  buildingObstacles() {
+    const a = this.group.rotation.y
+    const cos = Math.cos(a)
+    const sin = Math.sin(a)
+    return [officeBox(), loodsBox()].map((b) => {
+      const x = (b.minX + b.maxX) / 2
+      const z = (b.minZ + b.maxZ) / 2
+      return {
+        x: this.group.position.x + (x * cos + z * sin),
+        z: this.group.position.z + (-x * sin + z * cos),
+        r: Math.hypot((b.maxX - b.minX) / 2, (b.maxZ - b.minZ) / 2),
+      }
+    })
+  }
+
+  /**
+   * The yard: base-kit cargo containers stacked behind the shell. A second mesh, not folded
+   * into the shell's own geometry — the city and base kits have separate atlases, and a merged
+   * geometry can only carry one material, so a container merged into the shell's buffer would
+   * sample its colour off the wrong texture entirely. Requires `loadKit()` to have resolved.
+   */
+  _buildYard() {
+    const c = new Composer({ kit: 'base' })
+    for (const spot of CONTAINER_SPOTS) c.add('containers_A', spot)
+    const geo = c.finish()
+    geo.scale(CONTAINER_SCALE, CONTAINER_SCALE, CONTAINER_SCALE)
+
+    // Plain material, no accent or night glow: yard clutter, not a building — the same
+    // treatment `world/plots.js` gives base-kit props scattered on a plot.
+    this.yard = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: atlasTexture('base'), roughness: 0.6, metalness: 0.05 }))
+    this.yard.castShadow = true
+    this.yard.receiveShadow = true
+    this.group.add(this.yard)
+  }
+
+  /**
+   * The loading dock: a flat plate at the shell's front face, since the shell sits flush on
+   * the ground and there is no hatch to climb down from any more. Its length and the door
+   * point are solved from where the shell's own front wall actually is, the way the lander's
+   * ramp used to solve its length from the hatch and the ground.
+   */
+  _buildDock() {
+    const width = 2.2
+    const length = 2.0
+    const nearZ = this.frontZ
+    const farZ = nearZ + length
+
+    const geo = new THREE.BoxGeometry(width, 0.12, length)
+    geo.translate(0, 0.06, nearZ + length / 2)
+    this.dock = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x3a3a40, roughness: 0.85, metalness: 0.05 }))
+    this.dock.castShadow = true
+    this.dock.receiveShadow = true
+    this.group.add(this.dock)
+
+    // Lane markings across the plate, the way a real loading bay paints its floor.
+    const laneParts = []
+    const steps = 5
     for (let i = 1; i < steps; i++) {
-      const t = new THREE.BoxGeometry(1.6, 0.05, 0.09)
-      t.translate(0, 0.09, (length * i) / steps)
-      treads.push(t)
-      treadColors.push(new THREE.Color(0x8e8a80))
+      const t = new THREE.BoxGeometry(width - 0.3, 0.03, 0.09)
+      t.translate(0, 0.13, nearZ + (length * i) / steps)
+      laneParts.push(t)
     }
-    const treadMesh = new THREE.Mesh(mergeWithColors(treads, treadColors), hullMaterial())
-    this.ramp.add(treadMesh)
+    const laneGeo = merge(laneParts)
+    const laneMesh = new THREE.Mesh(laneGeo, new THREE.MeshStandardMaterial({ color: 0xd8d3c8, roughness: 0.6 }))
+    this.group.add(laneMesh)
 
-    const strips = []
-    const stripColors = []
-    for (const dx of [-0.82, 0.82]) {
-      const s = new THREE.BoxGeometry(0.1, 0.07, length - 0.15)
-      s.translate(dx, 0.09, length / 2)
-      strips.push(s)
-      stripColors.push(new THREE.Color(TRIM))
+    // Lit edge strips down each side — brighten while the dock is busy, same technique as the
+    // lander's ramp strips.
+    const edgeParts = []
+    for (const dx of [-width / 2 + 0.08, width / 2 - 0.08]) {
+      const s = new THREE.BoxGeometry(0.1, 0.05, length - 0.2)
+      s.translate(dx, 0.1, nearZ + length / 2)
+      edgeParts.push(s)
     }
-    this.stripMaterial = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: true })
-    this.strips = new THREE.Mesh(mergeWithColors(strips, stripColors), this.stripMaterial)
-    this.ramp.add(this.strips)
+    this.stripMaterial = new THREE.MeshBasicMaterial({ color: 0xff9a3c, toneMapped: true })
+    this.strips = new THREE.Mesh(merge(edgeParts), this.stripMaterial)
+    this.group.add(this.strips)
 
-    // Astronauts appear and vanish a step short of the ground, at the foot of the ramp.
-    this.doorLocal = new THREE.Vector3(0, 0, footZ + 0.6)
+    // Crew and cars appear and vanish a step beyond the dock plate, at ground level.
+    this.doorLocal = new THREE.Vector3(0, 0, farZ + 0.6)
   }
 
   _buildLights() {
-    // Beacon on the mast.
-    this.beaconMaterial = new THREE.MeshBasicMaterial({ color: 0xff5a4a, toneMapped: true })
-    this.beacon = new THREE.Mesh(new THREE.SphereGeometry(0.19, 10, 8), this.beaconMaterial)
-    this.beacon.position.set(0, 6.5, 0)
+    // A rooftop hazard beacon — the industrial-yard equivalent of an aircraft strobe, and
+    // just as much a fixture on a real depot as it was on a lander.
+    this.beaconMaterial = new THREE.MeshBasicMaterial({ color: 0xffb020, toneMapped: true })
+    this.beacon = new THREE.Mesh(new THREE.SphereGeometry(0.14, 10, 8), this.beaconMaterial)
+    const ridge = loodsBox()
+    this.beacon.position.set((ridge.minX + ridge.maxX) / 2, this.ridgeHeight + 0.16, (ridge.minZ + ridge.maxZ) / 2)
     this.group.add(this.beacon)
 
-    // Landing lights ringing the pad.
+    // Floodlights ringing the yard — but only where there is yard. The depot used to be one
+    // building on the middle of its cell and a plain ring cleared it; it is now two, and most
+    // of a ring this size falls inside them. A light inside a closed building is not visible
+    // and not wrong-looking, which is exactly why it would never be noticed.
     const pads = []
-    const padColors = []
+    const boxes = [officeBox(), loodsBox()]
     for (let i = 0; i < 8; i++) {
       const a = (i / 8) * Math.PI * 2
-      const r = (this.footRadius || 3) + 1.5
-      const l = new THREE.SphereGeometry(0.12, 8, 6)
-      l.translate(Math.cos(a) * r, 0.12, Math.sin(a) * r)
+      const r = this.yardRadius + 1.5
+      const x = Math.cos(a) * r
+      const z = Math.sin(a) * r
+      if (boxes.some((b) => x > b.minX && x < b.maxX && z > b.minZ && z < b.maxZ)) continue
+      const l = new THREE.SphereGeometry(0.11, 8, 6)
+      l.translate(x, 0.11, z)
       pads.push(l)
-      padColors.push(new THREE.Color(0x9fd8ff))
     }
-    this.padMaterial = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: true })
-    this.padLights = new THREE.Mesh(mergeWithColors(pads, padColors), this.padMaterial)
+    this.padMaterial = new THREE.MeshBasicMaterial({ color: 0x9fd8ff, toneMapped: true })
+    this.padLights = new THREE.Mesh(merge(pads), this.padMaterial)
     this.group.add(this.padLights)
 
-    // Scorched apron under the ship.
+    // Plain asphalt under the depot — nothing about a delivery yard launches, so unlike the
+    // lander's pad this is not scorched.
     const apron = new THREE.Mesh(
-      new THREE.CircleGeometry((this.footRadius || 3) + 2.3, 32),
-      new THREE.MeshStandardMaterial({ color: 0x2f2c2c, roughness: 1, transparent: true, opacity: 0.65 })
+      new THREE.CircleGeometry(this.yardRadius + 2.3, 32),
+      new THREE.MeshStandardMaterial({ color: 0x3c3c42, roughness: 0.95 })
     )
     apron.rotation.x = -Math.PI / 2
-    apron.position.y = 0.05
+    apron.position.y = 0.02
     apron.receiveShadow = true
     this.group.add(apron)
   }
 
-  /** World position of the foot of the ramp — where astronauts appear and vanish. */
+  /** World position of the foot of the dock — where crew and cars appear and vanish. */
   shipDoor(out = new THREE.Vector3()) {
     return out.copy(this.doorLocal).applyMatrix4(this.group.matrixWorld)
   }
 
   update(dt, elapsed, night) {
-    // Beacon: a double-blink, like a real aircraft strobe.
+    // Beacon: a double-blink, like a real hazard light.
     const t = elapsed % 2
     const strobe = t < 0.08 || (t > 0.2 && t < 0.28) ? 1 : 0.08
-    this.beaconMaterial.color.setRGB(3.2 * strobe, 0.35 * strobe, 0.28 * strobe)
+    this.beaconMaterial.color.setRGB(3.0 * strobe, 1.8 * strobe, 0.15 * strobe)
 
     const gain = 0.35 + night * 2.2
     this.padMaterial.color.setRGB(0.55 * gain, 0.82 * gain, 1.1 * gain)
-    this.glassMaterial.color.setRGB(0.5 * gain, 0.78 * gain, 0.92 * gain)
 
-    // Ramp strips brighten while anyone is walking on them.
+    // The sign lights up with the band it is painted on. Guarded because the depot runs from
+    // its first frame and the buildings only exist once the kit has loaded.
+    if (this.signMaterial) this.signMaterial.emissiveIntensity = night * 1.15
+
+    // Dock edge lights brighten while anyone is using the dock.
     this.traffic = Math.max(0, this.traffic - dt * 1.5)
     const busy = Math.min(1, this.traffic)
     const pulse = 0.6 + 0.4 * Math.sin(elapsed * 4)
     const s = (0.5 + night * 1.2) * (1 + busy * pulse * 1.6)
-    this.stripMaterial.color.setRGB(1.0 * s, 0.45 * s, 0.3 * s)
+    this.stripMaterial.color.setRGB(1.0 * s, 0.55 * s, 0.18 * s)
   }
 
-  /** Called when an astronaut uses the ramp, so the lights react. */
+  /** Called when the dock is used, so the lights react. */
   ping() {
     this.traffic = Math.min(2.5, this.traffic + 1)
   }
 
   dispose() {
+    this._disposed = true // in case the kit resolves after this call
+    // The sign's texture is the depot's own. Every other map here is a kit atlas, shared with
+    // every building on the map, and disposing one of those would blank the colony.
+    this.signTexture?.dispose()
     this.group.traverse((o) => {
       if (o.isMesh) {
         o.geometry.dispose()
@@ -293,53 +710,9 @@ export class Ship {
   }
 }
 
-/**
- * Merge a set of geometries, baking one flat colour per part into vertex colours — plus the
- * roughness and metalness that colour implies, so a single merged hull can hold painted
- * panel, bare strut and glass and have each behave correctly under the environment map.
- */
-function mergeWithColors(parts, colors) {
-  parts.forEach((geo, i) => {
-    const count = geo.attributes.position.count
-    const arr = new Float32Array(count * 3)
-    const surf = new Float32Array(count * 2)
-    const c = colors[i]
-    const s = SURFACE.get(colors[i].getHex()) || DEFAULT_SURFACE
-    for (let k = 0; k < count; k++) {
-      arr[k * 3] = c.r
-      arr[k * 3 + 1] = c.g
-      arr[k * 3 + 2] = c.b
-      surf[k * 2] = s[0]
-      surf[k * 2 + 1] = s[1]
-    }
-    geo.setAttribute('color', new THREE.BufferAttribute(arr, 3))
-    geo.setAttribute('aSurface', new THREE.BufferAttribute(surf, 2))
-    geo.deleteAttribute('uv')
-    if (!geo.attributes.normal) geo.computeVertexNormals()
-  })
-  const merged = BufferGeometryUtils.mergeGeometries(parts, false)
+/** Merge a set of same-material geometries into one draw call, disposing the originals. */
+function merge(parts) {
+  const geo = BufferGeometryUtils.mergeGeometries(parts, false)
   parts.forEach((g) => g.dispose())
-  return merged
-}
-
-/** The hull material: per-vertex PBR, and double-sided so the engine bell and the airlock
- *  collar — both open tubes — show their insides instead of vanishing. */
-function hullMaterial() {
-  const mat = new THREE.MeshStandardMaterial({
-    vertexColors: true,
-    roughness: 0.55,
-    metalness: 0.22,
-    side: THREE.DoubleSide,
-    shadowSide: THREE.BackSide,
-  })
-  mat.onBeforeCompile = (shader) => {
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', `#include <common>\n attribute vec2 aSurface;\n varying vec2 vSurface;`)
-      .replace('#include <begin_vertex>', `#include <begin_vertex>\n vSurface = aSurface;`)
-    shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', `#include <common>\n varying vec2 vSurface;`)
-      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = vSurface.x;')
-      .replace('#include <metalnessmap_fragment>', 'float metalnessFactor = vSurface.y;')
-  }
-  return mat
+  return geo
 }

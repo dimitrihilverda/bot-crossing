@@ -23,7 +23,7 @@ import {
 const COLS = 4
 const ROWS = 2
 
-/** Where the badge's bottom edge sits: a shade above the crown of the helmet. */
+/** Where the badge's bottom edge sits: a shade above the crown of the head. */
 const HEAD_CLEAR = 1.42
 
 export const BADGE = {
@@ -139,7 +139,7 @@ export class Indicators {
            // stays readable when the camera is pulled right out, while the constant term
            // lets it grow a little as you lean in, which stops it feeling pasted on.
            float scale = aSize * ( 2.0 + dist * 0.22 );
-           // Lift by half the badge's own height, so what is pinned above the helmet is the
+           // Lift by half the badge's own height, so what is pinned above the head is the
            // badge's *bottom edge* rather than its centre. The badge holds a near-constant
            // size on screen while a world-space offset does not, so a centre that clears the
            // head when you are leaning in sits right on top of it when you pull out — the
@@ -209,7 +209,7 @@ export class Indicators {
       const bob = Math.sin(elapsed * bobRate + agent.phase) * bobAmp
 
       centers[n * 3] = agent.pos.x
-      // Just clear of the helmet: the shader lifts the quad the rest of the way by its own
+      // Just clear of the head: the shader lifts the quad the rest of the way by its own
       // half-height, which is the part that has to change with the camera.
       centers[n * 3 + 1] = agent.pos.y + HEAD_CLEAR + bob
       centers[n * 3 + 2] = agent.pos.z

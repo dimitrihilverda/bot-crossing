@@ -127,7 +127,9 @@ const DEFAULTS = {
   ...PRESETS.balanced.values,
 
   // World
-  planet: 'moon',
+  planet: 'terra',
+  /** How far visiting colonies sit from the centre (hex-ring radius). Higher = more spread. */
+  colonySpacing: 3,
   /**
    * Fold away repos where every thread has been quiet for three days. On by default: with
    * several harnesses read at once the map otherwise fills with every checkout you have ever
@@ -148,6 +150,8 @@ const DEFAULTS = {
   tiltShiftAngle: 0, // degrees — 0 keeps the sharp band horizontal
   iblIntensity: 1.0,
   fov: 38,
+  /** Multiplier on a planet's drifting atmospheric haze/dust (0 = none, 1 = the planet's full). */
+  haze: 0.4,
 
   // Behaviour
   autoQuality: true, // drop render scale when frames get expensive

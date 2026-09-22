@@ -187,8 +187,14 @@ export class Engine {
     const composer = new EffectComposer(this.renderer, target)
     composer.addPass(new RenderPass(this.scene, this.camera))
 
-    // A high threshold is what keeps this an accent rather than a haze: only the eyes,
-    // lamps, sparks and the sun's disc clear it, so lit surfaces stay crisp.
+    // A high threshold is what keeps this an accent rather than a haze: only the welding
+    // sparks off a working crew member's hammer (`particles.js`, additive-blended and pushed
+    // to 2.4/2.2/1.6), the depot's own rooftop beacon (`ship.js`, double-blinking well past
+    // the threshold and dropping back under it between blinks), and the sun's disc clear it,
+    // so lit surfaces stay crisp. The crew's eyes and the hi-vis band that used to ring a crew
+    // member's torso both carried a status colour past this threshold once; the band is gone
+    // at the owner's request and the eyes were left at 1.0 well before that, so neither clears
+    // it any more.
     this.bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), this.settings.get('bloomStrength'), 0.55, 0.92)
     composer.addPass(this.bloomPass)
 

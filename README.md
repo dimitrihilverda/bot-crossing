@@ -1,18 +1,30 @@
-# Bot Crossing — your agent threads, as a colony
+# Moving-In Crossing — your agent threads, moving in furniture
 
-**[botcrossing.com](https://botcrossing.com)**
+**A Moving-In re-theme of [Bot Crossing](https://github.com/Station-Sciences/bot-crossing)**,
+Jarren Rocks' agent-colony sim. Everything underneath — the map, the pathing, the harness
+adapters, and the shared-colonies feature a colleague added on top of it — is upstream's
+engine, unchanged; this fork only recolours what is on screen and settles it onto its own port.
 
-Every coding-agent thread on this machine is a little astronaut. They walk out of the ship, claim
-a plot for their repo, and build something. When one needs you it stops and holds a `?` over
-its head; click it and the thread opens back in whichever harness it came from.
+Every coding-agent thread on this machine is a little crew member. The moment its thread
+appears, a delivery car leaves the depot and drives the whole way to the plot for its repo,
+over the open ground, and parks at the kerb; its crew member is off screen for that walk
+rather than drawn making it, so a car can arrive with nobody visibly aboard. The car is the
+quicker of the two — it is usually parked by the time its crew member comes back into view,
+part-way down the street, to walk the last of it in. It moves a house in — its furniture
+appearing as the thread's transcript grows. When one needs you it stops and holds a `?` over
+its head — that badge stays on the crew member, never on the car, so a thread asking for you
+is never hidden by a drive in progress — click it and the thread opens back in whichever
+harness it came from. Archive the thread and the car drives all the way back to the depot,
+past a crew member that stays standing on its plot; the house only disappears once it is home.
 
 It reads the harness's own files, on your own machine. Nothing is uploaded, there is no
 account, and **it never writes to a harness at all** — `data/colony.json`, where the map lives,
 is the only file it writes anywhere.
 
-> **Status:** published as-is. I built this for myself and cannot promise to maintain it —
-> issues and PRs are welcome but may go unanswered, and forking is an entirely reasonable
-> thing to do. [CONTRIBUTING.md](CONTRIBUTING.md) sets out what to expect.
+> **Status:** an internal Moving-In fork, reworded and reskinned for our own use — the
+> underlying sim is still Bot Crossing's. For the original project, its own status, and its
+> contribution policy, see [Station-Sciences/bot-crossing](https://github.com/Station-Sciences/bot-crossing)
+> and its [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Run it
 
@@ -72,14 +84,22 @@ than have you work around it.
 
 | In the colony | In your threads |
 | --- | --- |
-| One hex zone | One repo. Bigger repos claim more tiles — one per seven threads, grown as a contiguous blob from the middle outward. A zone stays where it is: see below |
+| One square zone | One repo. Bigger repos claim more tiles — one per nine threads, grown as a contiguous blob from the middle outward. A zone stays where it is: see below |
 | One astronaut + one building | One session |
 | How finished a building looks | How large its transcript is, on a log scale |
-| Scaffolding | Somebody is at that site right now |
+| A delivery car parked at a house | Somebody is at that site right now |
+| A car on the road | A site opening up or closing down. A crew member is only ever off screen while it is walking somewhere and its car is making that journey for it, so one standing on its own plot stays in view while its car drives home, and one that wants you keeps its badge wherever its car is |
 | Walking out of the ship | A thread that just appeared |
 | Walking back into the ship | You archived it |
 
 ### A zone stays where it is
+
+The colony sits on a square lattice, pitched at 12 units to match the art packs' 2-unit
+module and the town's own road period. Each cell is a square block with a kerb bar along
+each of its four edges, holding up to nine buildings — `SLOTS_PER_CELL` — in a 3 × 3
+arrangement. Streets run on the same grid, so every corner a road takes is a real right
+angle, laid with the kit's own corner piece rather than a patch standing in for an angle
+nothing in the pack turns.
 
 The map is only useful if you can learn it, so the layout is *sticky*. The previous
 arrangement is an input to the next one: a repo that still needs the same number of tiles
@@ -119,7 +139,7 @@ thread can only ever be doing one thing. First match wins:
 
 | Signal | What the astronaut does | Badge |
 | --- | --- | --- |
-| Errored | Slumps, red eyes, fault light stutters | `!` |
+| Errored | Slumps, red eyes, hi-vis bands stutter | `!` |
 | Running now | Hammers away at its building, sparks fly | `⚒` |
 | PR merged | Jumps, confetti, heart eyes | `✓` |
 | Unread | **Stops and waits on you** | `?` |
@@ -154,9 +174,9 @@ across 78,000 agent-frames**. A typical path costs 6 µs (most are a clear strai
 skip the search); the worst frame when a poll invalidates every route at once is 0.6 ms.
 
 They also push each other apart, so a busy plot is a crowd rather than a pile. That spacing
-is measured against the widest thing an astronaut wears — the helmet, at 0.95 units — because
-holding a crowd at less than that is a crowd standing *inside* itself, which is what the first
-version did at 0.72. Arrival is derived from the same number and is deliberately larger: an
+is measured against the widest thing an astronaut used to wear — the helmet, at 0.95 units —
+because holding a crowd at less than that is a crowd standing *inside* itself, which is what the
+first version did at 0.72. Arrival is derived from the same number and is deliberately larger: an
 astronaut that had to get closer than its neighbours would let it could never finish arriving,
 and would shoulder at the crowd for as long as its thread existed.
 
@@ -201,10 +221,10 @@ browser makes without touching layout, so following a walking astronaut costs no
   counts a thread as read once it has been focused in its own app, so one you answered in a
   terminal waves for good. This records when you looked, and the thread starts asking again the
   moment it does something newer.
-- **Archive** retires the thread *here*: the astronaut walks back up the ramp and boards the
-  ship. Nothing is written to the harness — see [Keeping it local](#keeping-it-local). A thread
-  you archive in the harness's own app goes home on the next poll too, because the scan reads
-  that flag.
+- **Archive** retires the thread *here*: the astronaut walks back across the loading dock and
+  into the depot. Nothing is written to the harness — see
+  [Keeping it local](#keeping-it-local). A thread you archive in the harness's own app goes
+  home on the next poll too, because the scan reads that flag.
 - **Hide** takes a whole repo off the map without touching a single thread. It comes back from
   the list at the foot of the sidebar, onto the same ground it left.
 
@@ -309,9 +329,9 @@ It regenerates only when the sky has actually moved, and never more than a few t
 Measured cost: **0.16 ms/frame**. Off on Potato and Low; the intensity is a slider.
 
 Materials are properly PBR underneath it. Roughness and metalness are looked up per atlas
-cell, so a single merged building geometry holds painted panel, brushed metal and
-photovoltaic glass and each behaves correctly — the ten building recipes never had to learn
-about PBR.
+cell for the base kit's props, so a single merged geometry can hold painted panel, brushed
+metal and photovoltaic glass side by side and each still behaves correctly, with none of it
+coded per part.
 
 ### The sun is not overhead
 
@@ -329,33 +349,61 @@ so lit surfaces stay crisp instead of going hazy.
 
 ## Where the art comes from
 
-The colony is built out of two CC0 asset packs by **[Kay Lousberg](https://kaylousberg.com)**,
-plus the project's own shaders on top of them.
+The colony is built out of six CC0 asset packs by **[Kay Lousberg](https://kaylousberg.com)**,
+one part borrowed from elsewhere, plus the project's own shaders on top of them.
 
 | Pack | Used for | Licence |
 | --- | --- | --- |
-| [KayKit : Space Base Bits](https://kaylousberg.itch.io/space-base-bits) | Every building, the landing pads, rovers, and the crates and drums stacked around each plot | CC0 |
-| [KayKit : Character Animations](https://kaylousberg.itch.io/kaykit-character-animations) | The crew's body and all fifteen animation clips they play | CC0 |
+| [KayKit : City Builder Bits](https://kaylousberg.itch.io/city-builder-bits) | House shells, pavement, fences and the delivery car | CC0 |
+| [KayKit : Furniture Bits](https://kaylousberg.itch.io/furniture-bits) | Everything that fills a house as its thread's transcript grows | CC0 |
+| [KayKit : Space Base Bits](https://kaylousberg.itch.io/space-base-bits) | The crates, drums and floodlights stacked around each plot, and the containers stacked in the depot's yard | CC0 |
+| [KayKit : Character Animations](https://kaylousberg.itch.io/kaykit-character-animations) | The crew's body and all seventeen animation clips they play | CC0 |
 | [KayKit : Forest Nature Pack](https://kaylousberg.itch.io/kaykit-forest) | Terra's trees, bushes and grass, and the boulders on every world | CC0 |
+| [KayKit : Prototype Bits](https://kaylousberg.itch.io/prototype-bits) | Walls, openings, roof slopes and beams — the pieces the depot's two buildings are composed out of | CC0 |
+| [Quaternius : LowPoly Public Transport](https://opengameart.org/content/lowpoly-public-transport) | The bicycle, and nothing else | CC0 |
+| Moving-In's own logo | The sign over the depot's loading door — **a trademark, not CC0** | © Moving-In |
 
-CC0 asks for nothing, but crediting Kay costs nothing either. If you rebuild the assets, both
-packs go in `assets-src/` (see below).
+CC0 asks for nothing, but crediting Kay costs nothing either. If you rebuild the assets, all
+six packs go in `assets-src/` (see below); `public/assets/CREDITS.md` is the definitive list
+of what each `.glb` is built from.
 
-Two things about Space Base Bits make the whole approach work. It is **modular** — a habitat is
-a base module with a roof module on it, a workshop is the garage variant with a rover parked
-outside — which is why ten building recipes fit on one screen. And all forty-four models share
-**one 1024px gradient atlas**, so a nine-part greenhouse still merges to a single geometry and a
-single draw call, exactly as the procedural generators it replaced did.
+**One file is not CC0 and never was.** `public/assets/moving-in-logo.png` is this company's
+own logo, on the depot's sign. It is a trademark rather than an asset — if you fork this,
+swap it for your own or take the sign down. `SIGN_FILE` in `src/world/ship.js` names it once.
+
+**The bicycle is the one part Kay did not make.** None of KayKit's 23 packs has one — checked
+across all 222 parts of the five packs this colony loads — and a Dutch street without a bicycle
+is missing the thing that makes it Dutch. So a single model is borrowed from Quaternius' CC0
+pack and grafted into the city kit by `tools/build-bike.mjs`: one part, not a pack of its
+own, because a whole foreign pack would sit *beside* KayKit rather than in it. What makes it belong is that
+it is repainted on the way in — the source model's four materials are all the same flat grey
+(Quaternius colours in Blender, not in the OBJ), so each is mapped to a cell of the city atlas
+and the bicycle comes out sampling the same texture, through the same shader, as the buildings
+and cars around it. Its frame takes the accent cell, so a bicycle can be tinted the way a car is.
+
+One design choice, shared by every pack, is what makes the whole approach work: every model in
+a pack UVs into a single 1024px gradient atlas and therefore shares one material, so a house
+shell built out of several named parts — wall, roof, door and the rest — still merges to a
+single geometry and a single draw call, exactly as the procedural generators it replaced did.
+Because each pack has its own atlas, and a merged geometry can only carry one material, a house
+is **two meshes**, not one — the shell's parts from the city kit, its contents from the
+furniture kit. The depot is three, for the same reason: its office and its loods are both
+composed out of the prototype kit and the crates in its yard come from the base kit.
+`src/world/kit.js` is where that rule is written down.
 
 That atlas is an 8×4 grid of swatches, which turns out to be a useful thing to have. A *cell
 index* is a stable name for a material, so the building shader can:
 
-- **repaint one swatch into the repo's accent.** Kay's gold trim band is cell 11; the fragment
-  stage swaps its hue while keeping the swatch's own light-to-dark gradient, so every plot's
-  buildings wear that plot's colour with no extra material and no extra draw.
+- **repaint one swatch into the repo's accent.** Each kit names its own trim cell — Kay's gold
+  band is cell 11 in the base kit, a warm terracotta swatch in the city kit, an amber swatch in
+  the furniture kit — and the fragment stage swaps its hue while keeping the swatch's own
+  light-to-dark gradient, so every plot's house and its furniture wear that plot's colour with
+  no extra material and no extra draw.
 - **light that same swatch after dark**, which is what makes the window strips come on at night.
-- **give one flat texture real PBR.** Roughness and metalness are looked up per cell, so the
-  grey structural swatch behaves like painted metal and the photovoltaic swatch like glass.
+- **give one flat texture real PBR.** Roughness and metalness are looked up per cell for the
+  base kit, so its grey structural swatch behaves like painted metal and its photovoltaic
+  swatch like glass; the city and furniture kits use one flat roughness value each, since
+  neither pack has anything metal or reflective in it.
 
 The Forest pack does double duty. Its boulders are painted neutral grey, which means a
 per-instance tint takes exactly the same rock to lunar dust or Martian rust without touching
@@ -378,40 +426,39 @@ metal.
 Both surfaces needed their UVs rebuilt, and both for the same underlying reason: a generated
 primitive's unwrap is made for the primitive, not for what you draw on it.
 
-A hex tile is a six-sided cylinder, and a cylinder's cap UVs are a *disc* — which turns a tiling
-plate pattern into a medallion, one per tile. The deck's **top** is therefore reprojected from
-world XZ, so the seams run straight across a whole plot and seven cells read as one apron. Its
-**rim** keeps the cylinder's own side unwrap, which is the one thing that works: a fixed
-horizontal axis like `x + z` is *constant* along two of every six sides, leaving those faces
-with no UV gradient, a degenerate tangent and — since three builds the normal-mapped shading
-frame out of that — solid black; and arc length from `atan2` fixes the gradient but adds a seam
-where the wrap crushes a dozen repeats into one panel. The generated unwrap has neither problem,
-because it duplicates the vertices at the seam.
+A plot tile is a box, and a box's top and bottom faces come with their own generated UVs —
+unwrapped per tile, seam and all, so they would repeat once at every tile edge rather than
+reading as one surface. The deck's **top** is therefore reprojected from world XZ instead, so
+the seams run straight across a whole plot and its cells read as one apron rather than one
+repeat per cell. Its **rim** keeps the box's own per-face unwrap, only rescaled to world
+density: a box's four side faces are generated independently, each with its own 0..1 UV square
+and no vertices shared with its neighbours, so — unlike a hexagon's flat sides — there is no
+seam to solve for and no degenerate face to special-case.
 
 A kerb bar is a box, and a box hands all six faces the same 0..1 square, so the dash strip was
 stretched down the sides and across the ends as well — which on a bar 14cm tall squashed the
-dark gaps between dashes into what read as a solid black edge, worst where six of them gather at
+dark gaps between dashes into what read as a solid black edge, worst where four of them gather at
 a plot corner. Only the upper face points at the strip now; the rest point at a patch of flat
 colour on the same texture.
 
 ### Rebuilding them
 
-`npm run assets` packs the raw packs into the two glbs the app loads. The built files are
+`npm run assets` packs the raw packs into the six glbs the app loads. The built files are
 checked in and the raw packs are not, so this is a no-op unless you have fetched them:
 
 ```bash
 mkdir -p assets-src && cd assets-src
-# download the FREE tier of both packs from the links above, then unzip in place
+# download the FREE tier of all six packs from the links above, then unzip in place
 ```
 
 `npm run assets` runs `tools/build-assets.mjs`, which drives `build-kit.mjs` once per model
 pack — merging a directory of single-model `.gltf` files into one document with one material
-and one texture — and then `build-crew.mjs`. That last one keeps the fifteen clips the colony actually plays out of
-KayKit's 161 and — the part that matters — **retargets every animation channel onto the
-mannequin's own bones**. Merging glTF documents brings each animation file's private copy of the
-rig along with it, so without that step the finished file has five skeletons named `hips` and
-the clips drive the four nobody is looking at. It loads without a single warning and renders the
-entire crew frozen in its bind pose.
+and one texture — and then `build-crew.mjs`. That last one keeps the seventeen clips the colony
+actually plays out of KayKit's 161 and — the part that matters — **retargets every animation
+channel onto the mannequin's own bones**. Merging glTF documents brings each animation file's
+private copy of the rig along with it, so without that step the finished file has five
+skeletons named `hips` and the clips drive the four nobody is looking at. It loads without a
+single warning and renders the entire crew frozen in its bind pose.
 
 ## Animating the crew
 
@@ -427,11 +474,26 @@ happens in the vertex shader, upstream of three's own instancing, so the skinned
 goes through `instanceMatrix` and the crew stays one draw whether there are six of them or six
 hundred.
 
-Everything the crew *wears* stays procedural and stays the colony's own: helmet, visor,
-screen-face, backpack, antenna and lamp. Those are pinned to bones the cheap way — the bake also
-writes the head and chest world transforms into a small array on the CPU, so placing a helmet is
-one matrix read rather than a skeleton evaluation, and a helmet can never be a frame out of step
-with the head under it.
+**There is no headgear at all.** The mannequin's own head rides back on instead: all 959
+vertices of `Mannequin_Medium_Head` are weighted to a single bone, so it does not deform and is
+placed rigidly, the same cheap way anything worn is. It carries one of **six skin tones** and one
+of **four hairstyles** — bald, a short cap, a bob, and a cap with a knot — each chosen by a
+stable hash of the thread's own id. **Neither ever means anything.** They never change with
+status; they exist only to make a crew of six read as six people rather than six copies of one,
+the way a plot's own accent colour tells you which repo you are looking at rather than what it
+is doing. If a colour here looks like it might be telling you something, it isn't — don't go
+hunting for a meaning that was never put there.
+
+The screen-face survives and still carries the eye colour, one of the signals a thread's status
+is readable from at colony distance. In place of a backpack and an antenna, the torso wears
+**hi-vis bands**: an unlit strip round the chest that carries the status trim colour, stays as
+bright at midnight as at noon, and pulses for an errored thread so it catches the eye across a
+colony the way an `!` badge cannot at that distance.
+
+All of it is pinned to bones the cheap way — the bake also writes the head and chest world
+transforms into a small array on the CPU, so placing the head, a hairstyle or a band is one
+matrix read rather than a skeleton evaluation, and a worn part can never be a frame out of step
+with the bone under it.
 
 Behaviour maps onto clips directly, and locomotion wins over status — an idler pottering across
 its plot walks rather than hammering while it slides:
@@ -472,7 +534,7 @@ sitting down.
 The crew also stands on the ground rather than on `y = 0`. A plot's tiles are a raised slab
 and the terrain between plots rolls half a metre either way, so a fixed height buries them for
 a good part of the colony. `Colony.groundAt()` answers with the deck height when a point is
-over an allocated hex cell — an exact axial lookup, not a nearest-centre radius test — and the
+over an allocated square cell — an exact lookup, not a nearest-centre radius test — and the
 terrain field otherwise. It is sampled only when an astronaut has actually moved, and eased
 into, so walking up onto a deck reads as a step rather than a teleport.
 
@@ -501,7 +563,7 @@ The knobs that actually matter, and why:
 What keeps it cheap at rest:
 
 - The crew's animated bodies are a single instanced, GPU-skinned draw, and each worn part —
-  helmet, visor, face, pack, antenna, lamp — is one `InstancedMesh` across the whole crew. The
+  head, face, hair, hi-vis bands — is one `InstancedMesh` across the whole crew. The
   sixty-fifth astronaut costs a matrix write and one float, not a draw call. Per-agent suit
   colour, eye colour and facial expression ride along as instanced attributes.
   Measured on a live colony: **66 astronauts and 66 buildings in 105 draw calls**.
@@ -526,14 +588,15 @@ crawl. Everything in both is drawn from paths, so the only cost of more texels i
 
 ## The faces
 
-Each visor is a little rounded screen — the patch is a rectangle in UV space, so its rounded
-silhouette is cut in the fragment shader with a rounded-box SDF, which gives soft corners a
-rectangular patch can never have and lets the white helmet show through where the screen ends. All sixteen expressions are drawn once into a single 4×4
-canvas atlas as a white-on-black **mask** — never as finished artwork — and the colour arrives
-per-astronaut at draw time, so one 512px texture gives every agent its own eye colour without
-a second byte of memory. The shader reads the mask out of the red channel, blends between the
-dark screen and that astronaut's glow, and adds scanlines and a vignette so it reads as a
-screen rather than a decal.
+Each face is drawn straight onto the skin of the head, not onto a panel sitting in front of
+it — there is no shape cut for it at all, only the features themselves. All sixteen expressions
+are drawn once into a single 4×4 canvas atlas as a white-on-black **mask** — never as finished
+artwork — and the colour arrives per-crew-member at draw time, so one 512px texture gives every
+agent its own eye colour without a second byte of memory. The shader reads the mask's red
+channel straight into alpha and uses the crew member's own glow colour as the RGB, so only the
+eyes and mouth are drawn at all. Every shape in the atlas is filled as a path, so its edges are
+already antialiased; that antialiasing is the only source of in-between values, which is what
+gives the features soft edges against the skin without a single extra sample.
 
 They blink on their own clocks, so a crowd never blinks in unison.
 
@@ -635,7 +698,7 @@ server/
   serve.mjs    static server for the built app
 src/
   core/        settings, renderer + post chain, the Google Earth camera
-  world/       planets, terrain, sky, hex plots, the model kit, buildings, the ship
+  world/       planets, terrain, sky, square plots, the model kit, buildings, the ship
   agents/      the crew rig and its bake, instanced astronauts, faces, badges, particles
   game/        threads → colony, and the API client
   ui/          the HUD
@@ -694,7 +757,8 @@ The status badges above each astronaut's head are
 [Material Design Icons](https://pictogrammers.com/library/mdi/), bundled via `@mdi/js` and
 licensed [Apache-2.0](https://github.com/Templarian/MaterialDesign/blob/master/LICENSE).
 
-Everything else you see — the shaders, the terrain, the sky, the ship, the crew's helmets and
-faces, the plot decks and their kerbs — is drawn by this project and is MIT along with the code.
+Everything else you see — the shaders, the terrain, the sky, the ship, the crew's heads, hair
+and faces, the plot decks and their kerbs — is drawn by this project and is MIT along with the
+code.
 
 Not affiliated with Anthropic, OpenAI, Google, or any of the other harness vendors listed above.
