@@ -15,7 +15,7 @@
 
   Options:
       -InstallDir <path>   Where to put everything      (default: %LOCALAPPDATA%\BotCrossing)
-      -Branch <name>       Which branch to build        (default: shared-colonies)
+      -Branch <name>       Which branch to build        (default: main)
       -Monitor <n>         Which monitor to open on, 1-based left-to-right (default: primary)
       -Share               Turn sharing on out of the box (default: off - you toggle it in-app)
       -NoAutostart         Install without the login autostart entry
@@ -24,7 +24,7 @@
 
 param(
   [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'BotCrossing'),
-  [string]$Branch = 'shared-colonies',
+  [string]$Branch = 'main',
   [int]$Monitor = 0,
   [switch]$Share,
   [switch]$NoAutostart,
@@ -95,10 +95,32 @@ try { git --version | Out-Null; $gitOk = $true } catch {}
 
 if ($gitOk) {
   if (Test-Path (Join-Path $RepoDir '.git')) {
-    Say "Updating the existing checkout..."
-    git -C $RepoDir fetch --depth 1 origin $Branch 2>$null
-    git -C $RepoDir checkout $Branch 2>$null
-    git -C $RepoDir reset --hard "origin/$Branch" 2>$null
+    Say "Updating the existing checkout ($Branch)..."
+    # An earlier install is a shallow single-branch clone of whatever branch it was made from
+    # (older installers defaulted to shared-colonies). Its fetch refspec only covers that one
+    # branch, so a plain `fetch origin $Branch` writes FETCH_HEAD but never creates
+    # origin/$Branch -- and the checkout + reset below then fail silently, leaving the machine
+    # on the old code. Fetch into the remote-tracking ref explicitly so switching branch works.
+    # data\colony.json is untracked (gitignored), so the switch keeps the colony, settings and
+    # neighbour list -- which a delete-and-reclone would not.
+    #
+    # git reports ordinary progress on stderr ("Switched to a new branch", "Already on ..."), and
+    # under Windows PowerShell 5.1 a redirected stderr line becomes a terminating
+    # NativeCommandError while $ErrorActionPreference is 'Stop' -- which aborted the installer
+    # right here. Relax it for these calls and judge the outcome by the branch we land on.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+      git -C $RepoDir fetch --depth 1 origin "+refs/heads/${Branch}:refs/remotes/origin/${Branch}" 2>$null
+      git -C $RepoDir checkout -f -B $Branch "origin/$Branch" 2>$null
+      git -C $RepoDir reset --hard "origin/$Branch" 2>$null | Out-Null
+      $onBranch = git -C $RepoDir rev-parse --abbrev-ref HEAD 2>$null
+    } finally {
+      $ErrorActionPreference = $prevEap
+    }
+    if ($onBranch -ne $Branch) {
+      Warn "Could not switch the checkout to '$Branch' (still on '$onBranch'). Delete $RepoDir and re-run to start clean."
+    }
   } else {
     Say "Cloning Bot Crossing ($Branch)..."
     if (Test-Path $RepoDir) { Remove-Item $RepoDir -Recurse -Force }

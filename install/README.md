@@ -1,7 +1,12 @@
-# Installing Bot Crossing (shared-colonies build)
+# Installing Moving-In Crossing on Windows
 
 One installer does everything on a Windows PC — for a brand-new machine **and** for
 updating one that already has Bot Crossing. It needs no admin rights for the app itself.
+It builds the `main` branch: the Moving-In theme, the team hub and every fix since.
+
+> **On a Mac or Linux, or want your Claude to do it — including joining the team hub?**
+> Hand your Claude the instructions in [`CLAUDE-SETUP.md`](CLAUDE-SETUP.md). They cover every
+> OS, Tailscale, sharing, and getting your colony onto the office wall.
 
 > **Already have a clone you work in?** Do not run this installer — it installs a *second*
 > copy under `%LOCALAPPDATA%\BotCrossing` with its own autostart, and both would fight over
@@ -54,16 +59,17 @@ powershell -ExecutionPolicy Bypass -File install-bot-crossing.ps1 -Share -Monito
 | `-Share` | Turn sharing on right away (default: off). |
 | `-Monitor <n>` | Open the colony on monitor *n*, counted left to right (default: primary). |
 | `-InstallDir <path>` | Where to install (default: `%LOCALAPPDATA%\BotCrossing`). |
-| `-Branch <name>` | Which branch to build (default: `shared-colonies`). |
+| `-Branch <name>` | Which branch to build (default: `main`). |
 | `-NoAutostart` | Install without the log-in autostart entry. |
 | `-NoLaunch` | Don't open the colony when the install finishes. |
 
 ## Updating later
 
 Run the installer again — it pulls the newest code, rebuilds, and keeps your colony,
-your settings and your neighbour list. (For Chantal, or anyone who had the older Bot
-Crossing: just run this installer once; it gives a clean managed install with the shared
-build. The old copy can be deleted.)
+your settings and your neighbour list. An install made by an older version of this installer
+sits on the outdated `shared-colonies` branch; running the current one moves it over to `main`
+in place, colony and all. (Anyone who had the older, unmanaged Bot Crossing: just run this
+installer once for a clean managed install. The old copy can be deleted.)
 
 ## What it sets up
 
