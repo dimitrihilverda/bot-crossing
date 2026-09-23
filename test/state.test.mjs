@@ -60,6 +60,21 @@ test('settings are not merged field-wise — the last tab to touch a slider wins
   assert.deepEqual(out.settings, { q: 3 })
 })
 
+test('a tab that never touched settings or network does not put its stale copy back', () => {
+  // Tab A loaded, then only saw a new thread (its `seen` moved). Meanwhile tab B switched the
+  // planet and turned sharing on. A's next save hits a 409 and merges: it must keep B's settings
+  // and network — A never touched them — while its own `seen` change still lands. Before this,
+  // A re-asserted its stale copies whole and B's changes vanished on the next reload.
+  const base = { settings: { planet: 'moon' }, network: { colonyName: 'Nathan', share: false, allowedReaders: [] }, seen: {} }
+  const local = { settings: { planet: 'moon' }, network: { colonyName: 'Nathan', share: false, allowedReaders: [] }, seen: { t1: 1 } }
+  const remote = { settings: { planet: 'mars' }, network: { colonyName: 'Nathan', share: true, allowedReaders: ['100.78.62.7'] }, seen: {} }
+  const out = mergeState(base, local, remote)
+  assert.deepEqual(out.settings, { planet: 'mars' })
+  assert.equal(out.network.share, true)
+  assert.deepEqual(out.network.allowedReaders, ['100.78.62.7'])
+  assert.deepEqual(out.seen, { t1: 1 })
+})
+
 // ── the API, against a real socket ────────────────────────────────────────────
 
 async function withServer(run) {

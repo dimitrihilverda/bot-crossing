@@ -98,9 +98,25 @@ function mergeMap(base, local, remote) {
 }
 
 /**
+ * A whole-object field — `settings`, `network` — merged as one piece, never key by key.
+ *
+ * "Whole" has to mean *this tab's change*, not *this tab's copy*. A tab that never touched the
+ * field since its base only holds a stale copy of it, and a save it makes for some other reason
+ * (a new thread seen, a zone moved) would otherwise put that copy back and silently undo what
+ * the other tab just set — which reads as "the settings don't save". So this tab wins whole only
+ * when it actually changed the field; when it did not, the disk's value stands.
+ */
+function mergeWhole(base, local, remote) {
+  const mine = local && typeof local === 'object' ? local : null
+  if (!mine) return remote ?? null
+  if (sameValue(base, mine)) return remote ?? mine // untouched here: keep the other tab's
+  return mine // changed here: this tab's whole picture wins
+}
+
+/**
  * Merge one colony state, field by field.
  *
- * `settings` is the deliberate exception: local wins, whole. It is a per-browser preference blob
+ * `settings` is the deliberate exception: the tab that changed it wins, whole. It is a per-browser preference blob
  * — render scale, shadow quality, which planet — and two tabs are usually the same person on the
  * same machine expressing the same intent. Merging it field-wise would hand somebody a colony at
  * half quality on Mars at dusk because two tabs each contributed a third of a preset, which is a
@@ -126,10 +142,10 @@ export function mergeState(base, local, remote) {
     seen: mergeMap(b.seen, l.seen, r.seen),
     hiddenProjects: mergeSet(b.hiddenProjects, l.hiddenProjects, r.hiddenProjects),
     viewedAt: mergeMap(b.viewedAt, l.viewedAt, r.viewedAt),
-    settings: l.settings && typeof l.settings === 'object' ? l.settings : r.settings ?? null,
+    settings: mergeWhole(b.settings, l.settings, r.settings),
     // Network config is this machine's own — sharing, its colony name, the neighbours it
-    // visits. Like `settings`, local wins whole: two tabs are the same person on one machine,
+    // visits. Like `settings`, it merges whole: two tabs are the same person on one machine,
     // and field-wise merging could leave sharing half-toggled between them.
-    network: l.network && typeof l.network === 'object' ? l.network : r.network ?? null,
+    network: mergeWhole(b.network, l.network, r.network),
   }
 }
