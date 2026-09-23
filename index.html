@@ -5,7 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
     <meta name="color-scheme" content="dark" />
     <title>Moving-In Crossing</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛋️</text></svg>" />
+    <!--
+      The mover, not a sofa emoji. This is the same artwork the Windows taskbar toggle uses for
+      its "running" state (`startup/bot-crossing-on.ico`, drawn by `make-mover-icon.ps1`), copied
+      here because only `public/` is served. The colony opens in its own Edge app window, and
+      that window's taskbar button takes the page's icon — so this is what you actually see in
+      the taskbar while the colony is up, right next to the toggle's own green button.
+
+      The green one on purpose: a window only exists while the server is running.
+
+      If the toggle's icon is ever redrawn, refresh this with
+      `cp startup/bot-crossing-on.ico public/mover.ico`.
+    -->
+    <link rel="icon" href="/mover.ico" sizes="16x16 32x32 48x48 64x64 256x256" />
   </head>
   <body>
     <div id="app"></div>
